@@ -35,8 +35,13 @@ jobs:
           echo "Scanning for forbidden publish commands…"
           # Add patterns that imply publishing to registries or creating releases
           # Use non-recursive grep against explicit file list to avoid scanning the whole repo
-          if xargs -r grep -nE "twine +upload|npm +publish|hatch +publish|poetry +publish|python +-m +build(.*twine)?|gh +release +create|pypi" < "$files" ; then
-            echo "Forbidden publish/release command detected. Remove from workflows/scripts." >&2
+          found=$(mktemp)
+          # shellcheck disable=SC2016
+          xargs -r grep -nE 'twine +upload|npm +publish|hatch +publish|poetry +publish|python +-m +build(.*twine)?|gh +release +create' < "$files" | tee "$found" | sed 's/^/match: /' || true
+          if [ -s "$found" ]; then
+            echo "Forbidden publish/release command detected in the following locations:" >&2
+            cat "$found" >&2
+            echo "Remove/alter these commands or update the guard allowlist if intentional." >&2
             exit 1
           fi
           echo "OK: no publish commands found."
