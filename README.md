@@ -210,7 +210,9 @@ This prints quotes from Uniswap V2 and Aerodrome (if both routers are set) and h
 
 ## Replit
 
-- Repo includes `.replit` and `replit.nix` for one-click run on Replit.
+- Fully uses `uv` (pip fallback removed). The runner auto-installs `uv` if missing.
 - Steps: import to Replit, add Secrets from `.env.example`, click Run. Health at `/health`.
+- Optional extras: set `UV_EXTRAS` to space-separated extras before first run, e.g. `UV_EXTRAS="dev db kv"`.
+  - Under the hood, the runner executes `uv sync --extra <each>` then starts Uvicorn via `uv run`.
 - Deployments: create a Web Service from the Deployments panel (details in `infra/replit/README.md`).
- - For Replit Cloud Services: SQL Database, set `SQL_DATABASE_URL` or `DATABASE_URL` from the service credentials. For KV, set `REPLIT_DB_URL`.
+  - For Replit Cloud Services: SQL Database, set `SQL_DATABASE_URL` or `DATABASE_URL` from the service credentials. For KV, set `REPLIT_DB_URL`.
