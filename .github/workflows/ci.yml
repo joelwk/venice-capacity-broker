@@ -26,7 +26,10 @@ jobs:
           set -euo pipefail
           # Restrict scan to workflows and scripts
           files=$(mktemp)
-          if [ -d .github/workflows ]; then find .github/workflows -type f -name "*.yml" -o -name "*.yaml" >> "$files"; fi
+          if [ -d .github/workflows ]; then \
+            # Exclude this guard file to avoid self-matching the grep pattern
+            find .github/workflows -type f \( -name "*.yml" -o -name "*.yaml" \) | grep -vE '/ci\.yml$' >> "$files"; \
+          fi
           if [ -d scripts ]; then find scripts -type f >> "$files"; fi
           if [ ! -s "$files" ]; then echo "No candidate files to scan."; exit 0; fi
           echo "Scanning for forbidden publish commands…"
