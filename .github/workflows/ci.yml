@@ -18,10 +18,14 @@ jobs:
   publish_guard:
     name: Block publish/release steps
     runs-on: ubuntu-latest
+    env:
+      # Set a repository variable CI_PUBLISH_GUARD_SKIP=true to temporarily bypass the guard if needed.
+      CI_PUBLISH_GUARD_SKIP: ${{ vars.CI_PUBLISH_GUARD_SKIP || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Scan for publish/release commands
+        if: ${{ env.CI_PUBLISH_GUARD_SKIP != 'true' }}
         run: |
           set -euo pipefail
           # Restrict scan to workflows and scripts
@@ -32,6 +36,7 @@ jobs:
           fi
           if [ -d scripts ]; then find scripts -type f >> "$files"; fi
           if [ ! -s "$files" ]; then echo "No candidate files to scan."; exit 0; fi
+          echo "Candidate files to scan:" && cat "$files"
           echo "Scanning for forbidden publish commands…"
           # Add patterns that imply publishing to registries or creating releases
           # Use non-recursive grep against explicit file list to avoid scanning the whole repo
