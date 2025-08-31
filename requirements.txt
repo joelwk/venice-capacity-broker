@@ -1,0 +1,24 @@
+# NOTE: Legacy compatibility file. Prefer `uv sync` using pyproject.toml.
+# Core
+requests>=2.31
+pydantic>=2.6
+web3>=6.15
+eth-account>=0.10
+coinbase-agentkit>=0.3
+cdp-sdk>=0.10
+
+# Optional (install as needed)
+# langchain
+# langgraph
+fastapi
+uvicorn
+# Database (enable SQL-backed broker store)
+sqlmodel>=0.0.14
+psycopg2-binary>=2.9
+# Optional KV + tracing
+redis>=5.0
+langsmith>=0.1.38
+# coinbase-agentkit
+# web3
+# python-dotenv
+# opentelemetry-sdk

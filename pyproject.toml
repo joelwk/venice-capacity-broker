@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "venice-capacity-broker"
+version = "0.1.0"
+description = "Quorum-driven capacity broker and agent orchestration for Venice (VVV/DIEM) on Base using LangGraph and Coinbase AgentKit"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+classifiers = [
+  "License :: Other/Proprietary License",
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Environment :: Web Environment",
+  "Private :: Do Not Upload",
+]
+
+[project.urls]
+Homepage = "private"
+Source = "private"
+
+# Base runtime deps kept minimal; feature sets are extras below.
+dependencies = [
+  "requests>=2.31",
+  "pydantic>=2.6",
+  "fastapi",
+  "uvicorn",
+]
+
+[project.optional-dependencies]
+db = [
+  "sqlmodel>=0.0.14",
+  "psycopg2-binary>=2.9",
+]
+kv = [
+  "redis>=5.0",
+]
+tracing = [
+  "langsmith>=0.1.38",
+]
+graph = [
+  "langchain",
+  "langgraph",
+]
+web3 = [
+  "web3>=6.15",
+  "eth-account>=0.10",
+]
+agentkit = [
+  "coinbase-agentkit>=0.3",
+  "cdp-sdk>=0.10",
+]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.uv]
+# For convenience, install dev extras on `uv sync --extra dev`.
+editable = true
+
+[tool.hatch.build]
+# Defensive: exclude non-runtime assets from built artifacts (sdist/wheel)
+exclude = [
+  "**/.env",
+  "**/*.env",
+  "**/*.key",
+  "**/*.pem",
+  "**/*.crt",
+  "**/*.pfx",
+  "**/.DS_Store",
+  "**/.pytest_cache/**",
+  "**/__pycache__/**",
+  "infra/**",
+  "tests/**",
+  "scripts/**",
+  "docker-compose.yml",
+  ".replit",
+  "replit.nix",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["@tool.hatch.build.exclude"]
+
+[tool.hatch.build.targets.wheel]
+exclude = ["@tool.hatch.build.exclude"]

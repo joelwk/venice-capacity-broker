@@ -1,0 +1,17 @@
+1	# Core
+2	requests>=2.31
+3	pydantic>=2.6
+4	web3>=6.15
+5	eth-account>=0.10
+6	coinbase-agentkit>=0.3
+7	cdp-sdk>=0.10
+8	
+9	# Optional (install as needed)
+10	# langchain
+11	# langgraph
+12	fastapi
+13	uvicorn
+14	# coinbase-agentkit
+15	# web3
+16	# python-dotenv
+17	# opentelemetry-sdk

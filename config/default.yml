@@ -1,0 +1,46 @@
+app:
+  name: vvv-agents
+  log_level: ${LOG_LEVEL:INFO}
+
+network:
+  base:
+    rpc_url: ${BASE_RPC_URL:}
+    chain_id: ${BASE_CHAIN_ID:8453}
+
+wallet:
+  default_provider: eth_account  # or: smart_wallet
+
+venice:
+  base_url: ${VENICE_API_BASE_URL:https://api.venice.ai}
+  api_key: ${VENICE_API_KEY:}
+  endpoints:
+    create_root: ${VENICE_CREATE_ROOT_PATH:/v1/keys}
+    create_subkey: ${VENICE_CREATE_SUBKEY_PATH:/v1/keys/sub}
+    revoke_key: ${VENICE_REVOKE_KEY_PATH:/v1/keys/{key_id}/revoke}
+    challenge: ${VENICE_CHALLENGE_PATH:/v1/keys/challenge}
+    usage: ${VENICE_USAGE_PATH:/v1/usage}
+    rate_limits: ${VENICE_RATE_LIMITS_PATH:/v1/rate-limits}
+    quota: ${VENICE_QUOTA_PATH:/v1/quota}
+    models: ${VENICE_MODELS_PATH:/v1/models}
+    chat_completions: ${VENICE_CHAT_COMPLETIONS_PATH:/v1/chat/completions}
+    vvv: ${VENICE_VVV_PATH:/v1/vvv}
+    diem: ${VENICE_DIEM_PATH:/v1/diem}
+
+contracts:
+  vvv_token: ${VVV_TOKEN_ADDRESS:}
+  vvv_staking: ${VVV_STAKING_ADDRESS:}
+  diem_token: ${DIEM_TOKEN_ADDRESS:}
+  diem_market: ${DIEM_MARKET_ADDRESS:}
+
+dex:
+  providers: ${DEX_PROVIDERS:uniswap_v2,aerodrome}
+  uniswap_v2_router: ${UNISWAP_V2_ROUTER_ADDRESS:}
+  aerodrome_router: ${AERODROME_ROUTER_ADDRESS:}
+  aerodrome_stable: ${AERODROME_STABLE:true}
+  router: ${ROUTER_ADDRESS:}  # legacy fallback for Uniswap V2
+  quote_token: ${QUOTE_TOKEN_ADDRESS:}
+  slippage_bps: ${SLIPPAGE_BPS:100}
+
+broker_api:
+  host: ${BROKER_API_HOST:127.0.0.1}
+  port: ${BROKER_API_PORT:8000}

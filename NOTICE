@@ -1,0 +1,13 @@
+NOTICE — Proprietary Software
+
+This repository contains proprietary, non–open-source code for the
+“venice-capacity-broker” system. All rights reserved.
+
+- No public license is granted. Use and access are limited to the owner and
+  explicitly authorized parties under written agreement.
+- Redistribution or disclosure without permission is prohibited.
+- Some third‑party dependencies are included and remain under their own
+  respective licenses (see pyproject.toml and dependency metadata).
+
+If you received this repository in error, please delete it and notify the owner.
+

@@ -1,0 +1,40 @@
+1	from __future__ import annotations
+2	
+3	from apps._path import add_repo_root_to_sys_path
+4	
+5	add_repo_root_to_sys_path()
+6	
+7	from libs.telemetry.logger import get_logger
+8	
+9	
+10	logger = get_logger("broker.api")
+11	
+12	try:
+13	    from fastapi import FastAPI
+14	    from pydantic import BaseModel
+15	
+16	    app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
+17	
+18	    class IssueKeyRequest(BaseModel):
+19	        tenant_id: str
+20	        quota: int
+21	
+22	    @app.get("/health")
+23	    def health() -> dict:
+24	        return {"status": "ok"}
+25	
+26	    @app.post("/v1/keys/issue")
+27	    def issue_key(req: IssueKeyRequest) -> dict:
+28	        # Wire to CapacityBroker + KeyManager in real impl
+29	        logger.info(f"Issue key for tenant={req.tenant_id} quota={req.quota}")
+30	        return {"status": "stub", "tenant": req.tenant_id, "quota": req.quota}
+31	
+32	except Exception as e:  # noqa: BLE001
+33	    app = None  # type: ignore
+34	    logger.warning(
+35	        "FastAPI not available. Install 'fastapi pydantic uvicorn' to run Broker API.")
+36	
+37	    def main() -> None:  # noqa: D401
+38	        """Run info for environments without FastAPI installed."""
+39	        print("Install fastapi, pydantic, uvicorn; then run:")
+40	        print("  uvicorn app:app --app-dir apps/broker-api --reload")

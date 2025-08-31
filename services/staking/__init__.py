@@ -1,0 +1,2 @@
+"""VVV staking client stubs."""
+
