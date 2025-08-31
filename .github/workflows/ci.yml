@@ -31,8 +31,8 @@ jobs:
           # Restrict scan to workflows and scripts
           files=$(mktemp)
           if [ -d .github/workflows ]; then \
-            # Exclude this guard file to avoid self-matching the grep pattern
-            find .github/workflows -type f \( -name "*.yml" -o -name "*.yaml" \) | grep -vE '/ci\.yml$' >> "$files"; \
+            # Exclude this guard file without a pipe (avoid pipefail when only ci.yml exists)
+            find .github/workflows -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "ci.yml" -print >> "$files"; \
           fi
           if [ -d scripts ]; then find scripts -type f >> "$files"; fi
           if [ ! -s "$files" ]; then echo "No candidate files to scan."; exit 0; fi
