@@ -1,9 +1,21 @@
-{ pkgs }: {
-  # Target Linux nixpkgs 25.05 explicitly with Python 3.12
-  # to avoid packages (e.g., sphinx >=8) excluding Python 3.10.
+{ pkgs }:
+let
+  # Prefer Python 3.12 when available (nixpkgs 25.05),
+  # else fall back for legacy channels.
+  python =
+    if pkgs ? python312 then pkgs.python312
+    else if pkgs ? python311 then pkgs.python311
+    else if pkgs ? python310 then pkgs.python310
+    else pkgs.python3;
+  pythonPackages =
+    if pkgs ? python312Packages then pkgs.python312Packages
+    else if pkgs ? python311Packages then pkgs.python311Packages
+    else if pkgs ? python310Packages then pkgs.python310Packages
+    else pkgs.python3Packages;
+in {
   deps = [
-    pkgs.python312
-    pkgs.python312Packages.pip
+    python
+    pythonPackages.pip
     pkgs.gcc
     pkgs.pkg-config
     pkgs.openssl
