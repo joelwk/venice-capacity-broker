@@ -170,6 +170,9 @@ try:
     # Idempotency config
     IDEM_TTL_SECONDS = int((_os.getenv("IDEM_TTL_SECONDS") or _os.getenv("IDEMPOTENCY_TTL_SECONDS") or "300").strip() or 300)
 
+    # Idempotency key format (documented for tooling/CLI):
+    IDEM_KEY_FORMAT = "idem:{scope}:{tenant_id}:{digest}:{epoch_min}"
+
     class IdempotencyMiddleware(BaseHTTPMiddleware):
         def __init__(self, app: FastAPI):
             super().__init__(app)
@@ -219,6 +222,7 @@ try:
                     pass
 
                 epoch_min = int(time.time() // 60)
+                # Keys follow IDEM_KEY_FORMAT
                 key = f"idem:{scope}:{tenant_id}:{digest}:{epoch_min}"
 
                 # First writer wins

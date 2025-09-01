@@ -104,14 +104,16 @@ Security
 Limiter Validation
 
 - Use the included probe to validate RPS ceilings with and without Redis:
-  - `python scripts/limit_probe.py --tenant <id> --rps 15 --duration 30`
+  - Tenant-subkey mode: `python scripts/limit_probe.py --auth-bearer <tenant-subkey> --rps 15 --duration 30`
+  - Admin act-as mode: `BROKER_ADMIN_TOKEN=<token> python scripts/limit_probe.py --tenant-id <tenantId> --rps 15 --duration 30`
   - Optional: set `REDIS_URL` to exercise cross-process atomicity
 - Output includes a JSON summary and Prom-style counters to paste into logs:
-  - `probe_requests_total`, `probe_success_total`, `probe_rate_limited_total`
-  - Example: `{ "attempted": 450, "ok": 390, "rate_limited": 60, "rps": 13.0 }`
-- Recommended defaults (observed in KV-only mode):
-  - `RATE_LIMIT_WINDOW_SECONDS=60`, `RATE_LIMIT_MAX_REQUESTS=60` for ~1 RPS per tenant average
-  - Lower windows (1–5s) with small `maxRequests` provide snappier backoff behavior for bursts
+  - `probe_requests_total`, `probe_success_total`, `probe_rate_limited_total`, `probe_other_errors_total`, plus latency percentiles
+  - Example JSON: `{ "attempted":450,"ok":390,"rate_limited":60,"ok_rps":13.0, "latency_ms_p50":85.2 }`
+- Recommended starting defaults (tune with the probe):
+  - KV-only (Replit Database / in-memory): `RATE_LIMIT_WINDOW_SECONDS=60`, `RATE_LIMIT_MAX_REQUESTS=60` ≈ 1 req/sec average per tenant
+  - Redis-backed (`REDIS_URL` set): start with `RATE_LIMIT_WINDOW_SECONDS=60`, `RATE_LIMIT_MAX_REQUESTS=120` and adjust per probe results
+  - For burstier traffic, shorter windows (1–5s) with proportionally smaller `maxRequests` yield faster backoff
 
 Replit Database (KV) and Redis
 

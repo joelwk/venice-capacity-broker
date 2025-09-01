@@ -62,7 +62,7 @@ def _seed_tenant(mod):  # noqa: ANN001
     mod.store.upsert(tenant)
 
 
-def test_idempotency_and_purge_cli(tmp_path, monkeypatch):
+def test_idempotency_and_purge_cli(tmp_path, monkeypatch, capsys):
     # Patch CLI to use shared KV as well
     import libs.kv as kvpkg
     monkeypatch.setattr(kvpkg, "KVStore", SharedKV, raising=True)
@@ -100,8 +100,41 @@ def test_idempotency_and_purge_cli(tmp_path, monkeypatch):
 
     ns = argparse.Namespace(prefix="idem:chat:tX")
     cmd_idem_purge(ns)
+    out = capsys.readouterr().out
+    assert "purge complete:" in out
+    assert "prefix=idem:chat:tX" in out
 
     # Ensure keys are gone: next request should be accepted again
     r3 = client.post("/v1/chat", headers=headers, json=payload)
     assert r3.status_code == 200
     assert r3.headers.get("X-Idempotency-Accepted") == "true"
+
+
+def test_purge_cli_deletes_seeded_keys_and_prints_summary(tmp_path, monkeypatch, capsys):
+    # Make CLI use shared KV
+    import libs.kv as kvpkg
+
+    monkeypatch.setattr(kvpkg, "KVStore", SharedKV, raising=True)
+
+    # Seed some fake idempotency keys and one from another tenant
+    SharedKV._store.clear()
+    SharedKV._store.update(
+        {
+            "idem:chat:tX:abc:123": "1",
+            "idem:chat:tX:def:124": "1",
+            "idem:chat:other:zzz:125": "1",
+        }
+    )
+
+    from apps.cli.main import cmd_idem_purge, argparse
+
+    ns = argparse.Namespace(prefix="idem:chat:tX")
+    cmd_idem_purge(ns)
+    out = capsys.readouterr().out
+    assert "purge complete:" in out
+    assert "prefix=idem:chat:tX" in out
+    # Two keys deleted for tX; other tenant remains
+    assert "deleted=2" in out
+    # Verify remaining keys only for other tenant
+    remaining = [k for k in SharedKV._store.keys() if k.startswith("idem:")]
+    assert remaining == ["idem:chat:other:zzz:125"]

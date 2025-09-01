@@ -544,6 +544,63 @@ def cmd_idem_purge(args: argparse.Namespace) -> None:
     logger.info(f"purge complete: prefix={prefix} deleted={deleted}")
 
 
+def cmd_probe_limits(args: argparse.Namespace) -> None:
+    """Probe /v1/chat throughput and limiter behavior.
+
+    Uses tenant subkey via --auth-bearer or admin act-as via BROKER_ADMIN_TOKEN + --tenant.
+    Prints Prom-style counters and a JSON summary.
+    """
+    try:
+        # Import the async probe runner
+        from scripts.limit_probe import _run_probe  # type: ignore
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"limit probe unavailable: {e}. Ensure scripts/limit_probe.py and httpx are installed.")
+        return
+
+    import asyncio as _asyncio
+    import json as _json
+
+    base_url = (args.base_url or _broker_base_url()).rstrip("/")
+    # Resolve auth
+    auth_bearer = args.auth_bearer or os.getenv("PROBE_AUTH_BEARER")
+    admin_token = os.getenv("BROKER_ADMIN_TOKEN")
+    tenant_id = args.tenant_id or os.getenv("PROBE_TENANT_ID")
+
+    ns = argparse.Namespace(
+        base_url=base_url,
+        rps=float(args.rps),
+        duration=int(args.duration),
+        concurrency=int(args.concurrency),
+        model=(args.model or os.getenv("PROBE_MODEL") or None),
+        message=(args.message or os.getenv("PROBE_MESSAGE") or "hello"),
+        auth_bearer=auth_bearer,
+        tenant_id=tenant_id,
+        admin_token=admin_token,
+        no_idempotency=bool(args.no_idempotency or _env_flag("PROBE_NO_IDEMPOTENCY", False)),
+        timeout=float(args.timeout or os.getenv("PROBE_TIMEOUT") or 10.0),
+    )
+
+    # Basic validation
+    if not ns.auth_bearer and not (ns.admin_token and ns.tenant_id):
+        logger.error("Provide --auth-bearer (tenant subkey) or set BROKER_ADMIN_TOKEN and pass --tenant")
+        return
+
+    summary = _asyncio.run(_run_probe(ns))
+    # Prom counters
+    print(f"probe_requests_total {summary['attempted']}")
+    print(f"probe_success_total {summary['ok']}")
+    print(f"probe_rate_limited_total {summary['rate_limited']}")
+    print(f"probe_other_errors_total {summary['other_errors']}")
+    print(
+        "probe_latency_ms_avg {}\nprobe_latency_ms_p50 {}\nprobe_latency_ms_p90 {}\nprobe_latency_ms_p99 {}".format(
+            summary.get("latency_ms_avg", 0),
+            summary.get("latency_ms_p50", 0),
+            summary.get("latency_ms_p90", 0),
+            summary.get("latency_ms_p99", 0),
+        )
+    )
+    print(_json.dumps(summary, separators=(",", ":")))
+
 def _require_trade_path() -> list[str]:
     path_env = os.getenv("TRADE_PATH")
     if not path_env:
@@ -686,6 +743,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("idem:purge", help="Purge idempotency keys by prefix")
     sp.add_argument("--prefix", required=True, help="Prefix like 'idem:chat:t-123'")
     sp.set_defaults(func=cmd_idem_purge)
+
+    # Limiter probe
+    sp = sub.add_parser("probe:limits", help="Probe /v1/chat throughput and 429s vs limits")
+    sp.add_argument("--rps", type=float, default=float(os.getenv("PROBE_RPS", "10")))
+    sp.add_argument("--duration", type=int, default=int(os.getenv("PROBE_DURATION", "30")))
+    sp.add_argument("--concurrency", type=int, default=int(os.getenv("PROBE_CONCURRENCY", "20")))
+    sp.add_argument("--model", required=False, default=os.getenv("PROBE_MODEL") or None)
+    sp.add_argument("--message", required=False, default=os.getenv("PROBE_MESSAGE", "hello"))
+    sp.add_argument("--no-idempotency", action="store_true", default=_env_flag("PROBE_NO_IDEMPOTENCY", False))
+    sp.add_argument("--timeout", type=float, default=float(os.getenv("PROBE_TIMEOUT", "10")))
+    sp.add_argument("--base-url", required=False, default=None, help="Override broker base URL (defaults to BROKER_BASE_URL)")
+    sp.add_argument("--auth-bearer", required=False, default=os.getenv("PROBE_AUTH_BEARER") or None, help="Tenant subkey")
+    sp.add_argument("--tenant", dest="tenant_id", required=False, default=os.getenv("PROBE_TENANT_ID") or None, help="Tenant id for admin mode")
+    sp.set_defaults(func=cmd_probe_limits)
 
     return p
 

@@ -257,3 +257,17 @@ This prints quotes from Uniswap V2 and Aerodrome (if both routers are set) and h
   - Under the hood, the runner executes `uv sync --extra <each>` then starts Uvicorn via `uv run`.
 - Deployments: create a Web Service from the Deployments panel (details in `infra/replit/README.md`).
   - For Replit Cloud Services: SQL Database, set `SQL_DATABASE_URL` or `DATABASE_URL` from the service credentials. For KV, set `REPLIT_DB_URL`.
+ 
+## Operational Notes
+
+Rate limiting
+- Validate ceilings with the built-in probe: `python apps/cli/main.py probe:limits [--auth-bearer <subkey> | --tenant <id>] [--rps N] [--duration S] [--concurrency M]`.
+- Recommended starting defaults:
+  - KV-only (Replit DB / in-memory): `RATE_LIMIT_WINDOW_SECONDS=60`, `RATE_LIMIT_MAX_REQUESTS=60` (~1 req/sec per tenant)
+  - Redis-backed (`REDIS_URL` set): `RATE_LIMIT_WINDOW_SECONDS=60`, `RATE_LIMIT_MAX_REQUESTS=120` (tune via probe).
+
+Idempotency
+- Key format: `idem:{scope}:{tenant_id}:{digest}:{epoch_min}` with TTL window.
+- TTL env: `IDEM_TTL_SECONDS` (also accepts `IDEMPOTENCY_TTL_SECONDS`), default 300s.
+- Duplicate POST `/v1/chat` within TTL returns 409 and `X-Idempotency-Accepted: false`.
+- Admin cleanup: `python apps/cli/main.py idem:purge --prefix idem:chat:<tenantId>` prints a summary and deletes matching keys.
