@@ -78,6 +78,12 @@ class VeniceClient:
             raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
         return resp.json() if resp.content else {}
 
+    def _delete(self, path: str) -> Dict[str, Any]:
+        resp = requests.delete(self._url(path), headers=self._headers(), timeout=30)
+        if not resp.ok:
+            raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
+        return resp.json() if resp.content else {}
+
     # --- Autonomous key flows ---
     def get_challenge(self, wallet_address: str) -> Dict[str, Any]:
         """Obtain a signable challenge for the given wallet.
@@ -133,7 +139,14 @@ class VeniceClient:
 
     def revoke_key(self, key_id: str) -> Dict[str, Any]:
         path = self.config.revoke_key_path.replace("{key_id}", key_id)
-        return self._post(path, json={})
+        return self._delete(path)
+
+    # --- Venice key management ---
+    def list_api_keys(self) -> Dict[str, Any]:
+        return self._get("/api_keys")
+
+    def delete_api_key(self, key_id: str) -> Dict[str, Any]:
+        return self._delete(f"/api_keys/{key_id}")
 
     # --- Venice usage, limits, models, chat, signals ---
     def get_usage(self) -> Dict[str, Any]:

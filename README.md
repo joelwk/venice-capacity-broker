@@ -163,6 +163,8 @@ CLI admin helpers:
 - Set tenant limits: `python apps/cli/main.py broker:limits:set --tenant <id> [--window N] [--max N] [--label name]`
   - Uses `BROKER_BASE_URL` or `BROKER_API_HOST`/`BROKER_API_PORT` and `BROKER_ADMIN_TOKEN` for auth.
 - Keep secrets in `.env` and never commit them.
+ - Revoke tenant key: `python apps/cli/main.py broker:tenants:revoke --tenant <id>`
+ - Clean up Venice keys by description prefix: `python apps/cli/main.py venice:keys:cleanup --prefix "T1" [--dry-run]`
 
 Rate limits and KV:
 - KV client supports Replit DB style HTTP (`KV_URL`) and optional Redis (`REDIS_URL`).
@@ -207,9 +209,28 @@ curl -fsSL "${BASE_URL%/}/openapi.json" || curl -fsSL "${BASE_URL%/}/api/openapi
 # Example sub-key creation (requires parent key)
 curl -sS -H "Authorization: Bearer $VENICE_PARENT_KEY" \
   -H "Content-Type: application/json" \
-  -X POST "${BASE_URL%/}/v1/keys/sub" \
-  -d '{"label":"tenant-1","consumptionLimit":100}'
+  -X POST "${BASE_URL%/}/api_keys" \
+  -d '{"apiKeyType":"INFERENCE","consumptionLimit":{"diem":10},"description":"tenant-1"}'
+
+# Example web3 root key (wallet-signed)
+# 1) Request a challenge (some deployments support POST; others may use GET)
+ADDRESS=0xYourWallet
+curl -sS -X POST "${BASE_URL%/}/api_keys/generate_web3_key" \
+  -H "Content-Type: application/json" \
+  -d '{"wallet":"'"$ADDRESS"'"}'
+
+# 2) Sign the returned message/challenge off-chain -> SIG=0x...
+# 3) Exchange signature for a root inference key with optional limits
+curl -sS -X POST "${BASE_URL%/}/api_keys/generate_web3_key" \
+  -H "Content-Type: application/json" \
+  -d '{"address":"'"$ADDRESS"'","signature":"'"$SIG"'","apiKeyType":"INFERENCE","consumptionLimit":{"diem":10}}'
 ```
+Tenants & keys
+- Create a tenant (idempotent): `POST /v1/tenants` (requires `BROKER_ADMIN_TOKEN` and `VENICE_PARENT_KEY`). If the tenant exists, it is returned without minting a new key.
+- Rotate key: `POST /v1/tenants?rotate=true` to mint a fresh subkey and update the store. Preserve existing quota/expiry unless you pass overrides in the body.
+- Rotate + revoke old: `POST /v1/tenants?rotate=true&revoke_old=true` will, after a successful rotate, attempt to delete the old key via Venice if `key_id` is recorded.
+- Revoke tenant key: `POST /v1/tenants/{tenantId}/revoke` attempts a Venice `DELETE /api_keys/{id}` if available, and marks the tenant as revoked.
+
 SQL backend quick smoke (local or Replit SQL)
 - Set `SQL_DATABASE_URL` or `DATABASE_URL` to a Postgres connection string.
 - Optionally run migrations: `uv run alembic upgrade head` (tables will auto-create on first use otherwise).
@@ -217,6 +238,61 @@ SQL backend quick smoke (local or Replit SQL)
 - Create a tenant via `POST /v1/tenants` (requires `BROKER_ADMIN_TOKEN` and `VENICE_PARENT_KEY`).
 - Compact counters (if using the limiter): `uv run python apps/cli/main.py data:compact-counters --force`.
 - Inspect via admin endpoint: `GET /v1/debug/counters?tenant_id=<id>&limit=20` or CLI `counters:show`.
+
+## Cheat Sheet (Broker + CLI)
+
+Create a tenant (admin-only):
+
+```
+curl -sS -X POST "${BROKER_BASE_URL%/}/v1/tenants" \
+  -H "Authorization: Bearer $BROKER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "tenant_id": "t1",
+        "label": "Team A",
+        "quota": null,
+        "expires_at": "2025-12-31T23:59:00Z"
+      }'
+```
+
+List tenants and limits (CLI):
+
+```
+python apps/cli/main.py broker:tenants:list
+python apps/cli/main.py broker:limits:get --tenant t1
+```
+
+Proxy chat via the broker (using tenant subkey):
+
+```
+export SUBKEY=<tenant-subkey>
+curl -sS -H "Authorization: Bearer $SUBKEY" \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}]}' \
+  "${BROKER_BASE_URL%/}/v1/chat"
+```
+
+Counters and compaction:
+
+```
+# Admin-only debug counters
+curl -sS -H "Authorization: Bearer $BROKER_ADMIN_TOKEN" \
+  "${BROKER_BASE_URL%/}/v1/debug/counters?tenant_id=t1&limit=20"
+
+# CLI equivalents
+python apps/cli/main.py counters:show --tenant t1 --scope chat --limit 20 --json
+python apps/cli/main.py data:compact-counters --force
+```
+
+## Troubleshooting
+
+- uv not found: add `~/.local/bin` to PATH, e.g., `export PATH="$HOME/.local/bin:$PATH"`.
+- Dev dependencies: if `uv sync` fails, include `--extra dev` to pull test/stub deps.
+- Replit PATH quirks: use `export PATH` each session; ignore `.bashrc` warnings.
+- Test import errors (`sqlmodel`): ensure stubs load before `db.models` (see `tests/test_admin_counters_endpoint.py`).
+- 404/401 creating tenants: verify `VENICE_API_BASE_URL` and `VENICE_PARENT_KEY` (must have sub-key privileges).
+- Double slashes in URLs: use `${BASE_URL%/}` in shell and strip trailing slashes in code.
+- Debug-only: you can seed `apps/broker-api/tenants.json` with a known key to bypass sub-key creation temporarily (never in production).
 
 ## License
 
@@ -273,6 +349,6 @@ Rate limiting
 
 Idempotency
 - Key format: `idem:{scope}:{tenant_id}:{digest}:{epoch_min}` with TTL window.
-- TTL env: `IDEM_TTL_SECONDS` (also accepts `IDEMPOTENCY_TTL_SECONDS`), default 300s.
+- TTL env: `IDEMPOTENCY_TTL_SECONDS` (alias `IDEM_TTL_SECONDS` supported), default 300s.
 - Duplicate POST `/v1/chat` within TTL returns 409 and `X-Idempotency-Accepted: false`.
 - Admin cleanup: `python apps/cli/main.py idem:purge --prefix idem:chat:<tenantId>` prints a summary and deletes matching keys.

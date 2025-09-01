@@ -16,6 +16,8 @@ class Tenant:
     quota: int
     expires_at: Optional[str] = None
     status: str = "active"  # active|revoked
+    # Optional Venice API key id to allow revoke via API
+    key_id: Optional[str] = None
 
 
 class TenantStore:
@@ -56,4 +58,3 @@ class TenantStore:
 
     def all(self) -> Dict[str, Tenant]:
         return dict(self._data)
-

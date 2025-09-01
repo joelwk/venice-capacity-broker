@@ -34,7 +34,7 @@ except Exception:
 logger = get_logger("broker.api")
 
 try:
-    from fastapi import FastAPI, Header, HTTPException, Request
+    from fastapi import FastAPI, Header, HTTPException, Request, Query
     from fastapi.responses import PlainTextResponse
     from starlette.middleware.base import BaseHTTPMiddleware
     import threading, time
@@ -331,6 +331,8 @@ try:
     def create_tenant(
         req: TenantCreateRequest,
         authorization: str | None = Header(default=None, alias="Authorization"),
+        rotate: bool = Query(default=False, description="If true and tenant exists, mint a new subkey and update store"),
+        revoke_old: bool = Query(default=False, description="When rotating and an old key_id exists, revoke it after successful rotate"),
     ) -> TenantResponse:
         _require_admin(authorization)
         import os
@@ -338,11 +340,25 @@ try:
         parent_key = os.getenv("VENICE_PARENT_KEY") or os.getenv("VENICE_API_KEY")
         if not parent_key:
             raise HTTPException(status_code=400, detail="VENICE_PARENT_KEY or VENICE_API_KEY must be set")
+        # Idempotent by default; support rotation via query param
+        existing_t = store.get(req.tenant_id)
+        if existing_t and not rotate:
+            return TenantResponse(id=existing_t.id, label=existing_t.label, quota=existing_t.quota, expires_at=existing_t.expires_at, status=existing_t.status)
+
         # Apply env-configured defaults if not provided
-        quota = int(req.quota) if req.quota is not None else DEFAULT_QUOTA
-        expires_at = req.expires_at or _compute_expires_at()
+        if existing_t and rotate:
+            # Rotate: preserve or override values from request
+            quota = int(req.quota) if req.quota is not None else int(existing_t.quota)
+            expires_at = req.expires_at or existing_t.expires_at or _compute_expires_at()
+            label = req.label or existing_t.label
+            old_key_id = getattr(existing_t, "key_id", None)
+        else:
+            label = req.label
+            quota = int(req.quota) if req.quota is not None else DEFAULT_QUOTA
+            expires_at = req.expires_at or _compute_expires_at()
+            old_key_id = None
         try:
-            sub = keys.issue_scoped_key(parent_key, req.label, quota, expires_at)
+            sub = keys.issue_scoped_key(parent_key, label, quota, expires_at)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"Failed to create subkey: {e}")
         # Extract the api key token from common response shapes
@@ -371,8 +387,25 @@ try:
             except Exception:
                 keys_present = []
             raise HTTPException(status_code=502, detail=f"Subkey not returned by Venice (fields={keys_present})")
-        tenant = Tenant(id=req.tenant_id, label=req.label, subkey=subkey, quota=quota, expires_at=expires_at)
+        # Attempt to capture key id for later revoke
+        key_id = ""
+        try:
+            for k in ("id", "keyId", "apiKeyId", "api_key_id"):
+                v = sub.get(k)
+                if v:
+                    key_id = str(v)
+                    break
+        except Exception:
+            key_id = ""
+
+        tenant = Tenant(id=req.tenant_id, label=label, subkey=subkey, quota=quota, expires_at=expires_at, key_id=key_id or None)
         store.upsert(tenant)
+        # Best-effort revoke of the old key only after successful rotate and store update
+        if rotate and revoke_old and old_key_id:
+            try:
+                keys.revoke_key(str(old_key_id))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"rotate: revoke_old failed for key_id={old_key_id}: {e}")
         return TenantResponse(id=tenant.id, label=tenant.label, quota=tenant.quota, expires_at=tenant.expires_at, status=tenant.status)
 
     @app.post("/v1/tenants/{tenant_id}/revoke")
@@ -386,10 +419,10 @@ try:
         if not t:
             raise HTTPException(status_code=404, detail="tenant not found")
         try:
-            # Attempt to find a key id if Venice returns it; otherwise, best-effort revoke unsupported
-            kid = getattr(t, "key_id", None) or getattr(t, "id", None) or None
+            # Attempt to revoke via official DELETE /api_keys/{id}
+            kid = getattr(t, "key_id", None)
             if kid:
-                keys.revoke_key(kid)  # type: ignore[arg-type]
+                keys.revoke_key(str(kid))
         except Exception as e:  # noqa: BLE001
             logger.warning(f"revoke failed or unsupported: {e}")
         t.status = "revoked"

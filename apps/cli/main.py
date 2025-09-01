@@ -763,6 +763,74 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tenant", dest="tenant_id", required=False, default=os.getenv("PROBE_TENANT_ID") or None, help="Tenant id for admin mode")
     sp.set_defaults(func=cmd_probe_limits)
 
+    # Broker revoke tenant key (admin)
+    def cmd_broker_tenant_revoke(args: argparse.Namespace) -> None:
+        tid = args.tenant
+        url = f"{_broker_base_url()}/v1/tenants/{tid}/revoke"
+        r = requests.post(url, headers=_admin_headers(), timeout=10)
+        if not r.ok:
+            logger.error(f"revoke failed: {r.status_code} {r.text}")
+            return
+        logger.info(f"revoked tenant {tid}: {r.json()}")
+
+    sp = sub.add_parser("broker:tenants:revoke", help="Revoke a tenant's Venice subkey (admin)")
+    sp.add_argument("--tenant", required=True, help="Tenant id")
+    sp.set_defaults(func=cmd_broker_tenant_revoke)
+
+    # Venice keys cleanup (by description prefix)
+    def cmd_venice_keys_cleanup(args: argparse.Namespace) -> None:
+        from libs.venice_sdk.client import VeniceClient
+
+        prefix = args.prefix or ""
+        dry_run = bool(args.dry_run)
+        # Prefer parent key for full list/delete permissions
+        api_key = os.getenv("VENICE_PARENT_KEY") or os.getenv("VENICE_API_KEY")
+        vc = VeniceClient(api_key=api_key)
+        try:
+            data = vc.list_api_keys()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"list api keys failed: {e}")
+            return
+        # Expect either list or {"data": [...]} shape
+        items = []
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("data") or data.get("items") or []
+        else:
+            logger.error("unexpected response shape from /api_keys")
+            return
+
+        targets = []
+        for it in items:
+            desc = str(it.get("description") or it.get("label") or "")
+            kid = it.get("id") or it.get("keyId") or it.get("apiKeyId") or it.get("api_key_id")
+            if not kid:
+                continue
+            if prefix and not desc.startswith(prefix):
+                continue
+            targets.append(str(kid))
+        if not targets:
+            logger.info("no keys matched prefix")
+            return
+        logger.info(f"matched {len(targets)} keys for prefix '{prefix}'")
+        deleted = 0
+        for kid in targets:
+            if dry_run:
+                logger.info(f"dry-run: would delete key {kid}")
+                continue
+            try:
+                vc.delete_api_key(kid)
+                deleted += 1
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"delete failed for {kid}: {e}")
+        logger.info(f"cleanup complete: deleted={deleted} matched={len(targets)} dry_run={dry_run}")
+
+    sp = sub.add_parser("venice:keys:cleanup", help="List/delete Venice API keys by description prefix")
+    sp.add_argument("--prefix", required=False, default="", help="Description prefix to match (e.g., 'T1')")
+    sp.add_argument("--dry-run", action="store_true", default=False, help="Only list keys that would be deleted")
+    sp.set_defaults(func=cmd_venice_keys_cleanup)
+
     return p
 
 
