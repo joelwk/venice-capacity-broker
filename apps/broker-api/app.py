@@ -345,9 +345,32 @@ try:
             sub = keys.issue_scoped_key(parent_key, req.label, quota, expires_at)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"Failed to create subkey: {e}")
-        subkey = sub.get("key") or sub.get("apiKey") or sub.get("token") or ""
+        # Extract the api key token from common response shapes
+        def _extract_api_key(obj: dict) -> str:
+            try:
+                # Direct fields first
+                for k in ("apiKey", "api_key", "key", "token", "api_key_value"):
+                    v = obj.get(k)
+                    if isinstance(v, str) and len(v) >= 16:
+                        return v
+                # Nested objects
+                for v in obj.values():
+                    if isinstance(v, dict):
+                        s = _extract_api_key(v)
+                        if s:
+                            return s
+            except Exception:
+                pass
+            return ""
+
+        subkey = _extract_api_key(sub)
         if not subkey:
-            raise HTTPException(status_code=502, detail="Subkey not returned by Venice")
+            # Do not leak response content; include top-level keys to aid debugging
+            try:
+                keys_present = list(sub.keys())
+            except Exception:
+                keys_present = []
+            raise HTTPException(status_code=502, detail=f"Subkey not returned by Venice (fields={keys_present})")
         tenant = Tenant(id=req.tenant_id, label=req.label, subkey=subkey, quota=quota, expires_at=expires_at)
         store.upsert(tenant)
         return TenantResponse(id=tenant.id, label=tenant.label, quota=tenant.quota, expires_at=tenant.expires_at, status=tenant.status)
