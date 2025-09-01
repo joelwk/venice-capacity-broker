@@ -18,10 +18,6 @@ classifiers = [
   "Private :: Do Not Upload",
 ]
 
-[project.urls]
-Homepage = "private"
-Source = "private"
-
 # Base runtime deps kept minimal; feature sets are extras below.
 dependencies = [
   "requests>=2.31",
@@ -29,6 +25,10 @@ dependencies = [
   "fastapi",
   "uvicorn",
 ]
+
+[project.urls]
+Homepage = "private"
+Source = "private"
 
 [project.optional-dependencies]
 db = [
@@ -59,8 +59,7 @@ dev = [
 ]
 
 [tool.uv]
-# For convenience, install dev extras on `uv sync --extra dev`.
-editable = true
+# uv configuration (no editable flag needed; uv installs project in editable mode for the workspace root).
 
 [tool.hatch.build]
 # Defensive: exclude non-runtime assets from built artifacts (sdist/wheel)
