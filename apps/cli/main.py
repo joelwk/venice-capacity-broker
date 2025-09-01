@@ -542,6 +542,11 @@ def cmd_idem_purge(args: argparse.Namespace) -> None:
         except Exception:
             pass
     logger.info(f"purge complete: prefix={prefix} deleted={deleted}")
+    # Also print to stdout so non-logging capture (e.g., tests) see the summary
+    try:
+        print(f"purge complete: prefix={prefix} deleted={deleted}")
+    except Exception:
+        pass
 
 
 def cmd_probe_limits(args: argparse.Namespace) -> None:
