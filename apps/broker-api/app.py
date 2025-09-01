@@ -43,6 +43,13 @@ try:
 
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
 
+    # Minimal root: redirect to /health for quick checks
+    from fastapi.responses import RedirectResponse as _Redirect
+
+    @app.get("/", include_in_schema=False)
+    def root_redirect():
+        return _Redirect(url="/health")
+
     class TenantCreateRequest(BaseModel):
         tenant_id: str
         label: str
