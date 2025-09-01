@@ -24,6 +24,10 @@ def setup_module(module):
     # Common env defaults for limit values
     os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "60"
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "2"
+    # Force in-memory KV for test determinism
+    os.environ.pop("KV_URL", None)
+    os.environ.pop("REPLIT_DB_URL", None)
+    os.environ.pop("REDIS_URL", None)
 
 
 def test_admin_limits_auth_and_defaults(tmp_path):
@@ -32,6 +36,10 @@ def test_admin_limits_auth_and_defaults(tmp_path):
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
     # Ensure KV admin is available even when limiter disabled
     os.environ["RATE_LIMITS_ENABLED"] = "false"
+    # Ensure in-memory KV (avoid remote Replit DB)
+    os.environ.pop("KV_URL", None)
+    os.environ.pop("REPLIT_DB_URL", None)
+    os.environ.pop("REDIS_URL", None)
 
     broker_app = _load_app("broker_api_admin_limits_1")
     _add_tenant(broker_app, "t1")
@@ -59,6 +67,10 @@ def test_admin_limits_post_valid_invalid_and_idempotent(tmp_path):
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants_admin_limits2.json")
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
     os.environ["RATE_LIMITS_ENABLED"] = "true"  # also exercises limiter branch init
+    # Ensure in-memory KV (avoid remote Replit DB)
+    os.environ.pop("KV_URL", None)
+    os.environ.pop("REPLIT_DB_URL", None)
+    os.environ.pop("REDIS_URL", None)
 
     broker_app = _load_app("broker_api_admin_limits_2")
     _add_tenant(broker_app, "t2")
@@ -105,4 +117,3 @@ def test_admin_limits_post_valid_invalid_and_idempotent(tmp_path):
     assert r_get_404.status_code == 404
     r_post_404 = client.post("/v1/tenants/nope/broker-limits", headers=headers, json=payload)
     assert r_post_404.status_code == 404
-

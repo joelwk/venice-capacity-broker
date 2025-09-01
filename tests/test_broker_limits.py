@@ -12,6 +12,10 @@ def setup_module(module):
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "2"
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = "apps/broker-api/tenants.test.json"
+    # Force in-memory KV (avoid remote Replit DB / Redis during tests)
+    os.environ.pop("KV_URL", None)
+    os.environ.pop("REPLIT_DB_URL", None)
+    os.environ.pop("REDIS_URL", None)
 
 
 def test_rate_limit_enforced(monkeypatch, tmp_path):
