@@ -1,0 +1,2 @@
+  - Code: trim trailing slashes, e.g., Python `base = os.getenv("VENICE_API_BASE_URL", "").rstrip("/")`; JS `const base = (process.env.VENICE_API_BASE_URL || '').replace(/\/+$/, '')`.
+

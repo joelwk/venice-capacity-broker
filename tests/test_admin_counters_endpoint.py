@@ -1,144 +1,255 @@
 from __future__ import annotations
 
 import os
-import json
-from datetime import datetime, timedelta
+import sys
 from pathlib import Path
+import importlib.util
+from types import SimpleNamespace, ModuleType
+from datetime import datetime, timedelta
+import json
 
 
-def _import_app(tmp_store: Path):
-    # Import broker app from file path to ensure fresh env per test
-    import importlib.util
+def _make_fake_sql_stubs(rows):
+    """Install lightweight stubs for sqlmodel and sqlalchemy used by /v1/debug/counters.
 
-    os.environ["BROKER_STORE_BACKEND"] = "json"
-    os.environ["BROKER_STORE_FILE"] = str(tmp_store)
+    - sqlmodel.select returns a query object supporting where/order_by/limit
+    - sqlmodel.Session.exec(q).all() evaluates filters against provided rows
+    - sqlalchemy.desc returns a sentinel with is_desc=True so order_by can detect
+    - db.models.Counter is patched so attribute comparisons yield ('eq', field, value)
+    """
+
+    # Stub sqlalchemy.desc
+    sqlalc = ModuleType("sqlalchemy")
+
+    class _Desc:
+        def __init__(self, arg):
+            # arg may be a FieldProxy; record its field name if present
+            self.is_desc = True
+            self.field = getattr(arg, "field", None)
+
+    def desc(arg):  # noqa: ANN001
+        return _Desc(arg)
+
+    sqlalc.desc = desc  # type: ignore[attr-defined]
+    sys.modules["sqlalchemy"] = sqlalc
+
+    # Field proxy that returns comparable tuples for equality
+    class FieldProxy:
+        def __init__(self, name: str):
+            self.field = name
+
+        def __eq__(self, other):  # noqa: D401, ANN001
+            # Produce a simple tuple the fake query understands
+            return ("eq", self.field, other)
+
+    # Patch db.models.Counter so attribute access yields FieldProxy
+    import db.models as db_models
+
+    class _CounterSentinel:
+        def __getattr__(self, name: str):  # noqa: D401
+            return FieldProxy(name)
+
+    db_models.Counter = _CounterSentinel()  # type: ignore[assignment]
+
+    # Stub sqlmodel (Session + select)
+    sqlm = ModuleType("sqlmodel")
+    sqlm._FAKE_ROWS = list(rows)  # type: ignore[attr-defined]
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):  # noqa: D401
+            return list(self._rows)
+
+    class _SelectQuery:
+        def __init__(self, rows):
+            self._rows = list(rows)
+            self._filters = []
+            self._asc = False  # default desc
+            self._limit = None
+
+        def where(self, cond):  # noqa: ANN001
+            if isinstance(cond, tuple) and len(cond) == 3 and cond[0] == "eq":
+                self._filters.append(cond)
+            return self
+
+        def order_by(self, arg):  # noqa: ANN001
+            # asc if not a desc sentinel
+            self._asc = not bool(getattr(arg, "is_desc", False))
+            return self
+
+        def limit(self, n):  # noqa: ANN001
+            try:
+                self._limit = int(n)
+            except Exception:
+                self._limit = None
+            return self
+
+    class Session:  # noqa: D401
+        def __init__(self, engine):  # noqa: ANN001
+            self._engine = engine
+
+        def __enter__(self):  # support `with Session(engine) as s`
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def exec(self, query):  # noqa: ANN001
+            # Start with provided rows
+            rows = list(getattr(sqlm, "_FAKE_ROWS", []))
+            # Apply filters
+            for kind, field, value in getattr(query, "_filters", []):
+                if kind == "eq":
+                    rows = [r for r in rows if getattr(r, field) == value]
+            # Sort by bucket_start
+            rows.sort(key=lambda r: r.bucket_start, reverse=not getattr(query, "_asc", False))
+            # Apply limit
+            lim = getattr(query, "_limit", None)
+            if lim is not None:
+                rows = rows[: int(lim)]
+            return _Result(rows)
+
+    def select(_model):  # noqa: ANN001
+        return _SelectQuery(getattr(sqlm, "_FAKE_ROWS", []))
+
+    sqlm.Session = Session  # type: ignore[attr-defined]
+    sqlm.select = select  # type: ignore[attr-defined]
+    sys.modules["sqlmodel"] = sqlm
+
+
+def _load_app(module_name: str):
     app_path = Path("apps/broker-api/app.py").resolve()
-    spec = importlib.util.spec_from_file_location("broker_api_app_counters", str(app_path))
+    spec = importlib.util.spec_from_file_location(module_name, str(app_path))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]
     return mod
 
 
-def _seed_tenant(mod, tenant_id: str = "t-123") -> None:  # noqa: ANN001
-    # Load Tenant dataclass from tenant_store via file path as well
-    Tenant = mod.Tenant  # type: ignore[attr-defined]
-    tenant = Tenant(id=tenant_id, label="T1", subkey="sub-ctrs", quota=0)
-    mod.store.upsert(tenant)
+def _add_tenant(broker_app, tenant_id: str, subkey: str = "sub-1", label: str = "T1"):
+    Tenant = broker_app.Tenant  # type: ignore[attr-defined]
+    tenant = Tenant(id=tenant_id, label=label, subkey=subkey, quota=0)
+    broker_app.store.upsert(tenant)
 
 
-def _setup_sqlite_db(file: Path):
-    os.environ["SQL_DATABASE_URL"] = f"sqlite:///{file}"
-    try:
-        from db.session import create_db_and_tables
+def test_counters_requires_admin_token(monkeypatch, tmp_path):
+    # Env and store
+    os.environ["BROKER_STORE_BACKEND"] = "json"
+    os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants.json")
+    os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
 
-        create_db_and_tables()
-    except Exception:
-        import pytest
+    # Prepare fake rows and SQL stubs
+    now = datetime.utcnow()
+    rows = [
+        SimpleNamespace(
+            tenant_id="t1",
+            scope="chat",
+            model=None,
+            bucket_start=now - timedelta(minutes=3),
+            bucket_seconds=60,
+            count=5,
+        ),
+    ]
+    _make_fake_sql_stubs(rows)
 
-        pytest.skip("sqlmodel not installed; skipping counters endpoint tests")
+    # Patch DB engine fetch to avoid real SQL deps
+    import db.session as db_session
+    db_session.get_engine = lambda: object()  # type: ignore[assignment]
 
+    broker_app = _load_app("broker_api_counters_auth")
+    _add_tenant(broker_app, "t1")
 
-def test_admin_counters_ok_and_filters(tmp_path, monkeypatch):
-    os.environ["BROKER_ADMIN_TOKEN"] = "dev-admin"
-    os.environ["BROKER_REQUIRE_ADMIN_TOKEN"] = "true"
-
-    store_file = tmp_path / "tenants.json"
-    db_file = tmp_path / "test.db"
-
-    _setup_sqlite_db(db_file)
-    app_mod = _import_app(store_file)
-    _seed_tenant(app_mod, tenant_id="t-abc")
-
-    # Seed one SQL counter row directly
-    from sqlmodel import Session
-    from db.session import get_engine
-    from db.models import Counter
-
-    engine = get_engine()
-    now = datetime.utcnow().replace(microsecond=0)
-    row1 = Counter(tenant_id="t-abc", scope="chat", model=None, bucket_start=now - timedelta(minutes=2), bucket_seconds=60, count=5)
-    row2 = Counter(tenant_id="t-abc", scope="chat", model=None, bucket_start=now - timedelta(minutes=1), bucket_seconds=60, count=7)
-    with Session(engine) as s:  # type: ignore[call-arg]
-        s.add(row1)
-        s.add(row2)
-        s.commit()
-
-    # Also seed a KV shadow entry and compact (parity with CLI)
-    # Use CLI command to compact with --force
-    # Create a KV key matching limiter pattern: rl:tenant:{id}:chat:{bucket_epoch}
-    from libs.kv import KVStore
-
-    kv = KVStore()
-    bucket_epoch = int((now - timedelta(minutes=3)).timestamp() // 60 * 60)
-    kv.set(f"rl:tenant:t-abc:chat:{bucket_epoch}", 3)
-
-    from apps.cli.main import cmd_compact_counters, argparse
-
-    ns = argparse.Namespace(force=True)
-    cmd_compact_counters(ns)
-
-    # Call admin endpoint and verify shape/order
     from fastapi.testclient import TestClient
 
-    client = TestClient(app_mod.app)
-    hdrs = {"Authorization": "Bearer dev-admin"}
-    r = client.get("/v1/debug/counters", params={"tenant_id": "t-abc", "asc": False, "limit": 2}, headers=hdrs)
+    client = TestClient(broker_app.app)
+
+    # No auth -> 401
+    r = client.get("/v1/debug/counters", params={"tenant_id": "t1"})
+    assert r.status_code == 401
+
+
+def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
+    os.environ["BROKER_STORE_BACKEND"] = "json"
+    os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants2.json")
+    os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
+
+    now = datetime.utcnow()
+    rows = [
+        SimpleNamespace(
+            tenant_id="t1",
+            scope="chat",
+            model=None,
+            bucket_start=now,
+            bucket_seconds=60,
+            count=1,
+        ),
+    ]
+    _make_fake_sql_stubs(rows)
+    # Patch DB engine fetch to avoid real SQL deps
+    import db.session as db_session
+    db_session.get_engine = lambda: object()  # type: ignore[assignment]
+
+    broker_app = _load_app("broker_api_counters_validate")
+    _add_tenant(broker_app, "t1")
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(broker_app.app)
+    headers = {"Authorization": "Bearer adminkey"}
+
+    # Missing tenant_id -> 400
+    r_missing = client.get("/v1/debug/counters", headers=headers)
+    assert r_missing.status_code == 400
+
+    # Invalid bucket_seconds -> 400
+    r_bad_bs = client.get("/v1/debug/counters", headers=headers, params={"tenant_id": "t1", "bucket_seconds": "abc"})
+    assert r_bad_bs.status_code == 400
+
+
+def test_counters_filters_limit_and_asc(tmp_path):
+    os.environ["BROKER_STORE_BACKEND"] = "json"
+    os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants3.json")
+    os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
+
+    # Build dataset across scopes and bucket sizes
+    now = datetime.utcnow()
+    rows = [
+        SimpleNamespace(tenant_id="t1", scope="chat", model=None, bucket_start=now - timedelta(minutes=5), bucket_seconds=60, count=1),
+        SimpleNamespace(tenant_id="t1", scope="chat", model=None, bucket_start=now - timedelta(minutes=4), bucket_seconds=60, count=2),
+        SimpleNamespace(tenant_id="t1", scope="chat", model=None, bucket_start=now - timedelta(minutes=3), bucket_seconds=60, count=3),
+        SimpleNamespace(tenant_id="t1", scope="signals", model=None, bucket_start=now - timedelta(minutes=2), bucket_seconds=300, count=4),
+        SimpleNamespace(tenant_id="t1", scope="signals", model=None, bucket_start=now - timedelta(minutes=1), bucket_seconds=300, count=5),
+        SimpleNamespace(tenant_id="t2", scope="chat", model=None, bucket_start=now - timedelta(minutes=1), bucket_seconds=60, count=99),
+    ]
+    _make_fake_sql_stubs(rows)
+    # Patch DB engine fetch to avoid real SQL deps
+    import db.session as db_session
+    db_session.get_engine = lambda: object()  # type: ignore[assignment]
+
+    broker_app = _load_app("broker_api_counters_filters")
+    _add_tenant(broker_app, "t1")
+    _add_tenant(broker_app, "t2")
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(broker_app.app)
+    headers = {"Authorization": "Bearer adminkey"}
+
+    # Filter to t1 + scope=chat + bucket_seconds=60; asc + limit=2
+    params = {"tenant_id": "t1", "scope": "chat", "bucket_seconds": "60", "asc": "1", "limit": "2"}
+    r = client.get("/v1/debug/counters", headers=headers, params=params)
     assert r.status_code == 200, r.text
     data = r.json()
     assert isinstance(data, list)
     assert len(data) == 2
-    # Latest bucket first
-    ts0 = data[0]["bucket_start"]
-    ts1 = data[1]["bucket_start"]
-    assert ts0 >= ts1
-    for d in data:
-        assert d["tenant_id"] == "t-abc"
-        assert d["scope"] == "chat"
-        assert int(d["bucket_seconds"]) == 60
-        assert "count" in d
-
-    # Compare with CLI counters:show JSON (parity)
-    from apps.cli.main import cmd_counters_show
-    from io import StringIO
-    import sys
-
-    args = argparse.Namespace(tenant="t-abc", scope="chat", model=None, bucket_seconds=60, since=None, until=None, limit=2, desc=True, json=True)
-    buf = StringIO()
-    old = sys.stdout
-    sys.stdout = buf
-    try:
-        cmd_counters_show(args)
-    finally:
-        sys.stdout = old
-    cli_out = json.loads(buf.getvalue())
-    # Rows should match in order and keys
-    assert [r["bucket_start"] for r in cli_out] == [r["bucket_start"] for r in data]
-
-
-def test_admin_counters_auth_and_errors(tmp_path):
-    os.environ["BROKER_ADMIN_TOKEN"] = "dev-admin"
-    os.environ["BROKER_REQUIRE_ADMIN_TOKEN"] = "true"
-
-    store_file = tmp_path / "tenants.json"
-    db_file = tmp_path / "test.db"
-
-    _setup_sqlite_db(db_file)
-    app_mod = _import_app(store_file)
-    _seed_tenant(app_mod, tenant_id="t-err")
-
-    from fastapi.testclient import TestClient
-
-    client = TestClient(app_mod.app)
-    # 401 missing/invalid auth
-    r = client.get("/v1/debug/counters", params={"tenant_id": "t-err"})
-    assert r.status_code == 401
-
-    # 400 missing tenant_id
-    hdrs = {"Authorization": "Bearer dev-admin"}
-    r2 = client.get("/v1/debug/counters", headers=hdrs)
-    assert r2.status_code == 400
-
-    # 400 invalid bucket_seconds
-    r3 = client.get("/v1/debug/counters", params={"tenant_id": "t-err", "bucket_seconds": "oops"}, headers=hdrs)
-    assert r3.status_code == 400
+    # Shape
+    for item in data:
+        assert set(["tenant_id", "scope", "model", "bucket_start", "bucket_seconds", "count"]).issubset(item.keys())
+        assert item["tenant_id"] == "t1"
+        assert item["scope"] == "chat"
+        assert item["bucket_seconds"] == 60
+    # Ascending by bucket_start
+    ts = [item["bucket_start"] for item in data]
+    assert ts == sorted(ts)

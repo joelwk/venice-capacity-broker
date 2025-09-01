@@ -159,3 +159,47 @@ def test_rate_limit_with_redis_if_available(monkeypatch, tmp_path):
     r2 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "b2"}, json=payload)
     assert r1.status_code == 200
     assert r2.status_code == 429
+
+
+def test_no_rate_limit_when_disabled(monkeypatch, tmp_path):
+    # Even with low limits configured, disabling limiter should allow requests
+    store_file = tmp_path / "tenants_no_rl.json"
+    os.environ["BROKER_STORE_FILE"] = str(store_file)
+    os.environ["RATE_LIMITS_ENABLED"] = "false"
+    os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "1"
+    os.environ["RATE_LIMIT_MAX_REQUESTS"] = "1"
+
+    from pathlib import Path
+    import importlib.util
+
+    app_path = Path("apps/broker-api/app.py").resolve()
+    spec = importlib.util.spec_from_file_location("broker_api_app_rl_off", str(app_path))
+    assert spec and spec.loader
+    broker_app = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
+
+    def fake_chat(self, messages, model=None, **kw):  # noqa: ANN001
+        return {"status": "ok", "echo": messages}
+
+    from libs import venice_sdk
+
+    monkeypatch.setattr(venice_sdk.client.VeniceClient, "chat_completions", fake_chat, raising=True)
+
+    # Insert tenant
+    Tenant = broker_app.Tenant  # type: ignore[attr-defined]
+    tenant = Tenant(id="t_off", label="T_off", subkey="sub-off", quota=0)
+    broker_app.store.upsert(tenant)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(broker_app.app)
+    headers = {"Authorization": "Bearer sub-off"}
+    payload = {"messages": [{"role": "user", "content": "hi"}]}
+
+    # All requests should pass (no 429) since limiter is disabled
+    r1 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "z1"}, json=payload)
+    r2 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "z2"}, json=payload)
+    r3 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "z3"}, json=payload)
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r3.status_code == 200

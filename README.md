@@ -182,6 +182,29 @@ URLs & env vars:
 - `BROKER_API_HOST` / `BROKER_API_PORT`: CLI fallback to construct a URL when `BROKER_BASE_URL` is not set (e.g., `127.0.0.1:8000`). The server does not read these.
 - `BASE_RPC_URL`: on-chain Base RPC endpoint for Web3/AgentKit (e.g., `https://mainnet.base.org` or `https://sepolia.base.org`). Unrelated to the Broker API URL.
 
+### Venice API (env pitfalls)
+
+- **`VENICE_API_BASE_URL` selection**: choose with or without `/api` using the OpenAPI spec.
+  - Try `GET ${BASE_URL%/}/openapi.json`. If this returns 200, start with `VENICE_API_BASE_URL=${BASE_URL%/}` unless the spec's `servers[0].url` contains `/api`, in which case use `${BASE_URL%/}/api`.
+  - If `GET ${BASE_URL%/}/openapi.json` is 404 but `GET ${BASE_URL%/}/api/openapi.json` works, use `VENICE_API_BASE_URL=${BASE_URL%/}/api`.
+- **Parent key for subkeys**: set `VENICE_PARENT_KEY` to a parent/root inference key that has permission to create sub-keys. A regular `VENICE_API_KEY` without parent privileges will fail when calling `/v1/keys/sub` (typically 401/403). Obtain a parent key via the wallet challenge flow or your Venice admin UI. The broker will fall back to `VENICE_API_KEY` if `VENICE_PARENT_KEY` is unset, but it must be parent-capable.
+- **Avoid double slashes**:
+  - Shell: use `${BASE_URL%/}` to trim a trailing `/` before appending paths.
+  - Code: trim trailing slashes, e.g., Python .rstrip('/'); JS .replace(/\/+$/, '').
+
+Quick probes and examples:
+
+```
+# Pick your host, then probe OpenAPI location
+BASE_URL="https://api.venice.ai"   # or your self-hosted domain
+curl -fsSL "${BASE_URL%/}/openapi.json" || curl -fsSL "${BASE_URL%/}/api/openapi.json"
+
+# Example sub-key creation (requires parent key)
+curl -sS -H "Authorization: Bearer $VENICE_PARENT_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL%/}/v1/keys/sub" \
+  -d '{"label":"tenant-1","consumptionLimit":100}'
+```
 SQL backend quick smoke (local or Replit SQL)
 - Set `SQL_DATABASE_URL` or `DATABASE_URL` to a Postgres connection string.
 - Optionally run migrations: `uv run alembic upgrade head` (tables will auto-create on first use otherwise).
