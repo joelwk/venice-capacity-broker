@@ -97,6 +97,11 @@ Broker API (requires FastAPI + Uvicorn):
 
 ```
 uv run uvicorn app:app --app-dir apps/broker-api --reload
+```
+
+API index & docs:
+- Visit `/` for a small HTML index with links to `/docs` (Swagger UI), `/redoc`, `/health`, and `/metrics`.
+- Admin endpoints require `Authorization: Bearer <BROKER_ADMIN_TOKEN>`.
 
 ## Docker Compose (Postgres + Redis)
 
@@ -171,6 +176,12 @@ LangSmith tracing:
 
 See `config/default.yml` and `.env.example` for environment variables and defaults.
 
+URLs & env vars:
+- `BASE_URL`: shell convenience used in examples to hold your API base URL (not read by the app).
+- `BROKER_BASE_URL`: full base URL used by the CLI to reach the Broker API. If set, the CLI uses this directly (recommended for Replit).
+- `BROKER_API_HOST` / `BROKER_API_PORT`: CLI fallback to construct a URL when `BROKER_BASE_URL` is not set (e.g., `127.0.0.1:8000`). The server does not read these.
+- `BASE_RPC_URL`: on-chain Base RPC endpoint for Web3/AgentKit (e.g., `https://mainnet.base.org` or `https://sepolia.base.org`). Unrelated to the Broker API URL.
+
 SQL backend quick smoke (local or Replit SQL)
 - Set `SQL_DATABASE_URL` or `DATABASE_URL` to a Postgres connection string.
 - Optionally run migrations: `uv run alembic upgrade head` (tables will auto-create on first use otherwise).
@@ -211,8 +222,15 @@ This prints quotes from Uniswap V2 and Aerodrome (if both routers are set) and h
 ## Replit
 
 - Fully uses `uv` (pip fallback removed). The runner auto-installs `uv` if missing.
-- Steps: import to Replit, add Secrets from `.env.example`, click Run. Health at `/health`.
-- Optional extras: set `UV_EXTRAS` to space-separated extras before first run, e.g. `UV_EXTRAS="dev db kv"`.
+- Steps: import to Replit, add Secrets from `.env.example`, click Run.
+  - Use the public Replit URL (e.g., `https://<id>.worf.replit.dev`) in your browser and for curl.
+  - `/` shows the HTML index; `/docs` opens Swagger UI; `/health` returns `{"status":"ok"}`.
+- Recommended Secrets for Replit:
+  - `BROKER_BASE_URL` = your public Replit URL
+  - `BROKER_ADMIN_TOKEN` = strong random
+  - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`)
+  - On-chain (optional): `BASE_RPC_URL`, `NETWORK_ID` (base-sepolia|base-mainnet); for Smart Wallet also set `WALLET_PROVIDER=smart_wallet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`, `OWNER`.
+- Optional extras: set `UV_EXTRAS` to space-separated extras before first run, e.g. `UV_EXTRAS="dev db kv"` or `UV_EXTRAS="web3 agentkit"`.
   - Under the hood, the runner executes `uv sync --extra <each>` then starts Uvicorn via `uv run`.
 - Deployments: create a Web Service from the Deployments panel (details in `infra/replit/README.md`).
   - For Replit Cloud Services: SQL Database, set `SQL_DATABASE_URL` or `DATABASE_URL` from the service credentials. For KV, set `REPLIT_DB_URL`.

@@ -43,12 +43,41 @@ try:
 
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
 
-    # Minimal root: redirect to /health for quick checks
-    from fastapi.responses import RedirectResponse as _Redirect
+    # Minimal root index with links to docs and health
+    from fastapi.responses import HTMLResponse as _HTML
 
     @app.get("/", include_in_schema=False)
-    def root_redirect():
-        return _Redirect(url="/health")
+    def index():
+        return _HTML(
+            """
+            <!doctype html>
+            <html lang=\"en\">
+              <head>
+                <meta charset=\"utf-8\" />
+                <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+                <title>VVV Capacity Broker API</title>
+                <style>
+                  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;line-height:1.4;margin:2rem;color:#1a1a1a}
+                  a{color:#0b66ff;text-decoration:none}
+                  a:hover{text-decoration:underline}
+                  .links{display:flex;gap:1rem;flex-wrap:wrap;margin-top:1rem}
+                  code{background:#f4f6f8;padding:0.15rem 0.35rem;border-radius:4px}
+                </style>
+              </head>
+              <body>
+                <h1>VVV Capacity Broker API</h1>
+                <p>Quick links:</p>
+                <div class=\"links\">
+                  <a href=\"/docs\">Swagger UI</a>
+                  <a href=\"/redoc\">ReDoc</a>
+                  <a href=\"/health\">Health</a>
+                  <a href=\"/metrics\">Metrics</a>
+                </div>
+                <p>Admin endpoints require <code>Authorization: Bearer &lt;BROKER_ADMIN_TOKEN&gt;</code>.</p>
+              </body>
+            </html>
+            """
+        )
 
     class TenantCreateRequest(BaseModel):
         tenant_id: str
