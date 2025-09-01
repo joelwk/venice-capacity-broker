@@ -18,6 +18,23 @@ def _make_fake_sql_stubs(rows):
     - db.models.Counter is patched so attribute comparisons yield ('eq', field, value)
     """
 
+    # Pre-stub a minimal sqlmodel so db.models can import classes with table=True
+    import sys as _sys
+    from types import ModuleType as _ModuleType
+
+    _sqlm = _ModuleType("sqlmodel")
+
+    class _SQLModel:
+        def __init_subclass__(cls, **kwargs):  # accept table=True
+            pass
+
+    def Field(*args, **kwargs):  # noqa: ANN001
+        return None
+
+    _sqlm.SQLModel = _SQLModel  # type: ignore[attr-defined]
+    _sqlm.Field = Field  # type: ignore[attr-defined]
+    _sys.modules["sqlmodel"] = _sqlm
+
     # Stub sqlalchemy.desc
     sqlalc = ModuleType("sqlalchemy")
 
@@ -51,9 +68,9 @@ def _make_fake_sql_stubs(rows):
 
     db_models.Counter = _CounterSentinel()  # type: ignore[assignment]
 
-    # Stub sqlmodel (Session + select)
-    sqlm = ModuleType("sqlmodel")
-    sqlm._FAKE_ROWS = list(rows)  # type: ignore[attr-defined]
+    # Extend sqlmodel stub (Session + select)
+    sqlm = sys.modules["sqlmodel"]
+    setattr(sqlm, "_FAKE_ROWS", list(rows))
 
     class _Result:
         def __init__(self, rows):
@@ -116,7 +133,6 @@ def _make_fake_sql_stubs(rows):
 
     sqlm.Session = Session  # type: ignore[attr-defined]
     sqlm.select = select  # type: ignore[attr-defined]
-    sys.modules["sqlmodel"] = sqlm
 
 
 def _load_app(module_name: str):
