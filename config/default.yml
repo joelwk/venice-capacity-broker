@@ -11,20 +11,20 @@ wallet:
   default_provider: eth_account  # or: smart_wallet
 
 venice:
-  base_url: ${VENICE_API_BASE_URL:https://api.venice.ai}
+  base_url: ${VENICE_API_BASE_URL:https://api.venice.ai/api/v1}
   api_key: ${VENICE_API_KEY:}
   endpoints:
-    create_root: ${VENICE_CREATE_ROOT_PATH:/v1/keys}
-    create_subkey: ${VENICE_CREATE_SUBKEY_PATH:/v1/keys/sub}
-    revoke_key: ${VENICE_REVOKE_KEY_PATH:/v1/keys/{key_id}/revoke}
-    challenge: ${VENICE_CHALLENGE_PATH:/v1/keys/challenge}
-    usage: ${VENICE_USAGE_PATH:/v1/usage}
-    rate_limits: ${VENICE_RATE_LIMITS_PATH:/v1/rate-limits}
-    quota: ${VENICE_QUOTA_PATH:/v1/quota}
-    models: ${VENICE_MODELS_PATH:/v1/models}
-    chat_completions: ${VENICE_CHAT_COMPLETIONS_PATH:/v1/chat/completions}
-    vvv: ${VENICE_VVV_PATH:/v1/vvv}
-    diem: ${VENICE_DIEM_PATH:/v1/diem}
+    create_root: ${VENICE_CREATE_ROOT_PATH:/api_keys/generate_web3_key}
+    create_subkey: ${VENICE_CREATE_SUBKEY_PATH:/api_keys}
+    revoke_key: ${VENICE_REVOKE_KEY_PATH:/api_keys/{key_id}}
+    challenge: ${VENICE_CHALLENGE_PATH:/api_keys/generate_web3_key}
+    usage: ${VENICE_USAGE_PATH:/api_keys/rate_limits/log}
+    rate_limits: ${VENICE_RATE_LIMITS_PATH:/api_keys/rate_limits}
+    quota: ${VENICE_QUOTA_PATH:/api_keys/rate_limits}
+    models: ${VENICE_MODELS_PATH:/models}
+    chat_completions: ${VENICE_CHAT_COMPLETIONS_PATH:/chat/completions}
+    vvv: ${VENICE_VVV_PATH:/vvv}
+    diem: ${VENICE_DIEM_PATH:/diem}
 
 contracts:
   vvv_token: ${VVV_TOKEN_ADDRESS:}
