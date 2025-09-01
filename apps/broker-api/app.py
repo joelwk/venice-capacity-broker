@@ -100,6 +100,25 @@ try:
         usage: dict
         limits: dict | None = None
 
+    # Venice Web3 key flow models
+    class Web3ChallengeRequest(BaseModel):
+        wallet: str
+
+    class Web3CreateRootRequest(BaseModel):
+        address: str
+        signature: str
+        # Optional pass-throughs if supported by deployment
+        challenge: str | None = None
+        challengeId: str | None = None
+        apiKeyType: str | None = None
+        consumptionLimit: dict | int | None = None
+        expiresAt: str | None = None
+    class CreateSubkeyRequest(BaseModel):
+        label: str
+        consumptionLimit: dict | int
+        expiresAt: str | None = None
+        parentKey: str | None = None  # Optional override; otherwise env is used
+
     # Choose store backend: SQL if requested and available, else JSON file
     import os as _os
 
@@ -325,6 +344,55 @@ try:
         # Sort by id for stable output
         out.sort(key=lambda x: x.id)
         return out
+
+    # --- Venice Web3 root key helper endpoints (admin-only) ---
+
+    @app.post("/v1/venice/web3/challenge")
+    @_traceable("broker.venice_web3_challenge")
+    def venice_web3_challenge(req: Web3ChallengeRequest, authorization: str | None = Header(default=None, alias="Authorization")) -> dict:
+        _require_admin(authorization)
+        try:
+            return client.get_challenge(req.wallet)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"challenge fetch failed: {e}")
+
+    @app.post("/v1/venice/web3/create-root-key")
+    @_traceable("broker.venice_web3_create_root")
+    def venice_web3_create_root(req: Web3CreateRootRequest, authorization: str | None = Header(default=None, alias="Authorization")) -> dict:
+        _require_admin(authorization)
+        try:
+            return client.create_root_inference_key(
+                wallet_address=req.address,
+                signature=req.signature,
+                challenge=req.challenge,
+                challenge_id=req.challengeId,
+                api_key_type=req.apiKeyType,
+                consumption_limit=req.consumptionLimit,
+                expires_at=req.expiresAt,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"root key creation failed: {e}")
+    @app.post("/v1/venice/subkey")
+    @_traceable("broker.venice_create_subkey")
+    def venice_create_subkey(req: CreateSubkeyRequest, authorization: str | None = Header(default=None, alias="Authorization")) -> dict:
+        """Admin-only: create a scoped subkey using a parent key.
+
+        Uses `req.parentKey` if provided, else falls back to `VENICE_PARENT_KEY` or `VENICE_API_KEY` from env.
+        """
+        _require_admin(authorization)
+        import os as __os
+        parent = req.parentKey or __os.getenv("VENICE_PARENT_KEY") or __os.getenv("VENICE_API_KEY")
+        if not parent:
+            raise HTTPException(status_code=400, detail="no parent key provided and VENICE_PARENT_KEY/VENICE_API_KEY not set")
+        try:
+            return client.create_scoped_subkey(
+                parent_key=parent,
+                label=req.label,
+                consumption_limit=req.consumptionLimit,
+                expires_at=req.expiresAt,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=f"subkey creation failed: {e}")
 
     @app.post("/v1/tenants", response_model=TenantResponse)
     @_traceable("broker.create_tenant")

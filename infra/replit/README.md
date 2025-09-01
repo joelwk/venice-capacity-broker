@@ -130,9 +130,40 @@ Deployments Validation (runbook)
    - Create a tenant: `POST /v1/tenants` with `{ tenant_id, label, quota }`.
    - Verify: `GET /v1/tenants` (admin bearer).
 2) Run probe
-   - In the Replit Shell: `python scripts/limit_probe.py --tenant <tenant-subkey> --rps 15 --duration 30`.
-   - Capture the JSON summary and Prom counters from stdout.
+   - In the Replit Shell (tenant mode): `python scripts/limit_probe.py --auth-bearer <tenant-subkey> --rps 15 --duration 30 --concurrency 20`.
+   - Or admin act-as mode: `python scripts/limit_probe.py --tenant-id <tenantId> --admin-token $BROKER_ADMIN_TOKEN --rps 15 --duration 30`.
+   - Capture the JSON summary (last line) and Prom counters printed to stdout. Record at least: `ok_rps`, `rate_limited`, `latency_ms_p50/p90/p99`.
 3) Adjust defaults
-   - Tune `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_REQUESTS` per observed capacity.
+   - Tune `RATE_LIMIT_WINDOW_SECONDS` and `RATE_LIMIT_MAX_REQUESTS` per observed capacity and target SLOs (e.g., p90 < 200ms at ok_rps target).
    - Optionally set per-tenant overrides via admin endpoint:
      `POST /v1/tenants/{id}/broker-limits` with `{ "windowSeconds": 60, "maxRequests": 120, "label": "premium" }`.
+
+OpenAPI probe (Venice)
+
+- Detect the correct `VENICE_API_BASE_URL` and key paths for your deployment:
+  - `python apps/cli/main.py venice:probe-openapi --base-url https://<your-venice-host>`
+  - This prints recommended exports for `VENICE_API_BASE_URL`, `VENICE_CREATE_SUBKEY_PATH`, and (if available) Web3 root key paths.
+
+Web3 root key wrapper (admin)
+
+- The Broker exposes admin-only helpers to standardize onboarding when needed:
+  - `POST /v1/venice/web3/challenge` with `{ "wallet": "0x..." }` → returns a signable challenge payload.
+  - `POST /v1/venice/web3/create-root-key` with `{ "address": "0x...", "signature": "0x...", "apiKeyType": "INFERENCE", "consumptionLimit": {"diem": 10} }` → returns a root key object.
+
+SQL Smoke Test (SOL)
+
+- Purpose: validate end-to-end SQL path (tenant, traffic, compaction, counters).
+- Preconditions: API deployed with `BROKER_STORE_BACKEND=sql` and `SQL_DATABASE_URL` configured.
+- One-liner script:
+  - `bash scripts/replit_sql_smoke.sh <tenantId>` (defaults to `t-sql-smoke`)
+  - Required env: `BROKER_BASE_URL`, `BROKER_ADMIN_TOKEN` (and SQL configured on the server).
+- Manual steps if preferred:
+  1) Create a tenant (idempotent):
+     - `POST ${BROKER_BASE_URL%/}/v1/tenants` with admin bearer.
+  2) Generate traffic to `/v1/chat` using admin act-as mode:
+     - `python scripts/limit_probe.py --base-url $BROKER_BASE_URL --tenant-id <id> --admin-token $BROKER_ADMIN_TOKEN --rps 15 --duration 30 --concurrency 20`
+  3) Compact counters into SQL:
+     - `python apps/cli/main.py data:compact-counters --force`
+  4) Verify counters:
+     - `GET ${BROKER_BASE_URL%/}/v1/debug/counters?tenant_id=<id>&limit=10` with admin bearer.
+  5) Archive outputs per “SQL smoke checklist” in `MVP-RELEASE.md`.

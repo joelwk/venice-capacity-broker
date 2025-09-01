@@ -96,7 +96,16 @@ class VeniceClient:
         except RuntimeError:
             # Fallback to GET if POST not supported
             return self._get(self.config.challenge_path, params={"wallet": wallet_address})
-    def create_root_inference_key(self, wallet_address: str, signature: str, challenge: Optional[str] = None, challenge_id: Optional[str] = None) -> Dict[str, Any]:
+    def create_root_inference_key(
+        self,
+        wallet_address: str,
+        signature: str,
+        challenge: Optional[str] = None,
+        challenge_id: Optional[str] = None,
+        api_key_type: Optional[str] = None,
+        consumption_limit: Optional[Dict[str, Any] | int] = None,
+        expires_at: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Create a root inference key by proving wallet control.
 
         The exact endpoint/payload can be controlled via env paths.
@@ -106,6 +115,15 @@ class VeniceClient:
             payload["challenge"] = challenge
         if challenge_id is not None:
             payload["challengeId"] = challenge_id
+        if api_key_type is not None:
+            payload["apiKeyType"] = api_key_type
+        if consumption_limit is not None:
+            if isinstance(consumption_limit, dict):
+                payload["consumptionLimit"] = dict(consumption_limit)
+            else:
+                payload["consumptionLimit"] = {"diem": int(consumption_limit)}
+        if expires_at is not None:
+            payload["expiresAt"] = expires_at
         return self._post(self.config.create_root_path, json=payload)
 
     def create_scoped_subkey(

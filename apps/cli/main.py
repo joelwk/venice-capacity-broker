@@ -831,6 +831,85 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", default=False, help="Only list keys that would be deleted")
     sp.set_defaults(func=cmd_venice_keys_cleanup)
 
+    # Venice OpenAPI probe
+    def cmd_venice_probe_openapi(args: argparse.Namespace) -> None:
+        base = (args.base_url or "https://api.venice.ai").rstrip("/")
+        timeout = float(args.timeout)
+        session = requests.Session()
+        spec = None
+        spec_loc = None
+        for path in ("/openapi.json", "/api/openapi.json"):
+            try:
+                r = session.get(base + path, timeout=timeout)
+                if r.ok:
+                    spec = r.json()
+                    spec_loc = path
+                    break
+            except Exception:
+                continue
+        if spec is None:
+            logger.error("Failed to fetch OpenAPI from %s (tried /openapi.json and /api/openapi.json)", base)
+            return
+        servers = spec.get("servers") or []
+        server_url = None
+        if servers and isinstance(servers, list):
+            server_url = servers[0].get("url") if isinstance(servers[0], dict) else None
+        # Compute recommended VENICE_API_BASE_URL
+        if server_url and isinstance(server_url, str):
+            if server_url.startswith("http://") or server_url.startswith("https://"):
+                rec_base = server_url.rstrip("/")
+            else:
+                rec_base = base + ("/" + server_url.lstrip("/"))
+        else:
+            # Fallback based on where we found spec
+            rec_base = base if spec_loc == "/openapi.json" else base + "/api"
+        # Probe for key-related paths
+        paths = spec.get("paths") or {}
+        rec_subkey_path = None
+        rec_root_path = None
+        rec_challenge_path = None
+        # Prefer /api_keys for subkey; else legacy /v1/keys/sub or /v1/keys/subkey
+        for candidate in ("/api_keys", "/v1/keys/sub", "/v1/keys/subkey"):
+            item = paths.get(candidate)
+            if item and ("post" in {k.lower() for k in item.keys()}):
+                rec_subkey_path = candidate
+                break
+        # Web3 root key flow candidates
+        for candidate in ("/api_keys/generate_web3_key", "/v1/keys/generate_web3_key"):
+            item = paths.get(candidate)
+            if item:
+                rec_root_path = candidate
+                rec_challenge_path = candidate
+                break
+        print("# Recommended environment exports:")
+        print(f"export VENICE_API_BASE_URL={rec_base}")
+        if rec_subkey_path:
+            print(f"export VENICE_CREATE_SUBKEY_PATH={rec_subkey_path}")
+        if rec_root_path:
+            print(f"export VENICE_CREATE_ROOT_PATH={rec_root_path}")
+        if rec_challenge_path:
+            print(f"export VENICE_CHALLENGE_PATH={rec_challenge_path}")
+        # Also print JSON summary for programmatic use
+        summary: Dict[str, Any] = {
+            "base": base,
+            "spec_location": spec_loc,
+            "recommended_base": rec_base,
+            "create_subkey_path": rec_subkey_path,
+            "create_root_path": rec_root_path,
+            "challenge_path": rec_challenge_path,
+        }
+        try:
+            import json as _json
+
+            print(_json.dumps(summary, separators=(",", ":")))
+        except Exception:
+            pass
+
+    sp = sub.add_parser("venice:probe-openapi", help="Detect VENICE_API_BASE_URL and key paths from OpenAPI")
+    sp.add_argument("--base-url", required=False, default=None, help="Venice host (e.g., https://api.venice.ai)")
+    sp.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout seconds")
+    sp.set_defaults(func=cmd_venice_probe_openapi)
+
     return p
 
 

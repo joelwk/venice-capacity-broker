@@ -30,20 +30,33 @@ Scope: Broker API, limiter + idempotency, JSON/SQL tenant store, CLI admin, DIEM
 
 - Limiter and idempotency
   - Enable limiter: `RATE_LIMITS_ENABLED=true` + window/max
-  - Probe: `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`
+  - Probe (tenant): `python scripts/limit_probe.py --auth-bearer <subkey> --rps 15 --duration 30`
   - Idempotency TTL: confirm `IDEMPOTENCY_TTL_SECONDS` active via 409 responses on duplicate payloads
 
 - SQL store and counters
   - Run with `BROKER_STORE_BACKEND=sql`; ensure `SQL_DATABASE_URL` set
   - (Optional) `uv run alembic upgrade head`
-  - Compact KV → SQL: `python apps/cli/main.py data:compact-counters --force`
+  - Compact KV + SQL: `python apps/cli/main.py data:compact-counters --force`
   - Inspect counters: API `/v1/debug/counters?tenant_id=<id>` or CLI `counters:show`
+
+SQL smoke checklist (attach output)
+- [ ] Start API with `BROKER_STORE_BACKEND=sql` and valid `SQL_DATABASE_URL` (capture logs)
+- [ ] Create a tenant via `POST /v1/tenants` (capture response JSON)
+- [ ] Generate traffic (e.g., run `scripts/limit_probe.py` for 15–30s against `/v1/chat`)
+- [ ] Run compaction `apps/cli/main.py data:compact-counters --force` (capture summary)
+- [ ] Verify `/v1/debug/counters?tenant_id=<id>` returns rows with expected `bucket_seconds` and counts (capture first 5 rows)
 
 - Replit Deployments
   - Follow `infra/replit/README.md`
   - Ensure `REPLIT_DB_URL` (KV) and `SQL_DATABASE_URL`/`DATABASE_URL` (if using Replit SQL) are configured in the Deployment secrets
   - Run limiter probe from the Replit Shell and record observed RPS; adjust defaults accordingly
 
+Replit probe checklist (attach output)
+- [ ] Record `ok_rps`, `rate_limited`, `latency_ms_p50/p90/p99`
+- [ ] Set/tune `RATE_LIMIT_WINDOW_SECONDS`, `RATE_LIMIT_MAX_REQUESTS` to meet target SLOs
+- [ ] Update README and infra/replit/README with tuned defaults if changes are made
+
 - Docs
   - Verify README, infra/replit/README, and `.env.example` reflect canonical env vars (notably `IDEMPOTENCY_TTL_SECONDS`).
+
 

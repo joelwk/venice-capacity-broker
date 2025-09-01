@@ -225,6 +225,11 @@ curl -sS -X POST "${BASE_URL%/}/api_keys/generate_web3_key" \
   -H "Content-Type: application/json" \
   -d '{"address":"'"$ADDRESS"'","signature":"'"$SIG"'","apiKeyType":"INFERENCE","consumptionLimit":{"diem":10}}'
 ```
+
+Broker wrappers (admin):
+- `POST /v1/venice/web3/challenge` with `{ "wallet": "0x..." }` returns a signable challenge payload.
+- `POST /v1/venice/web3/create-root-key` with `{ "address": "0x...", "signature": "0x...", "apiKeyType": "INFERENCE", "consumptionLimit": {"diem": 10} }` creates a root key.
+- `POST /v1/venice/subkey` with `{ "label": "tenant-1", "consumptionLimit": {"diem": 10}, "expiresAt": "2025-12-31T23:59:00Z" }` creates a scoped subkey using a parent key from env (or `parentKey` if provided).
 Tenants & keys
 - Create a tenant (idempotent): `POST /v1/tenants` (requires `BROKER_ADMIN_TOKEN` and `VENICE_PARENT_KEY`). If the tenant exists, it is returned without minting a new key.
 - Rotate key: `POST /v1/tenants?rotate=true` to mint a fresh subkey and update the store. Preserve existing quota/expiry unless you pass overrides in the body.
@@ -282,6 +287,12 @@ curl -sS -H "Authorization: Bearer $BROKER_ADMIN_TOKEN" \
 # CLI equivalents
 python apps/cli/main.py counters:show --tenant t1 --scope chat --limit 20 --json
 python apps/cli/main.py data:compact-counters --force
+```
+
+Probe Venice OpenAPI and print recommended env exports:
+
+```
+python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
 ```
 
 ## Troubleshooting
@@ -352,3 +363,10 @@ Idempotency
 - TTL env: `IDEMPOTENCY_TTL_SECONDS` (alias `IDEM_TTL_SECONDS` supported), default 300s.
 - Duplicate POST `/v1/chat` within TTL returns 409 and `X-Idempotency-Accepted: false`.
 - Admin cleanup: `python apps/cli/main.py idem:purge --prefix idem:chat:<tenantId>` prints a summary and deletes matching keys.
+
+### Target SLOs
+
+- p90 latency: under 200 ms at target `ok_rps` measured by `scripts/limit_probe.py`.
+- 429 fraction: below 10% during sustained probe at target `ok_rps` (tune `RATE_LIMIT_*` and per-tenant limits accordingly).
+- Error rate: < 1% non-429 errors during probe.
+- Metrics coverage: `/metrics` exposes request counters and latency; add alerts if p90 > 200 ms or 429 fraction > 10% for 5m.
