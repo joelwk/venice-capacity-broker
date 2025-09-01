@@ -192,6 +192,11 @@ URLs & env vars:
   - Shell: use `${BASE_URL%/}` to trim a trailing `/` before appending paths.
   - Code: trim trailing slashes, e.g., Python .rstrip('/'); JS .replace(/\/+$/, '').
 
+Additional notes for official API base (`https://api.venice.ai/api/v1`):
+- Set `VENICE_API_BASE_URL=https://api.venice.ai/api/v1`.
+- Subkey/key creation defaults to `POST /api_keys` with `Authorization: Bearer <VENICE_PARENT_KEY>` and body including `apiKeyType` and `consumptionLimit`. If your deployment differs, override `VENICE_CREATE_SUBKEY_PATH`.
+- Use `VENICE_API_KEY_TYPE=INFERENCE` (or `ADMIN` if required). Some deployments reject `READ_ONLY` with a 400 invalid enum error.
+
 Quick probes and examples:
 
 ```

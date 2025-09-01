@@ -119,7 +119,8 @@ class VeniceClient:
             cons = dict(consumption_limit)
         else:
             cons = {"diem": int(consumption_limit)}
-        api_key_type = os.getenv("VENICE_API_KEY_TYPE", "READ_ONLY")
+        # Venice accepts apiKeyType INFERENCE or ADMIN; default to INFERENCE for chat usage
+        api_key_type = os.getenv("VENICE_API_KEY_TYPE", "INFERENCE")
         payload: Dict[str, Any] = {
             "apiKeyType": api_key_type,
             "consumptionLimit": cons,
