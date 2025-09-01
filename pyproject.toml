@@ -82,7 +82,9 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.sdist]
+packages = ["apps", "libs", "services", "agents", "graph"]
 exclude = ["@tool.hatch.build.exclude"]
 
 [tool.hatch.build.targets.wheel]
+packages = ["apps", "libs", "services", "agents", "graph"]
 exclude = ["@tool.hatch.build.exclude"]
