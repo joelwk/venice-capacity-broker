@@ -78,8 +78,25 @@ def cmd_compact_counters(args: argparse.Namespace) -> None:
 
             # Discover tenants from SQL (if available)
             tenant_ids: list[str] = []
-            with Session(engine) as _s:  # type: ignore[call-arg]
-                tenant_ids = [row.id for row in _s.exec(_select(_DbTenant)).all()]
+            try:
+                with Session(engine) as _s:  # type: ignore[call-arg]
+                    tenant_ids = [row.id for row in _s.exec(_select(_DbTenant)).all()]
+            except Exception:
+                tenant_ids = []
+
+            # If SQL is empty (e.g., JSON store), try Broker API /v1/tenants via admin token
+            if not tenant_ids:
+                base = (os.getenv("BROKER_BASE_URL") or f"http://{os.getenv('BROKER_API_HOST','127.0.0.1')}:{os.getenv('BROKER_API_PORT','8000')}").rstrip("/")
+                admin = os.getenv("BROKER_ADMIN_TOKEN")
+                if admin:
+                    try:
+                        r = requests.get(base + "/v1/tenants", headers={"Authorization": f"Bearer {admin}"}, timeout=10)
+                        if r.ok:
+                            data = r.json()
+                            if isinstance(data, list):
+                                tenant_ids = [str(t.get("id")) for t in data if isinstance(t, dict) and t.get("id")]
+                    except Exception:
+                        pass
 
             # Window config
             window_default = int((os.getenv("RATE_LIMIT_WINDOW_SECONDS") or "60").strip() or 60)
