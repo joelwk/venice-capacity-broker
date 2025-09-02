@@ -5,6 +5,8 @@
 BROKER_API_HOST ?= 127.0.0.1
 BROKER_API_PORT ?= 8000
 BROKER_BASE_URL ?= http://$(BROKER_API_HOST):$(BROKER_API_PORT)
+# Trim any trailing slash from base URL to avoid 301 redirects
+BASE_URL := $(patsubst %/,%, $(BROKER_BASE_URL))
 MESSAGE ?= Hello
 # Try to find uv in common install locations; fall back to plain python
 UV_BIN ?= $(if $(wildcard $(HOME)/.local/bin/uv),$(HOME)/.local/bin/uv,$(if $(wildcard $(PWD)/.local/bin/uv),$(PWD)/.local/bin/uv,))
@@ -23,7 +25,7 @@ help:
 	@echo "  make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"
 
 health:
-	@curl -fsSL -H "Accept: application/json" "$(BROKER_BASE_URL)/health"
+	@curl -fsSL -H "Accept: application/json" "$(BASE_URL)/health"
 
 create-tenant:
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
@@ -32,16 +34,17 @@ create-tenant:
 chat-admin:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make chat-admin TENANT=t1 [MESSAGE=Hello]"; exit 1; fi
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
-	@curl -sS -X POST "$(BROKER_BASE_URL)/v1/chat" \
+	@curl -sSL -H "Accept: application/json" -X POST "$(BASE_URL)/v1/chat" \
 	  -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" \
 	  -H "X-Tenant-Id: $(TENANT)" \
 	  -H "Content-Type: application/json" \
-	  -d '{"messages":[{"role":"user","content":"$(MESSAGE)"}]}'
+	  -d '{"messages":[{"role":"user","content":"$(MESSAGE)"}]}' \
+	  -w "\nHTTP %{http_code}\n"
 
 limits-get:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make limits-get TENANT=t1"; exit 1; fi
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
-	@curl -sS "$(BROKER_BASE_URL)/v1/tenants/$(TENANT)/broker-limits" -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN"
+	@curl -sSL -H "Accept: application/json" "$(BASE_URL)/v1/tenants/$(TENANT)/broker-limits" -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN"
 
 limits-set:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"; exit 1; fi

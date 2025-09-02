@@ -729,6 +729,60 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", default=False, help="Output JSON instead of log lines")
     sp.set_defaults(func=cmd_counters_show)
 
+    # Env status (server or local)
+    def cmd_env_status(args: argparse.Namespace) -> None:
+        base = os.getenv("BROKER_BASE_URL")
+        out: Dict[str, Any] = {}
+        if base:
+            try:
+                r = requests.get(base.rstrip("/") + "/v1/env", timeout=5)
+                if r.ok:
+                    out["server"] = r.json()
+                else:
+                    logger.warning(f"/v1/env returned {r.status_code}")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Could not reach server /v1/env: {e}")
+        # Local snapshot (env-only)
+        out["local"] = {
+            "kv": {
+                "redis_configured": bool(os.getenv("REDIS_URL") or os.getenv("KV_REDIS_URL")),
+                "replit_db_configured": bool(os.getenv("KV_URL") or os.getenv("REPLIT_DB_URL")),
+                "namespace_set": bool(os.getenv("KV_NAMESPACE")),
+                "prefix_set": bool(os.getenv("KV_PREFIX")),
+            },
+            "sql": {
+                "env_configured": bool(os.getenv("SQL_DATABASE_URL") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_HOST")),
+            },
+            "limiter": {
+                "enabled": str(os.getenv("RATE_LIMITS_ENABLED", "false")).lower() in {"1", "true", "yes"},
+                "windowSeconds": int((os.getenv("RATE_LIMIT_WINDOW_SECONDS") or "60").strip() or 60),
+                "maxRequests": int((os.getenv("RATE_LIMIT_MAX_REQUESTS") or "60").strip() or 60),
+            },
+            "idempotency": {
+                "ttlSeconds": int((os.getenv("IDEMPOTENCY_TTL_SECONDS") or os.getenv("IDEM_TTL_SECONDS") or "300").strip() or 300),
+            },
+            "metrics": {
+                "backend": (os.getenv("METRICS_BACKEND") or "auto").strip().lower(),
+                "path": (os.getenv("METRICS_PATH") or "/metrics").strip() or "/metrics",
+            },
+            "tracing": {
+                "enabled": str(os.getenv("LANGCHAIN_TRACING_V2", "false")).lower() in {"1", "true", "yes"},
+            },
+            "admin": {
+                "token_present": bool(os.getenv("BROKER_ADMIN_TOKEN")),
+                "required_at_startup": str(os.getenv("BROKER_REQUIRE_ADMIN_TOKEN", "false")).lower() in {"1", "true", "yes", "on"},
+            },
+        }
+        try:
+            import json as _json
+
+            print(_json.dumps(out, indent=2))
+        except Exception:
+            print(out)
+
+    sp = sub.add_parser("env:status", help="Print environment status (server /v1/env if available plus local snapshot)")
+    sp.set_defaults(func=cmd_env_status)
+
     # Broker admin commands
     sp = sub.add_parser("broker:tenants:list", help="List all tenants (admin)")
     sp.set_defaults(func=cmd_broker_tenants_list)

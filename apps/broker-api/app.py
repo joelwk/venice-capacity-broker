@@ -295,6 +295,75 @@ try:
     def health() -> dict:
         return {"status": "ok"}
 
+    @app.get("/v1/env")
+    def env_status() -> dict:
+        """Lightweight environment status without secrets.
+
+        Returns booleans/labels only. No tokens or URLs are exposed.
+        """
+        import os as __os
+
+        # Store backend label
+        try:
+            _store_backend = "sql" if (_SQLTenantStore is not None and isinstance(store, _SQLTenantStore)) else "json"  # type: ignore[arg-type]
+        except Exception:
+            _store_backend = "json"
+
+        # KV backend label
+        kv_kind = "memory"
+        try:
+            if (__os.getenv("REDIS_URL") or __os.getenv("KV_REDIS_URL")):
+                kv_kind = "redis"
+            elif (__os.getenv("KV_URL") or __os.getenv("REPLIT_DB_URL")):
+                kv_kind = "replit_db"
+        except Exception:
+            pass
+
+        # SQL configured/installed (without connecting)
+        sql_env = bool(__os.getenv("SQL_DATABASE_URL") or __os.getenv("DATABASE_URL") or __os.getenv("POSTGRES_HOST"))
+        sql_pkgs = _SQLTenantStore is not None
+
+        # Metrics backend label
+        metrics_kind = "off" if METRICS_BACKEND == "off" else ("starlette" if _using_starlette_exporter else "builtin")
+
+        return {
+            "version": "0.1.0",
+            "admin": {
+                "token_present": bool(ADMIN_TOKEN),
+                "required_at_startup": bool(REQUIRE_ADMIN),
+            },
+            "store": {
+                "backend": _store_backend,
+            },
+            "kv": {
+                "backend": kv_kind,
+                "namespace_set": bool(__os.getenv("KV_NAMESPACE")),
+                "prefix_set": bool(__os.getenv("KV_PREFIX")),
+                "redis_configured": bool(__os.getenv("REDIS_URL") or __os.getenv("KV_REDIS_URL")),
+                "replit_db_configured": bool(__os.getenv("KV_URL") or __os.getenv("REPLIT_DB_URL")),
+            },
+            "limiter": {
+                "enabled": bool(RATE_LIMITS_ENABLED),
+                "windowSeconds": int(RATE_LIMIT_WINDOW_SECONDS),
+                "maxRequests": int(RATE_LIMIT_MAX_REQUESTS),
+            },
+            "idempotency": {
+                "ttlSeconds": int(IDEM_TTL_SECONDS),
+                "kv_available": _kv_admin is not None,
+            },
+            "sql": {
+                "env_configured": bool(sql_env),
+                "packages_installed": bool(sql_pkgs),
+            },
+            "metrics": {
+                "backend": metrics_kind,
+                "path": METRICS_PATH,
+            },
+            "tracing": {
+                "enabled": (_os.getenv("LANGCHAIN_TRACING_V2") or "false").strip().lower() in {"1", "true", "yes"},
+            },
+        }
+
     # --- Auth helpers ---
 
     def _bearer_token(authorization: str | None) -> str | None:
