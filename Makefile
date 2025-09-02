@@ -74,10 +74,10 @@ run-broker:
 	fi
 
 db-migrate:
-	@alembic upgrade head
+	@$(RUNPY) -m alembic upgrade head
 
 db-stamp:
-	@alembic stamp head
+	@$(RUNPY) -m alembic stamp head
 
 db-compact:
 	@$(RUNPY) apps/cli/main.py data:compact-counters --force
