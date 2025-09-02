@@ -36,6 +36,8 @@ logger = get_logger("broker.api")
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
     from fastapi.responses import PlainTextResponse
+    from starlette.staticfiles import StaticFiles
+    from pathlib import Path as _Path2
     from starlette.middleware.base import BaseHTTPMiddleware
     import threading, time
     import hashlib, json as _json
@@ -78,6 +80,17 @@ try:
             </html>
             """
         )
+
+    # Mount /admin static control panel if present
+    try:
+        _admin_dir = _Path2(__file__).resolve().parent.parent / "control-plane"
+        if _admin_dir.exists():
+            app.mount("/admin", StaticFiles(directory=str(_admin_dir), html=True), name="admin")
+            logger.info("admin ui: mounted at /admin from %s", _admin_dir)
+        else:
+            logger.info("admin ui: directory not found at %s (skipping mount)", _admin_dir)
+    except Exception as _e:
+        logger.warning("admin ui: failed to mount /admin: %s", _e)
 
     class TenantCreateRequest(BaseModel):
         tenant_id: str
@@ -652,15 +665,18 @@ try:
                     headers={**hdrs, "Retry-After": str(retry_after)},
                 )
 
-        # Determine model: request > env defaults, else 400
+        # Determine model: request > env defaults. If still unset, allow
+        # calling the Venice client without specifying a model to support
+        # deployments/tests where the SDK/server has its own default.
         _def_model = (_os.getenv("BROKER_DEFAULT_MODEL") or _os.getenv("VENICE_DEFAULT_MODEL") or "").strip()
         _model = payload.model or (_def_model if _def_model else None)
-        if not _model:
-            raise HTTPException(status_code=400, detail="model required; provide in request or set BROKER_DEFAULT_MODEL/VENICE_DEFAULT_MODEL")
 
         sub_client = VeniceClient(api_key=t.subkey, base_url=client.config.base_url)
         try:
-            res = sub_client.chat_completions(messages=payload.messages, model=_model)
+            if _model:
+                res = sub_client.chat_completions(messages=payload.messages, model=_model)
+            else:
+                res = sub_client.chat_completions(messages=payload.messages)
             return res
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"venice error: {e}")

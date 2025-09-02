@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin Control Panel</title>
+    <link rel="stylesheet" href="/admin/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Admin Control Panel</h1>
+      <nav>
+        <a href="/">API Home</a>
+        <a href="/docs">Swagger</a>
+        <a href="/redoc">ReDoc</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card" id="auth">
+        <h2>Auth</h2>
+        <div class="row">
+          <label for="adminToken">Admin Bearer Token</label>
+          <input type="password" id="adminToken" placeholder="BROKER_ADMIN_TOKEN" />
+          <button id="saveTokenBtn">Save</button>
+          <button id="clearTokenBtn" class="ghost">Clear</button>
+        </div>
+        <div class="hint">Stored in localStorage on this browser only.</div>
+        <div id="authStatus" class="status"></div>
+      </section>
+
+      <section class="card" id="healthEnv">
+        <h2>Health & Env</h2>
+        <div class="actions">
+          <button id="refreshHealthBtn">Refresh Health</button>
+          <button id="refreshEnvBtn">Refresh Env</button>
+        </div>
+        <pre id="healthOut" class="mono"></pre>
+        <pre id="envOut" class="mono"></pre>
+      </section>
+
+      <section class="card" id="tenants">
+        <h2>Tenants</h2>
+        <div class="actions">
+          <button id="refreshTenantsBtn">Refresh Tenants</button>
+        </div>
+        <div class="row grid-4">
+          <div>
+            <h3>Create</h3>
+            <label>Tenant ID</label>
+            <input id="createTenantId" placeholder="e.g. acme" />
+            <label>Label</label>
+            <input id="createTenantLabel" placeholder="Acme Inc" />
+            <label>Quota</label>
+            <input id="createTenantQuota" type="number" placeholder="0=unlimited" />
+            <label>Expires At (ISO8601)</label>
+            <input id="createTenantExpiresAt" placeholder="YYYY-MM-DDTHH:MM:SSZ (optional)" />
+            <button id="createTenantBtn">Create</button>
+            <div id="createTenantMsg" class="status"></div>
+          </div>
+          <div>
+            <h3>Rotate</h3>
+            <label>Tenant ID</label>
+            <input id="rotateTenantId" placeholder="acme" />
+            <label>New Label (optional)</label>
+            <input id="rotateTenantLabel" placeholder="Acme Inc (rotated)" />
+            <label>New Quota (optional)</label>
+            <input id="rotateTenantQuota" type="number" placeholder="leave blank to keep" />
+            <label>New Expires At (optional)</label>
+            <input id="rotateTenantExpiresAt" placeholder="YYYY-MM-DDTHH:MM:SSZ" />
+            <label class="inline"><input type="checkbox" id="rotateRevokeOld" checked /> Revoke old key</label>
+            <button id="rotateTenantBtn">Rotate</button>
+            <div id="rotateTenantMsg" class="status"></div>
+          </div>
+          <div>
+            <h3>Revoke</h3>
+            <label>Tenant ID</label>
+            <input id="revokeTenantId" placeholder="acme" />
+            <button id="revokeTenantBtn" class="danger">Revoke</button>
+            <div id="revokeTenantMsg" class="status"></div>
+          </div>
+          <div>
+            <h3>Inspect</h3>
+            <label>Tenant ID</label>
+            <input id="inspectTenantId" placeholder="acme" />
+            <button id="inspectTenantBtn">Get</button>
+            <pre id="inspectTenantOut" class="mono"></pre>
+          </div>
+        </div>
+        <h3>All Tenants</h3>
+        <div id="tenantsTable"></div>
+      </section>
+
+      <section class="card" id="limits">
+        <h2>Broker Limits</h2>
+        <div class="row grid-3">
+          <div>
+            <h3>View</h3>
+            <label>Tenant ID</label>
+            <input id="limitsTenantId" placeholder="acme" />
+            <button id="loadLimitsBtn">Load Limits</button>
+            <pre id="limitsOut" class="mono"></pre>
+          </div>
+          <div>
+            <h3>Set</h3>
+            <label>Tenant ID</label>
+            <input id="setLimitsTenantId" placeholder="acme" />
+            <label>Window Seconds</label>
+            <input id="setLimitsWindow" type="number" placeholder="e.g. 60" />
+            <label>Max Requests</label>
+            <input id="setLimitsMax" type="number" placeholder="e.g. 60" />
+            <button id="setLimitsBtn">Save Limits</button>
+            <div id="setLimitsMsg" class="status"></div>
+          </div>
+          <div>
+            <h3>SQL Counters (optional)</h3>
+            <label>Tenant ID</label>
+            <input id="countersTenantId" placeholder="acme" />
+            <label>Limit</label>
+            <input id="countersLimit" type="number" value="20" />
+            <button id="loadCountersBtn">Load Counters</button>
+            <pre id="countersOut" class="mono"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="chatProbe">
+        <h2>Chat Probe</h2>
+        <div class="row grid-2">
+          <div>
+            <label>Tenant ID (act-as)</label>
+            <input id="chatTenantId" placeholder="acme" />
+            <label>Model (optional)</label>
+            <input id="chatModel" placeholder="defaults to BROKER_DEFAULT_MODEL" />
+            <label>Message</label>
+            <textarea id="chatMessage" rows="4" placeholder="Hello from admin probe..."></textarea>
+            <button id="sendChatBtn">Send</button>
+          </div>
+          <div>
+            <pre id="chatOut" class="mono"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small>Static admin UI. Uses your admin token only in this browser.</small>
+    </footer>
+
+    <script src="/admin/app.js"></script>
+  </body>
+  </html>
+

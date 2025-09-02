@@ -1,0 +1,41 @@
+:root{
+  --bg:#0b0c10; --panel:#111317; --card:#151821; --text:#e6e6e6; --muted:#9aa2ac; --accent:#8ab4f8; --ok:#34c759; --warn:#ff9f0a; --err:#ff453a;
+  --border:#222531; --code:#0f1116; --ghost:#2a2e39; --danger:#3a1214;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;background:var(--panel);border-bottom:1px solid var(--border)}
+header h1{font-size:18px;margin:0}
+header nav a{color:var(--accent);text-decoration:none;margin-left:12px}
+header nav a:hover{text-decoration:underline}
+main{max-width:1200px;margin:20px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;margin:16px 0}
+.card h2{margin:0 0 8px 0;font-size:16px}
+.card h3{margin:8px 0;font-size:14px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+label{display:block;margin-top:6px;color:var(--muted)}
+label.inline{display:flex;align-items:center;gap:8px;margin-top:10px}
+input,textarea,button{border-radius:8px;border:1px solid var(--border);background:#0d0f15;color:var(--text)}
+input,textarea{padding:8px;width:100%}
+input[type=password]{letter-spacing:2px}
+button{padding:8px 12px;background:#1a1f2b;cursor:pointer}
+button:hover{filter:brightness(1.1)}
+button.ghost{background:var(--ghost)}
+button.danger{background:var(--danger);border-color:#5e1c20}
+.status{margin-top:6px;color:var(--muted)}
+.status.error{color:var(--err)}
+.mono{background:var(--code);padding:10px;border-radius:8px;border:1px solid var(--border);overflow:auto;max-height:280px}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th,td{border-bottom:1px solid var(--border);padding:8px;text-align:left}
+pre{white-space:pre-wrap}
+footer{padding:16px;color:var(--muted);text-align:center}
+
+@media (max-width: 900px){
+  .grid-4{grid-template-columns:1fr 1fr}
+  .grid-3{grid-template-columns:1fr}
+  .grid-2{grid-template-columns:1fr}
+}
+
