@@ -16,7 +16,7 @@ help:
 	@echo "  make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"
 
 health:
-	@curl -fsS "$(BROKER_BASE_URL)/health" | jq . || curl -fsS "$(BROKER_BASE_URL)/health"
+	@curl -fsSL -H "Accept: application/json" "$(BROKER_BASE_URL)/health" | jq . 2>/dev/null || curl -fsSL "$(BROKER_BASE_URL)/health"
 
 create-tenant:
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
