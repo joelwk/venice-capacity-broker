@@ -23,6 +23,21 @@ Run on Replit (Workspace)
    - Execute `.replit` which will try `uv sync && uv run uvicorn …`; if `uv` is not available it will fallback to `pip install -r requirements.txt && uvicorn …`.
 4) Open the webview. Health check is `GET /health`.
 
+Quick scripts and Makefile
+
+- Create a test tenant (admin-only):
+  - Ensure `BROKER_ADMIN_TOKEN` and `VENICE_PARENT_KEY` are set in Secrets.
+  - Set `BROKER_BASE_URL` to your public Replit URL (recommended for CLI/scripts).
+  - Run: `python scripts/create_test_tenant.py --tenant-id t1 --label "Team A"`
+  - Optional: probe chat as admin act-as: `python scripts/create_test_tenant.py --tenant-id t1 --label "Team A" --probe-chat`
+
+- Makefile helpers (override `BROKER_BASE_URL` if not set):
+  - `make health`
+  - `make create-tenant TENANT=t1 LABEL="Team A"`
+  - `make chat-admin TENANT=t1 [MESSAGE=Hello]`
+  - `make limits-get TENANT=t1`
+  - `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
+
 Deploy on Replit (Deployments)
 
 - From the running Repl, open the Deployments panel and create a Web Service.
