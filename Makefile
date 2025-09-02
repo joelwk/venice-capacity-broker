@@ -13,8 +13,13 @@ UV_BIN ?= $(if $(wildcard $(HOME)/.local/bin/uv),$(HOME)/.local/bin/uv,$(if $(wi
 RUNPY ?= $(if $(UV_BIN),$(UV_BIN) run python,python)
 
 setup-cli:
-	@echo "Installing CLI dependencies (requirements.txt) for shell usage..."
-	@python -m pip install -r requirements.txt
+	@echo "Installing minimal CLI dependencies (requests + httpx) for shell usage..."
+	@python -m pip install --upgrade pip setuptools wheel || true
+	@python -m pip install requests httpx
+
+.PHONY: env-status
+env-status:
+	@$(RUNPY) apps/cli/main.py env:status
 
 help:
 	@echo "Targets:"
