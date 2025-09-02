@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
         obj = {"raw": r.text}
     print(json.dumps({"tenant": obj}, indent=2))
 
-    if args.probe-chat:
+    if getattr(args, "probe_chat", False):
         chat_url = f"{base}/v1/chat"
         c_headers = {"Authorization": f"Bearer {admin}", "X-Tenant-Id": args.tenant_id, "Content-Type": "application/json"}
         c_body = {"messages": [{"role": "user", "content": "Hello from probe"}], "model": None}
@@ -80,4 +80,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
