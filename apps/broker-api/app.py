@@ -652,9 +652,15 @@ try:
                     headers={**hdrs, "Retry-After": str(retry_after)},
                 )
 
+        # Determine model: request > env defaults, else 400
+        _def_model = (_os.getenv("BROKER_DEFAULT_MODEL") or _os.getenv("VENICE_DEFAULT_MODEL") or "").strip()
+        _model = payload.model or (_def_model if _def_model else None)
+        if not _model:
+            raise HTTPException(status_code=400, detail="model required; provide in request or set BROKER_DEFAULT_MODEL/VENICE_DEFAULT_MODEL")
+
         sub_client = VeniceClient(api_key=t.subkey, base_url=client.config.base_url)
         try:
-            res = sub_client.chat_completions(messages=payload.messages, model=payload.model)
+            res = sub_client.chat_completions(messages=payload.messages, model=_model)
             return res
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"venice error: {e}")

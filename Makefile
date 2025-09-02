@@ -34,12 +34,15 @@ create-tenant:
 chat-admin:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make chat-admin TENANT=t1 [MESSAGE=Hello]"; exit 1; fi
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
-	@curl -sSL -H "Accept: application/json" -X POST "$(BASE_URL)/v1/chat" \
-	  -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" \
-	  -H "X-Tenant-Id: $(TENANT)" \
-	  -H "Content-Type: application/json" \
-	  -d '{"messages":[{"role":"user","content":"$(MESSAGE)"}]}' \
-	  -w "\nHTTP %{http_code}\n"
+	@PAY='{"messages":[{"role":"user","content":"$(MESSAGE)"}]'; \
+  if [ -n "$(EFFECTIVE_MODEL)" ]; then PAY="$${PAY},\"model\":\"$(EFFECTIVE_MODEL)\""; fi; \
+	  PAY="$${PAY}}"; \
+	  curl -sSL -H "Accept: application/json" -X POST "$(BASE_URL)/v1/chat" \
+	    -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" \
+	    -H "X-Tenant-Id: $(TENANT)" \
+	    -H "Content-Type: application/json" \
+	    -d "$$PAY" \
+	    -w "\nHTTP %{http_code}\n"
 
 limits-get:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make limits-get TENANT=t1"; exit 1; fi
@@ -50,3 +53,16 @@ limits-set:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"; exit 1; fi
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
 	@$(RUNPY) scripts/set_broker_limits.py --tenant "$(TENANT)" $(if $(WINDOW),--window $(WINDOW),) $(if $(MAX),--max $(MAX),) $(if $(LABEL),--label "$(LABEL)",)
+# Pull defaults from .env/.env.example without overriding exported env
+# These are used only for Make computations (e.g., default MODEL)
+BROKER_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^BROKER_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env 2>/dev/null | tr -d '\r'))
+ifeq ($(BROKER_DEFAULT_MODEL_FILE),)
+  BROKER_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^BROKER_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env.example 2>/dev/null | tr -d '\r'))
+endif
+VENICE_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^VENICE_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env 2>/dev/null | tr -d '\r'))
+ifeq ($(VENICE_DEFAULT_MODEL_FILE),)
+  VENICE_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^VENICE_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env.example 2>/dev/null | tr -d '\r'))
+endif
+
+# Effective model preference: explicit MODEL > BROKER_DEFAULT_MODEL > VENICE_DEFAULT_MODEL > file fallbacks
+EFFECTIVE_MODEL := $(firstword $(strip $(MODEL) $(BROKER_DEFAULT_MODEL) $(VENICE_DEFAULT_MODEL) $(BROKER_DEFAULT_MODEL_FILE) $(VENICE_DEFAULT_MODEL_FILE)))
