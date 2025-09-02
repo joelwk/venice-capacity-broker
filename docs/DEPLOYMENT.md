@@ -111,3 +111,24 @@ Notes
 - Keep LICENSE and NOTICE in the repo to make proprietary status explicit.
 - For any doubts, prefer Replit Deployments over custom infra.
 
+
+
+Appendix: Replit SQL Quick Setup
+1) Add Cloud Service → SQL Database in your Repl.
+2) Click “View database connection credentials”. Copy the Connection URI.
+3) In Deployments → Secrets, add:
+   - `BROKER_STORE_BACKEND=sql`
+   - `SQL_DATABASE_URL` = paste the URI. Acceptable forms:
+     - `postgresql://USER:PASSWORD@HOST:PORT/DBNAME` (recommended)
+     - `postgresql+psycopg2://USER:PASSWORD@HOST:PORT/DBNAME`
+     - If it starts with `postgres://`, change to `postgresql://`
+     - If TLS is enforced, append `?sslmode=require`
+   - Alternatively, set: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
+4) Run migrations (one‑time): `uv run alembic upgrade head` (or `python -m alembic upgrade head`).
+5) Drive traffic (create a tenant, send `/v1/chat`).
+6) Compact counters: `uv run python apps/cli/main.py data:compact-counters --force`.
+7) Verify: open `/v1/debug/counters?tenant_id=<id>&limit=20`.
+
+Automation notes
+- When `BROKER_STORE_BACKEND=sql` is active, the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
+- The CLI auto-creates tables before `data:compact-counters` and `counters:show` if needed.

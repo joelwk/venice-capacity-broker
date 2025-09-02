@@ -8,8 +8,8 @@ A scaffolded framework for a multi-agent system integrating LangGraph/LangChain 
 
 ```
 apps/
-  broker-api/        # Capacity Broker API (stub)
-  control-plane/     # Admin UI placeholder
+  broker-api/        # Capacity Broker API + static /admin panel
+  control-plane/     # Admin UI (static, mounted at /admin)
   cli/               # Operator CLI (argparse-based)
 services/
   wallet/            # Wallet providers (Smart Wallet + ETH account)
@@ -95,13 +95,31 @@ python apps/cli/main.py run:quorum --dry-run
 
 Broker API (requires FastAPI + Uvicorn):
 
+Run with uv (recommended):
+
 ```
-uv run uvicorn app:app --app-dir apps/broker-api --reload
+uv run uvicorn app:app --app-dir apps/broker-api --reload --host 0.0.0.0 --port 8000
+```
+
+Run with pip/venv:
+
+```
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+python -m pip install --upgrade pip wheel setuptools
+pip install -r requirements.txt
+python -m uvicorn app:app --app-dir apps/broker-api --reload --host 0.0.0.0 --port 8000
 ```
 
 API index & docs:
 - Visit `/` for a small HTML index with links to `/docs` (Swagger UI), `/redoc`, `/health`, and `/metrics`.
 - Admin endpoints require `Authorization: Bearer <BROKER_ADMIN_TOKEN>`.
+
+Admin Control Panel:
+- Browse `/admin/` for a minimal UI to manage tenants and limits, inspect health/env, and send a chat probe.
+- The UI prompts once for `BROKER_ADMIN_TOKEN` and stores it in your browser `localStorage`.
+- Chat probe requires a model: set `BROKER_DEFAULT_MODEL` (or provide a model field in the form).
+ - Full guide: see `docs/ADMIN.md`.
 
 ## Docker Compose (Postgres + Redis)
 
@@ -300,6 +318,10 @@ python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
 - uv not found: add `~/.local/bin` to PATH, e.g., `export PATH="$HOME/.local/bin:$PATH"`.
 - Dev dependencies: if `uv sync` fails, include `--extra dev` to pull test/stub deps.
 - Replit PATH quirks: use `export PATH` each session; ignore `.bashrc` warnings.
+- Uvicorn import string: use `app:app` with `--app-dir apps/broker-api`; `app` alone will fail.
+- Nix/pip permission denied: install in a virtualenv or use `pip install --user`.
+- SQL URL precedence: app and Alembic read `SQL_DATABASE_URL` first, then `DATABASE_URL`, then `POSTGRES_*`. On Replit, secrets propagate to both server and CLI.
+- Alembic URL: `alembic.ini` leaves `sqlalchemy.url` blank; `db/migrations/env.py` injects the URL from env. If you see interpolation errors, ensure you have pulled latest repo.
 - Test import errors (`sqlmodel`): ensure stubs load before `db.models` (see `tests/test_admin_counters_endpoint.py`).
 - 404/401 creating tenants: verify `VENICE_API_BASE_URL` and `VENICE_PARENT_KEY` (must have sub-key privileges).
 - Double slashes in URLs: use `${BASE_URL%/}` in shell and strip trailing slashes in code.

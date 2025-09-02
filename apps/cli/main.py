@@ -46,13 +46,19 @@ def cmd_compact_counters(args: argparse.Namespace) -> None:
         return
     try:
         from libs.kv import KVStore
-        from db.session import get_engine
+        from db.session import get_engine, create_db_and_tables
         from sqlmodel import Session, select
         from db.models import Counter
         import json
     except Exception as e:  # noqa: BLE001
         logger.error(f"Missing dependencies for compaction: {e}")
         return
+
+    # Ensure tables exist (auto-setup for Replit/first run)
+    try:
+        create_db_and_tables()
+    except Exception:
+        pass
 
     kv = KVStore()
 
@@ -161,11 +167,17 @@ def cmd_counters_show(args: argparse.Namespace) -> None:
     """
     try:
         from sqlmodel import Session, select
-        from db.session import get_engine
+        from db.session import get_engine, create_db_and_tables
         from db.models import Counter
     except Exception as e:  # noqa: BLE001
         logger.error(f"SQL dependencies not available: {e}")
         return
+
+    # Ensure tables exist before querying
+    try:
+        create_db_and_tables()
+    except Exception:
+        pass
 
     engine = get_engine()
     q = select(Counter).where(Counter.tenant_id == args.tenant)
