@@ -12,6 +12,7 @@ Overview
    - `BROKER_ADMIN_TOKEN`: a strong random string
    - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) for creating tenants
    - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
+   - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
 3. Click Run. The app binds to `0.0.0.0:$PORT` and serves `GET /health`.
 4. Deployments panel → Create Web Service (auto-detects run command from `.replit`).
@@ -19,17 +20,22 @@ Overview
 
 Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.
-- Probe limiter: in Replit Shell → `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`.
+- Probe limiter (CLI): `make chat-admin TENANT=<id> [MESSAGE=Hello]` for a quick write, or run the probe `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`.
 - Idempotency: repeated identical `POST /v1/chat` should return `409` with `X-Idempotency-Accepted: false`.
+
+Makefile shortcuts (operator quality-of-life)
+- `make env-status` prints `/v1/env` (if reachable) plus a local snapshot including KV detection (Redis vs Replit DB vs memory).
+- `make demo-e2e TENANT=t1 [LABEL=TeamA]` seeds a tenant (SQL if no Venice parent key), sends a chat, compacts counters, and prints recent counters.
+- `make db-compact` compacts KV -> SQL counters; `make db-counters TENANT=t1 [LIMIT=20]` shows recent counters.
 
 Optional: SQL-backed store (Replit SQL)
 - Set `BROKER_STORE_BACKEND=sql` and `SQL_DATABASE_URL`.
 - (Optional) `uv run alembic upgrade head` to apply migrations.
 - Use CLI to compact KV → SQL counters:
-  - `uv run python apps/cli/main.py data:compact-counters --force`
+  - `uv run python apps/cli/main.py data:compact-counters --force` or `make db-compact`
 - Inspect counters:
   - API: `GET /v1/debug/counters?tenant_id=<id>&limit=20`
-  - CLI: `uv run python apps/cli/main.py counters:show --tenant <id> --limit 20 --json`
+  - CLI: `uv run python apps/cli/main.py counters:show --tenant <id> --limit 20 --json` or `make db-counters TENANT=<id>`
 
 2) Local — Quick Run
 - Recommended Python: 3.10
@@ -62,6 +68,7 @@ Optional: SQL-backed store (Replit SQL)
 - Observability:
   - Metrics at `${METRICS_PATH:/metrics}` (starlette_exporter or builtin).
   - Optional LangSmith tracing: set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY`.
+ - Sanity check env: `make env-status` shows detected KV backend (redis|replit_db|memory), limiter and SQL flags.
 
 Secrets — Recovery & Rotation
 - Purpose: regain admin access if secrets are wiped or rotate on schedule.
@@ -125,10 +132,11 @@ Appendix: Replit SQL Quick Setup
      - If TLS is enforced, append `?sslmode=require`
    - Alternatively, set: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
 4) Run migrations (one‑time): `uv run alembic upgrade head` (or `python -m alembic upgrade head`).
-5) Drive traffic (create a tenant, send `/v1/chat`).
-6) Compact counters: `uv run python apps/cli/main.py data:compact-counters --force`.
-7) Verify: open `/v1/debug/counters?tenant_id=<id>&limit=20`.
+5) Drive traffic (create a tenant, send `/v1/chat`). Quick path: `make demo-e2e TENANT=t1`.
+6) Compact counters: `uv run python apps/cli/main.py data:compact-counters --force` or `make db-compact`.
+7) Verify: open `/v1/debug/counters?tenant_id=<id>&limit=20` or `make db-counters TENANT=t1`.
 
-Automation notes
-- When `BROKER_STORE_BACKEND=sql` is active, the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
-- The CLI auto-creates tables before `data:compact-counters` and `counters:show` if needed.
+ Automation notes
+ - When `BROKER_STORE_BACKEND=sql` is active, the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
+ - The CLI auto-creates tables before `data:compact-counters` and `counters:show` if needed.
+ - KV autodetection: Redis if `REDIS_URL`/`KV_REDIS_URL` is set; Replit DB if `REPLIT_DB_URL`/`KV_URL` is set; in-memory otherwise. `/v1/env` and `make env-status` reflect this.

@@ -208,10 +208,15 @@ class KVStore:
         # Replit DB style HTTP
         if self.base_url:
             try:
-                url = urljoin(self.base_url.rstrip('/') + '/', "?prefix=" + quote(fq_prefix))
+                # Build query without urljoin to avoid dropping path segments
+                base = self.base_url.rstrip('/') + '/'
+                url = f"{base}?prefix={quote(fq_prefix)}"
                 r = requests.get(url, timeout=5)
                 if r.ok:
-                    data = r.json()
+                    try:
+                        data = r.json()
+                    except Exception:
+                        data = None
                     if isinstance(data, list):
                         out = []
                         for k in data:

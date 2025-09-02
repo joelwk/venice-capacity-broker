@@ -79,12 +79,19 @@ db-migrate:
 db-stamp:
 	@$(RUNPY) -m alembic stamp head
 
-db-compact:
+	db-compact:
 	@$(RUNPY) apps/cli/main.py data:compact-counters --force
 
 db-counters:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make db-counters TENANT=t1 [LIMIT=20]"; exit 1; fi
 	@$(RUNPY) apps/cli/main.py counters:show --tenant "$(TENANT)" --limit $(if $(LIMIT),$(LIMIT),20) --json
+
+# In-process server compaction (admin-only). Useful when KV is in-memory or prefix listing is unavailable.
+.PHONY: server-db-compact
+server-db-compact:
+	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
+	@curl -sSL -X POST "$(BASE_URL)/v1/admin/compact-counters?minutes=$(if $(MINUTES),$(MINUTES),60)&delete_after=$(if $(DELETE_AFTER),$(DELETE_AFTER),false)" \
+	  -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" -H "Accept: application/json"
 
 # One-shot Replit demo: seed tenant (SQL if no Venice parent), probe chat, compact, show
 TENANT ?= t1

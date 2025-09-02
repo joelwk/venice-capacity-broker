@@ -42,3 +42,12 @@ Rationale spans (how it works)
   - `vvv.node.diem_controller.attrs`: the full rationale dict described above.
   - `vvv.node.diem_premium.debug`: emitted by `debug_premium_span`, capturing env (`DIEM_FAIR_ALPHA`, `DIEM_PREMIUM_THRESHOLD`), inputs (price), and derived values (`fair_per_day`, `premium`).
 - These spans make it easy to inspect why a `mint_sell` vs `hold` decision was taken in LangSmith.
+
+Broker Traffic & Counters
+- The graph pipeline can call Venice directly when `broker_request` is provided, but rate‑limit counters live behind the Broker API.
+- To generate limiter counters and compact them into SQL on Replit or local:
+  - Ensure `BROKER_BASE_URL` and `BROKER_ADMIN_TOKEN` are set (and SQL if desired).
+  - Drive traffic via the Broker: `make chat-admin TENANT=t1 [MESSAGE=Hello]` or use the probe in `scripts/limit_probe.py`.
+  - Compact counters: `make db-compact` (or `python apps/cli/main.py data:compact-counters --force`).
+  - Inspect: `make db-counters TENANT=t1 [LIMIT=20]` or call `GET /v1/debug/counters?tenant_id=t1&limit=20`.
+- KV autodetection: Redis when `REDIS_URL`/`KV_REDIS_URL` is set; Replit DB when `KV_URL`/`REPLIT_DB_URL` is set; otherwise in‑memory. `make env-status` summarizes the detected backend.

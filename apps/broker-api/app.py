@@ -591,6 +591,159 @@ try:
             raise HTTPException(status_code=404, detail="tenant not found")
         return TenantResponse(id=t.id, label=t.label, quota=t.quota, expires_at=t.expires_at, status=t.status)
 
+    @app.post("/v1/admin/compact-counters")
+    @_traceable("broker.admin_compact_counters")
+    def admin_compact_counters(
+        minutes: int = Query(default=60, ge=1, le=1440, description="How many minutes back to scan for buckets when prefix listing isn't available"),
+        delete_after: bool = Query(default=False, description="Delete KV buckets after successful upsert"),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> dict:
+        """Admin-only: compact KV limiter buckets into SQL Counter rows.
+
+        Runs in-process, ensuring KV visibility even when using in-memory or
+        Replit DB without prefix listing. Intended for Replit/Web Service ops.
+        """
+        _require_admin(authorization)
+        # Ensure SQL dependencies are available
+        try:
+            from sqlmodel import Session, select  # type: ignore
+            from db.session import get_engine, create_db_and_tables
+            from db.models import Counter, Tenant as DbTenant
+            import json as _json2
+            import time as _time2
+            import re as _re2
+            from datetime import datetime as _dt2
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"SQL dependencies unavailable: {e}")
+
+        # Ensure tables exist
+        try:
+            create_db_and_tables()
+        except Exception:
+            pass
+
+        # Prefer existing KV instance; otherwise construct one
+        kv = _kv_admin
+        if kv is None:
+            try:
+                from libs.kv import KVStore as _KV2
+
+                kv = _KV2()
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(status_code=503, detail=f"KV unavailable: {e}")
+
+        engine = get_engine()
+
+        # Try prefix listing first
+        keys = []  # type: ignore[var-annotated]
+        try:
+            keys = kv.keys("rl:tenant:")  # type: ignore[attr-defined]
+        except Exception:
+            keys = []
+
+        examined = 0
+        inserted = 0
+        updated = 0
+
+        # If listing failed/empty, scan recent windows for known tenants
+        if not keys:
+            try:
+                tenant_ids = list(store.all().keys())
+            except Exception:
+                tenant_ids = []
+            # Fallback: load from SQL tenant table if present
+            if not tenant_ids:
+                try:
+                    with Session(engine) as _s:  # type: ignore[call-arg]
+                        tenant_ids = [row.id for row in _s.exec(select(DbTenant)).all()]
+                except Exception:
+                    tenant_ids = []
+            win_s = int(RATE_LIMIT_WINDOW_SECONDS or 60)
+            now = int(_time2.time())
+            start = now - int(minutes) * 60
+            start = (start // win_s) * win_s
+            cand: list[str] = []
+            for tid in tenant_ids:
+                tcur = start
+                while tcur <= now:
+                    cand.append(f"rl:tenant:{tid}:chat:{tcur}")
+                    tcur += win_s
+            keys = cand
+
+        # Upsert counters
+        pat = _re2.compile(r"^rl:tenant:(?P<tenant>[^:]+):chat:(?P<bucket>\d+)$")
+        with Session(engine) as s:  # type: ignore[call-arg]
+            for k in keys:
+                examined += 1
+                m = pat.match(k)
+                if not m:
+                    continue
+                tenant_id = m.group("tenant")
+                bucket_s = int(m.group("bucket"))
+                try:
+                    raw = kv.get(k)  # type: ignore[attr-defined]
+                except Exception:
+                    raw = None
+                try:
+                    count = int(raw) if raw is not None else 0
+                except Exception:
+                    count = 0
+                if count <= 0:
+                    continue
+                # Determine windowSeconds from per-tenant override if set
+                win_s = int(RATE_LIMIT_WINDOW_SECONDS or 60)
+                try:
+                    limits_raw = kv.get(f"broker:tenant:{tenant_id}:limits")  # type: ignore[attr-defined]
+                    if limits_raw:
+                        obj = _json2.loads(limits_raw)
+                        win_s = int(obj.get("windowSeconds", win_s))
+                except Exception:
+                    pass
+                bucket_dt = _dt2.utcfromtimestamp(bucket_s)
+                existing = s.exec(
+                    select(Counter).where(
+                        Counter.tenant_id == tenant_id,  # type: ignore[comparison-overlap]
+                        Counter.scope == "chat",
+                        Counter.bucket_start == bucket_dt,
+                        Counter.bucket_seconds == int(win_s),
+                        Counter.model == None,  # noqa: E711
+                    )
+                ).first()
+                if existing is None:
+                    rec = Counter(
+                        tenant_id=tenant_id,
+                        scope="chat",
+                        model=None,
+                        bucket_start=bucket_dt,
+                        bucket_seconds=int(win_s),
+                        count=int(count),
+                    )
+                    s.add(rec)
+                    inserted += 1
+                else:
+                    if int(count) > int(existing.count):
+                        existing.count = int(count)
+                        updated += 1
+                try:
+                    s.commit()
+                except Exception as _e:  # noqa: BLE001
+                    s.rollback()
+                    logger.warning("compact: upsert failed for %s: %s", k, _e)
+                    continue
+                if delete_after:
+                    try:
+                        kv.delete(k)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+
+        return {
+            "examined": examined,
+            "inserted": inserted,
+            "updated": updated,
+            "scanMinutes": int(minutes),
+            "windowSeconds": int(RATE_LIMIT_WINDOW_SECONDS or 60),
+        }
+
     @app.post("/v1/chat")
     @_traceable("broker.chat_proxy")
     def chat_proxy(

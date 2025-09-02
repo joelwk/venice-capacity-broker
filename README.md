@@ -121,6 +121,17 @@ Admin Control Panel:
 - Chat probe requires a model: set `BROKER_DEFAULT_MODEL` (or provide a model field in the form).
  - Full guide: see `docs/ADMIN.md`.
 
+## Makefile Shortcuts
+
+- `make env-status`: prints `/v1/env` (if reachable) and a local snapshot (KV backend, limiter, SQL, metrics, tracing).
+- `make run-broker`: starts `uvicorn app:app` with `--app-dir apps/broker-api` on `0.0.0.0:$(BROKER_API_PORT)`.
+- `make health`: GET `$(BROKER_BASE_URL)/health`.
+- `make create-tenant TENANT=t1 LABEL="Team A" [QUOTA=0 EXPIRES=...]`: admin create (uses `BROKER_ADMIN_TOKEN`).
+- `make chat-admin TENANT=t1 [MESSAGE=Hello] [MODEL=<m>]`: admin act-as `/v1/chat` to generate traffic quickly.
+- `make limits-get TENANT=t1` / `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`: view/set per-tenant broker limits.
+- `make db-compact`: compact KV → SQL counters; `make db-counters TENANT=t1 [LIMIT=20]`: show recent counters.
+- `make demo-e2e TENANT=t1 [LABEL=TeamA MESSAGE=Hello LIMIT=20 MODEL=<m>]`: seed tenant, probe chat, compact, and show counters.
+
 ## Docker Compose (Postgres + Redis)
 
 Spin up Postgres and Redis locally for full E2E validation (SQL store + Redis-backed limiter):

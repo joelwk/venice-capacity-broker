@@ -29,6 +29,7 @@ Run Instructions
 - Install (venv/pip): create venv, `pip install -r requirements.txt`, then `python -m uvicorn app:app --app-dir apps/broker-api --reload`
 - Open UI: `http://127.0.0.1:8000/admin/`
 - Paste token: `BROKER_ADMIN_TOKEN` into the Auth card (stored in localStorage)
+ - Shortcut: `make run-broker` starts the API; `make env-status` prints server/local env including KV detection.
 
 Security
 - Production: set `BROKER_REQUIRE_ADMIN_TOKEN=true` and a strong `BROKER_ADMIN_TOKEN`
@@ -36,9 +37,9 @@ Security
 - Admin actions use the same backend auth as the `/v1/*` endpoints
 
 Environment & Backends
-- Store backend: `BROKER_STORE_BACKEND=sql|json` (SQL requires SQLModel + configured `SQL_DATABASE_URL`)
-- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in‑memory
-- Metrics: `/metrics` uses starlette-exporter if installed (`METRICS_BACKEND=starlette`), else builtin text metrics
+- Store backend: `BROKER_STORE_BACKEND=sql|json` (SQL requires SQLModel + configured `SQL_DATABASE_URL`).
+- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in‑memory. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
+- Metrics: `/metrics` uses starlette-exporter if installed (`METRICS_BACKEND=starlette`), else builtin text metrics.
 
 Troubleshooting (what we hit)
 - Nix read‑only store errors with pip: install into a venv or use `--user`
@@ -58,9 +59,9 @@ Reflection: What worked vs. didn’t
 
 Next Steps (from implementation-plan)
 - SQL Store
-  - Set `BROKER_STORE_BACKEND=sql`, configure `SQL_DATABASE_URL`
-  - Drive traffic; compact counters: `python apps/cli/main.py data:compact-counters --force`
-  - Verify counters: `GET /v1/debug/counters?tenant_id=<id>&limit=20`
+  - Set `BROKER_STORE_BACKEND=sql`, configure `SQL_DATABASE_URL`.
+  - Drive traffic; compact counters: `make demo-e2e TENANT=t1` or run `python apps/cli/main.py data:compact-counters --force` after some `/v1/chat` calls.
+  - Verify counters: `GET /v1/debug/counters?tenant_id=<id>&limit=20` or `make db-counters TENANT=<id>`.
 - Observability
   - Add `starlette-exporter` dependency; set `METRICS_BACKEND=starlette`
   - Optionally surface select metrics in `/admin`
@@ -68,5 +69,10 @@ Next Steps (from implementation-plan)
   - Flip `BROKER_REQUIRE_ADMIN_TOKEN=true` in prod and store token via secure secret
   - Ensure `BROKER_DEFAULT_MODEL` is set via secrets
 - Docs & Helpers
-  - Keep `/v1/env` updated; add CLI `env:status` and Makefile shortcuts as needed
+  - Keep `/v1/env` updated; `make env-status` prints a concise view for operators.
 
+Makefile Shortcuts (handy in Replit Shell)
+- `make create-tenant TENANT=t1 LABEL="Team A"`
+- `make chat-admin TENANT=t1 [MESSAGE=Hello]` (admin act‑as chat)
+- `make limits-get TENANT=t1` / `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
+- `make db-compact` and `make db-counters TENANT=t1 [LIMIT=20]`
