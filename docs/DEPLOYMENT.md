@@ -63,6 +63,43 @@ Optional: SQL-backed store (Replit SQL)
   - Metrics at `${METRICS_PATH:/metrics}` (starlette_exporter or builtin).
   - Optional LangSmith tracing: set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY`.
 
+Secrets — Recovery & Rotation
+- Purpose: regain admin access if secrets are wiped or rotate on schedule.
+- Scope: affects only admin‑gated endpoints; tenant subkeys continue to function.
+
+1) Generate a new strong admin token
+- Python: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+- OpenSSL: `openssl rand -hex 32`
+- Node.js: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
+- PowerShell (Windows):
+  `\$b = New-Object 'Byte[]' 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes(\$b); [Convert]::ToBase64String(\$b)`
+
+2) Set or restore the secret in your environment
+- Replit: Deployments → Secrets → add `BROKER_ADMIN_TOKEN` (and set `BROKER_REQUIRE_ADMIN_TOKEN=true` for production).
+- Local dev: add to `.env` (see `.env.example`), then export or use your runner (`uv run` reads env by default).
+- GitHub Actions: Settings → Secrets and variables → Actions → New repository secret `BROKER_ADMIN_TOKEN`.
+- Kubernetes: `kubectl create secret generic broker-secrets --from-literal=BROKER_ADMIN_TOKEN=<token> --dry-run=client -o yaml | kubectl apply -f -` and ensure the deployment mounts it as env.
+
+3) Restart or redeploy to pick up the new value
+- Replit: Stop/Run or Redeploy the Web Service.
+- Local: restart the uvicorn process.
+- Kubernetes: `kubectl rollout restart deployment/<broker-deployment>`.
+
+4) Verify health and admin access
+- Health (no auth): `curl -fsS http://<host>/health` → `{ "status": "ok" }`.
+- Admin‑gated endpoint (requires token): for example, create a test tenant (replace values):
+  `curl -X POST http://<host>/v1/tenants -H "Authorization: Bearer $BROKER_ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"tenant_id":"test1","label":"test","quota":0}'`
+  - Expected: `200` with tenant payload; otherwise `401` indicates the token is not set or incorrect.
+
+Emergency operation (if admin token is missing)
+- Temporarily allow startup without admin token by setting `BROKER_REQUIRE_ADMIN_TOKEN=false`.
+- Only use for development or to regain access, then immediately set a new `BROKER_ADMIN_TOKEN`, flip `BROKER_REQUIRE_ADMIN_TOKEN=true`, and restart.
+
+Notes & impact
+- Rotating `BROKER_ADMIN_TOKEN` does not affect existing tenant subkeys; it only protects admin endpoints.
+- Keep the token out of source control; store in secret managers (Replit Secrets, GitHub Actions, K8s Secrets).
+- Prefer long, random, URL‑safe tokens (≥32 bytes entropy).
+
 5) Manual Tenant Flow (Admin)
 1. Create tenant: `POST /v1/tenants` with `{ tenant_id, label, quota }`.
 2. Get tenant: `GET /v1/tenants/{id}`.
