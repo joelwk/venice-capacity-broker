@@ -60,16 +60,51 @@ def cmd_compact_counters(args: argparse.Namespace) -> None:
     except Exception:
         pass
 
+    # Initialize engine early for fallback SQL reads
+    engine = get_engine()
+
     kv = KVStore()
 
     # Determine source prefix; default matches limiter keys
     src_prefix = os.getenv("KV_COMPACTION_PREFIX", "rl:tenant:")
     keys = kv.keys(src_prefix)
     if not keys:
+        # Heuristic fallback for stores without prefix listing (e.g., some Replit KV variants)
+        logger.info("No KV keys via prefix listing; attempting recent-window scan for known tenants...")
+        try:
+            import time as _time
+            from sqlmodel import select as _select
+            from db.models import Tenant as _DbTenant
+
+            # Discover tenants from SQL (if available)
+            tenant_ids: list[str] = []
+            with Session(engine) as _s:  # type: ignore[call-arg]
+                tenant_ids = [row.id for row in _s.exec(_select(_DbTenant)).all()]
+
+            # Window config
+            window_default = int((os.getenv("RATE_LIMIT_WINDOW_SECONDS") or "60").strip() or 60)
+            scan_minutes = int((os.getenv("KV_COMPACTION_SCAN_MINUTES") or "60").strip() or 60)
+            now = int(_time.time())
+            start = now - scan_minutes * 60
+            start = (start // window_default) * window_default
+
+            found = []
+            for tid in tenant_ids:
+                t = start
+                while t <= now:
+                    k = f"rl:tenant:{tid}:chat:{t}"
+                    v = kv.get(k)
+                    if v not in (None, "", "0"):
+                        found.append(k)
+                    t += window_default
+            keys = found
+        except Exception as _e:  # noqa: BLE001
+            logger.info(f"Heuristic scan skipped: {_e}")
+
+    if not keys:
         logger.info("No KV counter keys found to compact.")
         return
-
-    engine = get_engine()
+    # engine already initialized above
     pattern = re.compile(r"^rl:tenant:(?P<tenant>[^:]+):chat:(?P<bucket>\d+)$")
     delete_after = _env_flag("KV_COMPACTION_DELETE", default=False)
     window_default = int((os.getenv("RATE_LIMIT_WINDOW_SECONDS") or "60").strip() or 60)
@@ -987,3 +1022,5 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+
