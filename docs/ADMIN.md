@@ -79,6 +79,7 @@ Makefile Shortcuts (handy in Replit Shell)
 
 Buyer Page
 - Navigate to `/admin/buy.html` for a minimal Buyer flow: connect wallet, request quote, pay to the treasury address, paste tx hash, and retrieve the issued key.
+ - For ETH quotes, the page offers a one-click `eth_sendTransaction` and an EIP‑681 deeplink. For USDC, copy address/amount helpers and a token link are provided.
 
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.

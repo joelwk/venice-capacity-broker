@@ -30,6 +30,30 @@
         <div id="authStatus" class="status"></div>
       </section>
 
+      <section class="card" id="quotes">
+        <h2>Quotes</h2>
+        <div class="actions">
+          <button id="refreshQuotesBtn">Refresh Quotes</button>
+        </div>
+        <pre id="quotesOut" class="mono"></pre>
+      </section>
+
+      <section class="card" id="purchases">
+        <h2>Purchases</h2>
+        <div class="actions">
+          <button id="refreshPurchasesBtn">Refresh Purchases</button>
+        </div>
+        <pre id="purchasesOut" class="mono"></pre>
+      </section>
+
+      <section class="card" id="utilization">
+        <h2>Utilization (Last 24h)</h2>
+        <div class="actions">
+          <button id="refreshUtilBtn">Refresh Utilization</button>
+        </div>
+        <pre id="utilOut" class="mono"></pre>
+      </section>
+
       <section class="card" id="healthEnv">
         <h2>Health & Env</h2>
         <div class="actions">
@@ -149,6 +173,16 @@
     </footer>
 
     <script src="/admin/app.js"></script>
+    <script>
+      const _qs = (id) => document.getElementById(id);
+      async function _get(path){ const tok=localStorage.getItem('admin_token')||''; const r=await fetch(path,{headers: tok?{Authorization:`Bearer ${tok}`}:{}}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+      async function loadQuotes(){ try{ const j=await _get('/v1/admin/quotes?limit=50'); _qs('quotesOut').textContent = JSON.stringify(j,null,2);}catch(e){ _qs('quotesOut').textContent=String(e);} }
+      async function loadPurchases(){ try{ const j=await _get('/v1/admin/purchases?limit=50'); const base='https://basescan.org/tx/'; j.forEach(p=>{ if(p.txHash) p.explorer=`${base}${p.txHash}`; }); _qs('purchasesOut').textContent = JSON.stringify(j,null,2);}catch(e){ _qs('purchasesOut').textContent=String(e);} }
+      async function loadUtil(){ try{ const j=await _get('/v1/admin/utilization?minutes=1440'); _qs('utilOut').textContent = JSON.stringify(j,null,2);}catch(e){ _qs('utilOut').textContent=String(e);} }
+      document.getElementById('refreshQuotesBtn').onclick = loadQuotes;
+      document.getElementById('refreshPurchasesBtn').onclick = loadPurchases;
+      document.getElementById('refreshUtilBtn').onclick = loadUtil;
+    </script>
   </body>
   </html>
 

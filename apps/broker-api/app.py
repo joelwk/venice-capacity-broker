@@ -1254,6 +1254,85 @@ try:
                         "subkey": p.subkey,
                         "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
                     }
+
+        # Admin listings (quotes, purchases, utilization)
+        from sqlmodel import select as _select_all
+        if _features["quotes"] or _features["purchases"]:
+            from db.session import get_session as _get_sess
+            from db.models import Quote as _Q, Purchase as _P
+
+            @app.get("/v1/admin/quotes")
+            def admin_quotes(
+                limit: int = Query(default=50, ge=1, le=500),
+                status: str | None = Query(default=None),
+                authorization: str | None = Header(default=None, alias="Authorization"),
+            ) -> list[dict]:
+                _require_admin(authorization)
+                with next(_get_sess()) as s:  # type: ignore[call-arg]
+                    stmt = _select_all(_Q).order_by(_Q.created_at.desc()).limit(int(limit))
+                    rows = s.exec(stmt).all()
+                    out = []
+                    for r in rows:
+                        if status and r.status != status:
+                            continue
+                        out.append({
+                            "quoteId": r.quote_id,
+                            "units": int(r.units),
+                            "asset": r.asset,
+                            "unitPrice": int(r.unit_price),
+                            "totalPrice": int(r.total_price),
+                            "status": r.status,
+                            "expiresAt": r.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.expires_at else None,
+                            "createdAt": r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None,
+                        })
+                    return out
+
+            @app.get("/v1/admin/purchases")
+            def admin_purchases(
+                limit: int = Query(default=50, ge=1, le=500),
+                status: str | None = Query(default=None),
+                authorization: str | None = Header(default=None, alias="Authorization"),
+            ) -> list[dict]:
+                _require_admin(authorization)
+                with next(_get_sess()) as s:  # type: ignore[call-arg]
+                    stmt = _select_all(_P).order_by(_P.created_at.desc()).limit(int(limit))
+                    rows = s.exec(stmt).all()
+                    out = []
+                    for r in rows:
+                        if status and r.status != status:
+                            continue
+                        out.append({
+                            "purchaseId": r.purchase_id,
+                            "quoteId": r.quote_id,
+                            "buyer": r.buyer_address,
+                            "asset": r.asset,
+                            "amountPaid": int(r.amount_paid),
+                            "txHash": r.tx_hash,
+                            "status": r.status,
+                            "tenantId": r.tenant_id,
+                            "createdAt": r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None,
+                            "fulfilledAt": r.fulfilled_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.fulfilled_at else None,
+                        })
+                    return out
+
+            @app.get("/v1/admin/utilization")
+            def admin_utilization(
+                minutes: int = Query(default=1440, ge=1, le=10080),
+                authorization: str | None = Header(default=None, alias="Authorization"),
+            ) -> dict:
+                _require_admin(authorization)
+                try:
+                    from db.models import Counter as _C
+                    from sqlmodel import select as _sel
+                    from datetime import datetime as __dt, timedelta as __td
+                    start = __dt.utcnow() - __td(minutes=int(minutes))
+                    used = 0
+                    with next(_get_sess()) as s:  # type: ignore[call-arg]
+                        rows = s.exec(_sel(_C).where(_C.bucket_start >= start)).all()
+                        used = sum(int(r.count or 0) for r in rows)
+                    return {"minutes": int(minutes), "total": int(used)}
+                except Exception as e:  # noqa: BLE001
+                    raise HTTPException(status_code=500, detail=str(e))
     except Exception as _e_features:  # noqa: BLE001
         logger.warning("features init error: %s", _e_features)
 

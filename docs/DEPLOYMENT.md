@@ -149,6 +149,7 @@ Updated shortcuts and operations
 - Model override per request: `make chat-admin TENANT=<id> MESSAGE="hi" MODEL="venice-uncensored"` or set `BROKER_DEFAULT_MODEL`.
 
 Buyer Flow (flag-gated)
+- Shortcut: run 'make enable-buyer' to append the common flags to .env, then restart the broker.
 - Enable features via env and restart broker:
   - `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`
   - `CORS_ENABLED=true` with `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`

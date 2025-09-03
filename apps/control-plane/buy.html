@@ -53,6 +53,7 @@
         <div class="row">
           <label>Paste Payment Tx Hash</label>
           <input id="txHash" placeholder="0x..." />
+          <div id="payButtons" class="row"></div>
           <button id="verifyBtn">Verify & Get Key</button>
           <div id="verifyMsg" class="status"></div>
           <pre id="keyOut" class="mono"></pre>
@@ -88,6 +89,9 @@
         } catch (e) { qs('walletStatus').textContent = 'Connect failed: ' + e; }
       }
 
+      function fmtEth(wei){ try { return (Number(wei)/1e18).toFixed(6); } catch { return '' } }
+      function fmtUsdc(minor){ try { return (Number(minor)/1e6).toFixed(2); } catch { return '' } }
+
       async function getQuote() {
         qs('quoteMsg').textContent = '';
         qs('quoteOut').textContent = '';
@@ -98,7 +102,35 @@
           if (!res.ok) { throw new Error(await res.text()); }
           quote = await res.json();
           qs('quoteOut').textContent = JSON.stringify(quote, null, 2);
-          qs('quoteMsg').textContent = 'Send payment to the published treasury address, then paste tx hash below.';
+          const payDiv = qs('payButtons');
+          payDiv.innerHTML = '';
+          const treas = (envInfo && envInfo.payments && envInfo.payments.treasury_address) || '';
+          if (!treas){ qs('quoteMsg').textContent = 'Set TREASURY_ADDRESS on server.'; return; }
+          const chainId = 8453; // Base mainnet
+          if (asset === 'ETH'){
+            const btn = document.createElement('button'); btn.textContent = 'Pay with wallet (ETH)';
+            btn.onclick = async ()=>{
+              try{
+                if (!window.ethereum) { alert('No wallet'); return; }
+                await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] }).catch(()=>{});
+                const tx = await window.ethereum.request({ method:'eth_sendTransaction', params:[{ to: treas, value: '0x'+Number(quote.totalPrice).toString(16) }]});
+                qs('txHash').value = tx;
+              }catch(e){ alert('Send failed: '+e); }
+            };
+            payDiv.appendChild(btn);
+            const deep = document.createElement('a'); deep.href = `ethereum:${treas}@${chainId}?value=0x${Number(quote.totalPrice).toString(16)}`; deep.textContent='Open in wallet (EIP-681)'; deep.target='_blank';
+            payDiv.appendChild(deep);
+            qs('quoteMsg').textContent = `Send ${fmtEth(quote.totalPrice)} ETH to ${treas}`;
+          } else if (asset === 'USDC'){
+            const copyA = document.createElement('button'); copyA.textContent='Copy treasury address'; copyA.onclick=()=>{ navigator.clipboard.writeText(treas); };
+            payDiv.appendChild(copyA);
+            const amt = fmtUsdc(quote.totalPrice);
+            const copyAmt = document.createElement('button'); copyAmt.textContent=`Copy amount (${amt} USDC)`; copyAmt.onclick=()=>{ navigator.clipboard.writeText(amt); };
+            payDiv.appendChild(copyAmt);
+            const view = document.createElement('a'); view.href=`https://basescan.org/token/${(envInfo && envInfo.payments && envInfo.payments.usdc_address) || ''}`; view.textContent='View USDC token'; view.target='_blank';
+            payDiv.appendChild(view);
+            qs('quoteMsg').textContent = `Send ${amt} USDC to ${treas}`;
+          }
         } catch (e) {
           qs('quoteMsg').textContent = 'Quote failed: ' + e;
         }

@@ -142,6 +142,7 @@ Admin Control Panel:
 - make server-db-compact [MINUTES=60 DELETE_AFTER=false]: compact KV ? SQL in-process (works with in-memory KV).
 - make demo-e2e TENANT=t1 [FORCE_SQL=1 ...]: use FORCE_SQL=1 to seed a local SQL tenant instead of Venice.
 - make chat-admin now sets a default Idempotency-Key automatically; override with IDK=<value>.
+- make enable-buyer: append buyer feature flags to .env and print restart tips.
 
 Spin up Postgres and Redis locally for full E2E validation (SQL store + Redis-backed limiter):
 
@@ -445,6 +446,7 @@ Endpoints
 
 Buyer UI
 - Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
+- For ETH, the page offers a one-click “Pay with wallet (ETH)” using `eth_sendTransaction`, and an EIP‑681 deeplink. For USDC, copy address/amount helpers are shown.
 
 ## End-to-End Demo (MVP)
 
