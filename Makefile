@@ -99,7 +99,9 @@ LABEL ?= Team A
 demo-e2e:
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
 	@echo "[demo] Seeding tenant '$(TENANT)' (label='$(LABEL)')"
-	@if [ -n "$$VENICE_PARENT_KEY" ] || [ -n "$$VENICE_API_KEY" ]; then \
+	@if [ -n "$$FORCE_SQL" ]; then \
+	  $(RUNPY) scripts/seed_sql_tenant.py --tenant "$(TENANT)" --label "$(LABEL)" || true; \
+	elif [ -n "$$VENICE_PARENT_KEY" ] || [ -n "$$VENICE_API_KEY" ]; then \
 	  $(RUNPY) scripts/create_test_tenant.py --tenant-id "$(TENANT)" --label "$(LABEL)" || true; \
 	else \
 	  $(RUNPY) scripts/seed_sql_tenant.py --tenant "$(TENANT)" --label "$(LABEL)" || true; \
