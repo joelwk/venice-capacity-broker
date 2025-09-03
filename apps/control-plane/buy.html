@@ -21,44 +21,70 @@
     </header>
 
     <main>
-      <section class="card">
-        <h2>Wallet</h2>
-        <div class="row">
-          <button id="connectBtn">Connect Wallet</button>
-          <div id="walletStatus" class="status"></div>
-          <div id="payInfo" class="mono"></div>
-        </div>
-      </section>
+      <style>
+        .layout-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+        @media (max-width: 900px){ .layout-2 { grid-template-columns: 1fr; } }
+        .kvs { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+        .kvs div{ display:flex; justify-content:space-between; gap:8px; padding:6px 8px; background:#0d0f15; border:1px solid var(--border); border-radius:8px; }
+      </style>
 
-      <section class="card">
-        <h2>Quote</h2>
-        <div class="row grid-2">
-          <div>
-            <label>Units (e.g., DIEM/day)</label>
-            <input id="units" type="number" min="1" value="60" />
-            <label>Asset</label>
-            <select id="asset">
-              <option value="USDC">USDC</option>
-              <option value="ETH">ETH</option>
-            </select>
-            <button id="getQuoteBtn">Get Quote</button>
-            <div id="quoteMsg" class="status"></div>
-          </div>
-          <pre id="quoteOut" class="mono"></pre>
-        </div>
-      </section>
+      <div class="layout-2">
+        <div>
+          <section class="card">
+            <h2>Markets</h2>
+            <div id="marketMsg" class="status"></div>
+            <div class="kvs" id="marketGrid"></div>
+            <pre id="marketRaw" class="mono" style="margin-top:8px"></pre>
+          </section>
 
-      <section class="card">
-        <h2>Pay & Verify</h2>
-        <div class="row">
-          <label>Paste Payment Tx Hash</label>
-          <input id="txHash" placeholder="0x..." />
-          <div id="payButtons" class="row"></div>
-          <button id="verifyBtn">Verify & Get Key</button>
-          <div id="verifyMsg" class="status"></div>
-          <pre id="keyOut" class="mono"></pre>
+          <section class="card">
+            <h2>Wallet</h2>
+            <div class="row">
+              <button id="connectBtn">Connect Wallet</button>
+              <div id="walletStatus" class="status"></div>
+              <div id="payInfo" class="mono"></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Quote</h2>
+            <div class="row grid-2">
+              <div>
+                <label>Units (e.g., DIEM/day)</label>
+                <input id="units" type="number" min="1" value="60" />
+                <label>Asset</label>
+                <select id="asset">
+                  <option value="USDC">USDC</option>
+                  <option value="ETH">ETH</option>
+                </select>
+                <button id="getQuoteBtn">Get Quote</button>
+                <div id="quoteMsg" class="status"></div>
+              </div>
+              <pre id="quoteOut" class="mono"></pre>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Pay & Verify</h2>
+            <div class="row">
+              <label>Paste Payment Tx Hash</label>
+              <input id="txHash" placeholder="0x..." />
+              <div id="payButtons" class="row"></div>
+              <button id="verifyBtn">Verify & Get Key</button>
+              <div id="verifyMsg" class="status"></div>
+              <pre id="keyOut" class="mono"></pre>
+            </div>
+          </section>
         </div>
-      </section>
+
+        <aside>
+          <section class="card">
+            <h2>Tenants</h2>
+            <div id="tenantsMsg" class="status"></div>
+            <div id="tenantsTable"></div>
+          </section>
+        </aside>
+      </div>
     </main>
 
     <script>
@@ -66,6 +92,12 @@
       let account = null;
       let quote = null;
       let envInfo = null;
+
+      // --- Market helpers ---
+      function _adminToken(){
+        // support both keys used elsewhere in the admin UI
+        return localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      }
 
       async function loadEnv() {
         try {
@@ -78,6 +110,29 @@
           const addr = pay.treasury_address || '(not set)';
           qs('payInfo').textContent = `Treasury: ${addr}\nAssets: ${assets}`;
         } catch (e) {}
+      }
+
+      async function loadMarket(){
+        try{
+          const r = await fetch('/v1/market/prices?symbols=VVV,DIEM,ETH,USDC');
+          if(!r.ok) throw new Error(await r.text());
+          const j = await r.json();
+          qs('marketRaw').textContent = JSON.stringify(j,null,2);
+          const grid = qs('marketGrid');
+          const prices = j.prices || {}; const ratios = j.ratios || {};
+          const kv = [];
+          const p = (k)=> (prices[k]!==undefined? Number(prices[k]).toFixed(6):'');
+          const rr = (k)=> (ratios[k]!==undefined? Number(ratios[k]).toFixed(6):'');
+          kv.push(['VVV price', p('VVV')]);
+          kv.push(['DIEM price', p('DIEM')]);
+          kv.push(['ETH price', p('ETH')]);
+          kv.push(['USDC price', p('USDC')]);
+          kv.push(['VVV/DIEM', rr('VVV_DIEM')]);
+          kv.push(['ETH/DIEM', rr('ETH_DIEM')]);
+          kv.push(['USDC/DIEM', rr('USDC_DIEM')]);
+          grid.innerHTML = kv.map(([k,v])=>`<div><span>${k}</span><strong>${v}</strong></div>`).join('');
+          qs('marketMsg').textContent = 'Live prices refreshed';
+        }catch(e){ qs('marketMsg').textContent = 'Market fetch failed: '+e; }
       }
 
       async function connectWallet() {
@@ -155,10 +210,47 @@
         } catch (e) { qs('verifyMsg').textContent = 'Verify failed: ' + e; }
       }
 
+      function renderTenantsTable(list){
+        if (!Array.isArray(list) || list.length===0){
+          qs('tenantsTable').innerHTML = '<div class="status">No tenants</div>';
+          return;
+        }
+        const rows = list.map(t=>`
+          <tr>
+            <td>${t.id}</td>
+            <td>${t.label||''}</td>
+            <td>${t.quota}</td>
+            <td>${t.expires_at||''}</td>
+            <td>${t.status||''}</td>
+          </tr>`).join('');
+        qs('tenantsTable').innerHTML = `
+          <table>
+            <thead><tr><th>Id</th><th>Label</th><th>Quota</th><th>Expires</th><th>Status</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      }
+
+      async function loadTenants(){
+        const tok = _adminToken();
+        if(!tok){ qs('tenantsMsg').textContent = 'Set admin token in Admin to view tenants.'; return; }
+        try{
+          const r = await fetch('/v1/tenants', { headers: { Authorization: 'Bearer '+tok }});
+          const body = await r.json().catch(()=>({}));
+          if(!r.ok) throw new Error(body.detail || JSON.stringify(body));
+          renderTenantsTable(body);
+          qs('tenantsMsg').textContent = '';
+        }catch(e){ qs('tenantsMsg').textContent = 'Tenants fetch failed: '+e; }
+      }
+
       qs('connectBtn').onclick = connectWallet;
       qs('getQuoteBtn').onclick = getQuote;
       qs('verifyBtn').onclick = verify;
       loadEnv();
+      loadMarket();
+      loadTenants();
+      // Refresh market/tenants periodically
+      setInterval(loadMarket, 15000);
+      setInterval(loadTenants, 20000);
     </script>
   </body>
   </html>

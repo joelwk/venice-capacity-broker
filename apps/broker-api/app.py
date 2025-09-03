@@ -1045,6 +1045,49 @@ try:
         maxRequests: int | None = Field(default=None, ge=0)
         label: str | None = None  # classification label (e.g., premium, basic)
 
+    # --- Market data (prices/signals) ---
+    @app.get("/v1/market/prices")
+    @_traceable("broker.market_prices")
+    def market_prices(
+        symbols: str = Query(default="VVV,DIEM,ETH,USDC", description="Comma-separated symbols"),
+    ) -> dict:
+        """Return simple price feed and common ratios.
+
+        Prices are sourced via services.marketdata.provider (DEX aggregator + Venice signals).
+        Ratios are convenience fields, e.g., VVV_DIEM = VVV/DIEM when both are present.
+        """
+        try:
+            from services.marketdata.provider import MarketDataProvider  # type: ignore
+
+            md = MarketDataProvider()
+            syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
+            prices = md.prices(syms)
+            # Common ratios to DIEM if available
+            ratios: dict[str, float] = {}
+            diem = prices.get("DIEM")
+            if diem and float(diem) != 0:
+                for s, p in prices.items():
+                    if s.upper() != "DIEM":
+                        try:
+                            ratios[f"{s.upper()}_DIEM"] = float(p) / float(diem)
+                        except Exception:
+                            pass
+            return {"symbols": syms, "prices": prices, "ratios": ratios}
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/v1/market/signals")
+    @_traceable("broker.market_signals")
+    def market_signals(ttl_s: int = Query(default=30, ge=1, le=600)) -> dict:
+        """Return unified VVV + DIEM signals from Venice-backed provider."""
+        try:
+            from services.marketdata.provider import MarketDataProvider  # type: ignore
+
+            md = MarketDataProvider()
+            return md.unified_signals(ttl_s=int(ttl_s))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(e))
+
     # --- Quotes & Purchases (flag-gated; non-admin) ---
     try:
         _features = {
