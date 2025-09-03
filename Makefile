@@ -109,7 +109,8 @@ demo-e2e:
 	@echo "[demo] Probing /v1/chat as admin act-as (this also writes limiter buckets)"
 	@$(MAKE) -s chat-admin TENANT=$(TENANT) MESSAGE="$(if $(MESSAGE),$(MESSAGE),Hello)" MODEL="$(if $(MODEL),$(MODEL),$(EFFECTIVE_MODEL))" || true
 	@echo "[demo] Compacting KV -> SQL counters"
-	@$(MAKE) -s db-compact
+	@$(MAKE) -s server-db-compact || true
+	@$(MAKE) -s db-compact || true
 	@echo "[demo] Showing counters for $(TENANT)"
 	@$(MAKE) -s db-counters TENANT=$(TENANT) LIMIT=$(if $(LIMIT),$(LIMIT),20)
 # Pull defaults from .env/.env.example without overriding exported env

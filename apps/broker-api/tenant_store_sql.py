@@ -56,6 +56,8 @@ class SQLTenantStore:
             if db_t is None:
                 db_t = DbTenant(id=t.id, label=t.label, status=t.status)
                 session.add(db_t)
+                # Ensure tenant row exists before inserting dependent key
+                session.flush()
             else:
                 db_t.label = t.label
                 db_t.status = t.status
@@ -125,4 +127,3 @@ class SQLTenantStore:
                     status=db_t.status,
                 )
         return out
-

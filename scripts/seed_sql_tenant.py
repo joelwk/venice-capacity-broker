@@ -18,6 +18,8 @@ def main() -> None:
         t = s.get(Tenant, args.tenant)
         if t is None:
             s.add(Tenant(id=args.tenant, label=args.label, status="active"))
+            # Ensure tenant row exists before inserting dependent key
+            s.flush()
         s.add(Key(tenant_id=args.tenant, label=args.label, subkey="dummy", quota=0, expires_at=None))
         s.commit()
     print(f"seeded tenant {args.tenant}")
@@ -25,4 +27,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
