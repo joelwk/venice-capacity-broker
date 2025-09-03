@@ -28,7 +28,24 @@ except Exception:
 try:
     from .tenant_store_sql import SQLTenantStore as _SQLTenantStore  # type: ignore
 except Exception:
-    _SQLTenantStore = None  # type: ignore
+    # Fallback for direct execution where package context is absent
+    try:
+        import importlib.util as _ilu2
+        from pathlib import Path as _PathSql
+        import sys as _sys2
+
+        _p_sql = _PathSql(__file__).with_name("tenant_store_sql.py").resolve()
+        _mod_name_sql = "broker_tenant_store_sql_fallback"
+        _spec_sql = _ilu2.spec_from_file_location(_mod_name_sql, str(_p_sql))
+        if _spec_sql and _spec_sql.loader:
+            _mod_sql = _ilu2.module_from_spec(_spec_sql)
+            _sys2.modules[_mod_name_sql] = _mod_sql
+            _spec_sql.loader.exec_module(_mod_sql)  # type: ignore[attr-defined]
+            _SQLTenantStore = _mod_sql.SQLTenantStore  # type: ignore[attr-defined]
+        else:
+            _SQLTenantStore = None  # type: ignore[assignment]
+    except Exception:
+        _SQLTenantStore = None  # type: ignore[assignment]
 
 
 logger = get_logger("broker.api")
