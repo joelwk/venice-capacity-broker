@@ -1,4 +1,4 @@
-.PHONY: help health create-tenant chat-admin limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e
+.PHONY: help health create-tenant chat-admin rotate-probe limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e
 
 # Broker base URL; can be overridden via environment or CLI
 # Example: make create-tenant BROKER_BASE_URL=https://<your-repl>.repl.co
@@ -26,6 +26,7 @@ help:
 	@echo "  make health                          - GET /health"
 	@echo "  make create-tenant TENANT=t1 LABEL=TeamA [QUOTA=0 EXPIRES=...]"
 	@echo "  make chat-admin TENANT=t1 [MESSAGE=Hello]    - admin act-as /v1/chat"
+	@echo "  make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello] - rotate subkey then probe /v1/chat"
 	@echo "  make limits-get TENANT=t1            - admin get broker limits"
 	@echo "  make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"
 	@echo "  make run-broker                      - start uvicorn app:app with --app-dir"
@@ -52,9 +53,17 @@ chat-admin:
 	    -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" \
 	    -H "X-Tenant-Id: $(TENANT)" \
 	    -H "Content-Type: application/json" \
-	    $(if $(IDK),-H "Idempotency-Key: $(IDK)",) \
+	    -H "Idempotency-Key: $${IDK:-idk-$$RANDOM-`date +%s`}" \
 	    -d "$$PAY" \
 	    -w "\nHTTP %{http_code}\n"
+
+# Rotate subkey (using VENICE_PARENT_KEY/VENICE_API_KEY) then probe chat as admin act-as
+.PHONY: rotate-probe
+rotate-probe:
+	@if [ -z "$(TENANT)" ]; then echo "Usage: make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]"; exit 1; fi
+	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
+	@$(MAKE) -s create-tenant TENANT=$(TENANT) LABEL="$(if $(LABEL),$(LABEL),Team A)" ROTATE=1 REVOKE_OLD=1
+	@$(MAKE) -s chat-admin TENANT=$(TENANT) MESSAGE="$(if $(MESSAGE),$(MESSAGE),Hello)"
 
 limits-get:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make limits-get TENANT=t1"; exit 1; fi
