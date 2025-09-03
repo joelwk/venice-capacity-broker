@@ -79,7 +79,7 @@ db-migrate:
 db-stamp:
 	@$(RUNPY) -m alembic stamp head
 
-	db-compact:
+db-compact:
 	@$(RUNPY) apps/cli/main.py data:compact-counters --force
 
 db-counters:
@@ -123,3 +123,14 @@ endif
 
 # Effective model preference: explicit MODEL > BROKER_DEFAULT_MODEL > VENICE_DEFAULT_MODEL > file fallbacks
 EFFECTIVE_MODEL := $(firstword $(strip $(MODEL) $(BROKER_DEFAULT_MODEL) $(VENICE_DEFAULT_MODEL) $(BROKER_DEFAULT_MODEL_FILE) $(VENICE_DEFAULT_MODEL_FILE)))
+
+# --- Setup helpers ---
+.PHONY: setup-db
+setup-db:
+	@echo "Installing SQL extras (sqlmodel + psycopg2-binary)..."
+	@if command -v uv >/dev/null 2>&1; then \
+	  uv sync --extra db; \
+	else \
+	  python -m pip install --upgrade pip setuptools wheel || true; \
+	  python -m pip install sqlmodel psycopg2-binary; \
+	fi

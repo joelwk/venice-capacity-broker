@@ -15,3 +15,18 @@ packages = ["libxcrypt"]
 [[ports]]
 localPort = 8000
 externalPort = 80
+
+[workflows]
+runButton = "Run Venice Broker API"
+
+[[workflows.workflow]]
+name = "Run Venice Broker API"
+author = 38779469
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port ${PORT:-8000}"
+
+[agent]
+expertMode = true
