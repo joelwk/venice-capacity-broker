@@ -40,7 +40,7 @@ health:
 
 create-tenant:
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
-	@$(RUNPY) scripts/create_test_tenant.py --tenant-id "$(TENANT)" --label "$(LABEL)" $(if $(QUOTA),--quota $(QUOTA),) $(if $(EXPIRES),--expires-at "$(EXPIRES)",)
+	@$(RUNPY) scripts/create_test_tenant.py --tenant-id "$(TENANT)" --label "$(LABEL)" $(if $(QUOTA),--quota $(QUOTA),) $(if $(EXPIRES),--expires-at "$(EXPIRES)",) $(if $(ROTATE),--rotate,) $(if $(REVOKE_OLD),--revoke-old,) $(if $(PROBE_CHAT),--probe-chat,)
 
 chat-admin:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make chat-admin TENANT=t1 [MESSAGE=Hello]"; exit 1; fi
@@ -52,6 +52,7 @@ chat-admin:
 	    -H "Authorization: Bearer $$BROKER_ADMIN_TOKEN" \
 	    -H "X-Tenant-Id: $(TENANT)" \
 	    -H "Content-Type: application/json" \
+	    $(if $(IDK),-H "Idempotency-Key: $(IDK)",) \
 	    -d "$$PAY" \
 	    -w "\nHTTP %{http_code}\n"
 
