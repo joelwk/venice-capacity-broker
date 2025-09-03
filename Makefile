@@ -36,6 +36,7 @@ help:
 	@echo "  make db-counters TENANT=t1 [LIMIT=20] - show recent counters from SQL"
 	@echo "  make demo-e2e TENANT=t1 [LABEL=TeamA MESSAGE=Hello LIMIT=20 MODEL=<m>] - seed+probe+compact+show"
 	@echo "  make enable-buyer                    - append Buyer feature flags to .env and print restart tips"
+	@echo "  make watch-tokens                    - run BaseScan token watcher (requires BASESCAN_API_KEY)"
 
 health:
 	@curl -fsSL -H "Accept: application/json" "$(BASE_URL)/health"
@@ -124,6 +125,11 @@ demo-e2e:
 	@$(MAKE) -s db-compact || true
 	@echo "[demo] Showing counters for $(TENANT)"
 	@$(MAKE) -s db-counters TENANT=$(TENANT) LIMIT=$(if $(LIMIT),$(LIMIT),20)
+
+.PHONY: watch-tokens
+watch-tokens:
+	@if [ -z "$$BASESCAN_API_KEY" ] && [ -z "$$ETHERSCAN_API_KEY" ]; then echo "Set BASESCAN_API_KEY or ETHERSCAN_API_KEY"; exit 1; fi
+	@$(RUNPY) services/marketdata/token_watcher.py
 # Pull defaults from .env/.env.example without overriding exported env
 # These are used only for Make computations (e.g., default MODEL)
 BROKER_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^BROKER_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env 2>/dev/null | tr -d '\r'))

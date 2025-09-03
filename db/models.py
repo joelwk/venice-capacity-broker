@@ -106,3 +106,35 @@ class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
     fulfilled_at: Optional[datetime] = None
 
     # Simple unique constraint alternatives via indexes when SQLModel supports; rely on application checks otherwise.
+
+
+# --- Token Tracking (BaseScan/Etherscan) ---
+class AssetToken(SQLModel, table=True):  # type: ignore[call-arg]
+    """Metadata for a tracked ERC-20 token on a given chain."""
+
+    address: str = Field(primary_key=True)
+    chain: str = Field(default="base")
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+    decimals: Optional[int] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+
+
+class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
+    """Periodic snapshot of token market and chain stats.
+
+    Prices are stored as floats for simplicity; on critical paths prefer fixed‑point.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    token_address: str = Field(foreign_key="assettoken.address")
+    ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
+    price_usd: Optional[float] = None
+    supply_total: Optional[int] = None
+    supply_circulating: Optional[int] = None
+    holders: Optional[int] = None
+    transfers_24h: Optional[int] = None
+    marketcap_usd: Optional[float] = None
+    max_total_supply: Optional[int] = None
+    raw_json: Optional[str] = None  # lightly structured JSON payload for auditing
