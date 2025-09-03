@@ -421,6 +421,31 @@ Idempotency
 - `make demo-e2e TENANT=t1 [FORCE_SQL=1 ...]`: use `FORCE_SQL=1` to seed a local SQL tenant instead of Venice.
 - `make chat-admin` now sets a default Idempotency-Key automatically; override with `IDK=<value>`.
 
+## Buyer Flow (Quotes + Purchases)
+
+- Feature flags (off by default): set in env and restart broker
+  - `QUOTES_ENABLED=true` to enable `GET /v1/quotes`
+  - `PURCHASES_ENABLED=true` to enable `POST /v1/purchases/verify` and `GET /v1/purchases/{id}`
+  - `CORS_ENABLED=true` and `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
+- Pricing (Static engine)
+  - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
+  - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`
+- Payments
+  - `BASE_RPC_URL` (Base mainnet RPC)
+  - `TREASURY_ADDRESS` (receiver)
+  - `ACCEPT_ASSETS=ETH,USDC`
+  - For USDC: `USDC_ADDRESS` (Base mainnet) and `USDC_DECIMALS=6` (informational)
+- Venice key issuance
+  - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) is required to mint subkeys on successful verify
+
+Endpoints
+- `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`
+- `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }` → verifies on Base and issues a subkey
+- `GET /v1/purchases/{purchaseId}` → returns status and (if fulfilled) key metadata
+
+Buyer UI
+- Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
+
 ## End-to-End Demo (MVP)
 
 1) Install SQL extras and set env

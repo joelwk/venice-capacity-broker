@@ -60,3 +60,49 @@ class Counter(SQLModel, table=True):  # type: ignore[call-arg]
     bucket_seconds: int = 60
     count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+
+
+# --- New: Quotes and Purchases for Buyer Flow ---
+try:
+    from sqlmodel import Index  # type: ignore
+except Exception:  # noqa: BLE001
+    Index = None  # type: ignore
+
+
+class Quote(SQLModel, table=True):  # type: ignore[call-arg]
+    """Priced offer to purchase units of compute.
+
+    units: logical units (e.g., diem/day); asset: ETH|USDC; prices in smallest unit for asset
+    status: open|expired|filled
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    quote_id: str = Field(index=True)
+    units: int
+    asset: str
+    unit_price: int  # price per unit in smallest unit of asset
+    total_price: int  # total price in smallest unit of asset
+    accepted_min: Optional[int] = None
+    accepted_max: Optional[int] = None
+    expires_at: datetime
+    status: str = Field(default="open")
+    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+
+
+class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
+    id: Optional[int] = Field(default=None, primary_key=True)
+    purchase_id: str = Field(index=True)
+    quote_id: str = Field(index=True)
+    buyer_address: str
+    asset: str
+    amount_paid: int
+    tx_hash: str = Field(index=True)
+    status: str = Field(default="pending")  # pending|confirmed|fulfilled|failed
+    tenant_id: Optional[str] = None
+    subkey: Optional[str] = None
+    key_id: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    fulfilled_at: Optional[datetime] = None
+
+    # Simple unique constraint alternatives via indexes when SQLModel supports; rely on application checks otherwise.

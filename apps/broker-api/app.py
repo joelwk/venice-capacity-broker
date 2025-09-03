@@ -53,6 +53,7 @@ logger = get_logger("broker.api")
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
     from fastapi.responses import PlainTextResponse
+    from fastapi.middleware.cors import CORSMiddleware
     from starlette.staticfiles import StaticFiles
     from pathlib import Path as _Path2
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -129,6 +130,24 @@ try:
     class UsageResponse(BaseModel):
         usage: dict
         limits: dict | None = None
+
+    # --- Optional: CORS (flag-gated) ---
+    try:
+        import os as _cors_os
+
+        if (_cors_os.getenv("CORS_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+            _origins = [o.strip() for o in (_cors_os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+            if not _origins:
+                _origins = ["*"]
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=_origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+    except Exception:
+        pass
 
     # Venice Web3 key flow models
     class Web3ChallengeRequest(BaseModel):
@@ -391,6 +410,16 @@ try:
             },
             "tracing": {
                 "enabled": (_os.getenv("LANGCHAIN_TRACING_V2") or "false").strip().lower() in {"1", "true", "yes"},
+            },
+            "payments": {
+                "enabled": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "accepted_assets": [a.strip().upper() for a in (_os.getenv("ACCEPT_ASSETS") or "ETH,USDC").split(",") if a.strip()],
+                "treasury_address": (_os.getenv("TREASURY_ADDRESS") or "").strip() or None,
+                "usdc_address": (_os.getenv("USDC_ADDRESS") or "").strip() or None,
+            },
+            "features": {
+                "quotes": (_os.getenv("QUOTES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "purchases": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
             },
         }
 
@@ -1015,6 +1044,218 @@ try:
         windowSeconds: int | None = Field(default=None, ge=1)
         maxRequests: int | None = Field(default=None, ge=0)
         label: str | None = None  # classification label (e.g., premium, basic)
+
+    # --- Quotes & Purchases (flag-gated; non-admin) ---
+    try:
+        _features = {
+            "quotes": (_os.getenv("QUOTES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+            "purchases": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+        }
+        if _features["quotes"]:
+            from services.pricing.service import PricingService  # type: ignore
+            _pricing = PricingService()
+
+            class QuoteResponse(BaseModel):
+                quoteId: str
+                units: int
+                asset: str
+                unitPrice: int
+                totalPrice: int
+                acceptedMin: int | None = None
+                acceptedMax: int | None = None
+                expiresAt: int
+
+            @app.get("/v1/quotes", response_model=QuoteResponse)
+            def get_quote(
+                units: int = Query(..., ge=1),
+                asset: str = Query(..., description="ETH or USDC"),
+            ) -> dict:
+                try:
+                    return _pricing.get_quote(units=units, asset=asset)
+                except Exception as e:  # noqa: BLE001
+                    raise HTTPException(status_code=400, detail=str(e))
+
+        if _features["purchases"]:
+            from db.session import get_session
+            from db.models import Purchase, Quote as DbQuote
+            from sqlmodel import select as _select
+            from datetime import datetime as _dt
+            import hashlib as _hh
+
+            class PurchaseVerifyRequest(BaseModel):
+                quoteId: str
+                txHash: str
+                buyerAddress: str
+                tenantId: str | None = None
+                model: str | None = None
+
+            class PurchaseStatus(BaseModel):
+                purchaseId: str
+                status: str
+                tenantId: str | None = None
+                subkey: str | None = None
+                expiresAt: str | None = None
+
+            def _normalize_hex(x: str) -> str:
+                x = str(x).strip()
+                return x if x.startswith("0x") else ("0x" + x)
+
+            def _wei(hex_str: str) -> int:
+                return int(hex_str, 16)
+
+            def _rpc_call(url: str, method: str, params: list) -> dict:
+                import requests as _rq
+
+                r = _rq.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=15)
+                r.raise_for_status()
+                j = r.json()
+                if "error" in j:
+                    raise RuntimeError(str(j["error"]))
+                return j["result"]
+
+            def _verify_tx(quote: DbQuote, tx_hash: str, treasury: str, usdc_addr: str | None, base_rpc: str) -> int:
+                tx_hash = _normalize_hex(tx_hash)
+                rec = _rpc_call(base_rpc, "eth_getTransactionReceipt", [tx_hash])
+                if rec is None:
+                    raise RuntimeError("transaction not found")
+                status_hex = rec.get("status") or "0x0"
+                if int(status_hex, 16) != 1:
+                    raise RuntimeError("transaction failed")
+                to_addr = (rec.get("to") or "").lower()
+                # ETH path: check 'to' and value
+                if quote.asset.upper() == "ETH":
+                    tx = _rpc_call(base_rpc, "eth_getTransactionByHash", [tx_hash])
+                    if (tx.get("to") or "").lower() != treasury.lower():
+                        raise RuntimeError("ETH payment to wrong address")
+                    val = _wei(tx.get("value", "0x0"))
+                    if val < int(quote.total_price):
+                        raise RuntimeError("insufficient ETH amount")
+                    return val
+                # USDC path: find Transfer(to=treasury)
+                if quote.asset.upper() == "USDC":
+                    if not usdc_addr:
+                        raise RuntimeError("USDC_ADDRESS not configured")
+                    logs = rec.get("logs", [])
+                    sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # keccak(Transfer(address,address,uint256))
+                    paid = 0
+                    for lg in logs:
+                        if (lg.get("address") or "").lower() != usdc_addr.lower():
+                            continue
+                        topics = lg.get("topics") or []
+                        if not topics or topics[0].lower() != sig:
+                            continue
+                        # topics[2] is to address (indexed)
+                        if len(topics) < 3:
+                            continue
+                        to_topic = topics[2]
+                        # last 20 bytes
+                        to_addr_log = "0x" + to_topic[-40:]
+                        if to_addr_log.lower() != treasury.lower():
+                            continue
+                        amount = _wei(lg.get("data", "0x0"))
+                        paid += amount
+                    if paid < int(quote.total_price):
+                        raise RuntimeError("insufficient USDC amount")
+                    return paid
+                raise RuntimeError("unsupported asset")
+
+            @app.post("/v1/purchases/verify", response_model=PurchaseStatus)
+            def verify_purchase(req: PurchaseVerifyRequest) -> dict:
+                base_rpc = (_os.getenv("BASE_RPC_URL") or "").strip()
+                if not base_rpc:
+                    raise HTTPException(status_code=400, detail="BASE_RPC_URL not set")
+                treasury = (_os.getenv("TREASURY_ADDRESS") or "").strip()
+                if not treasury:
+                    raise HTTPException(status_code=400, detail="TREASURY_ADDRESS not set")
+                usdc_addr = (_os.getenv("USDC_ADDRESS") or "").strip() or None
+
+                # Load quote
+                with next(get_session()) as s:  # type: ignore[call-arg]
+                    q = s.exec(_select(DbQuote).where(DbQuote.quote_id == req.quoteId)).first()
+                    if q is None:
+                        raise HTTPException(status_code=404, detail="quote not found")
+                    # Verify payment
+                    try:
+                        _ = _verify_tx(q, req.txHash, treasury, usdc_addr, base_rpc)
+                    except Exception as e:  # noqa: BLE001
+                        raise HTTPException(status_code=400, detail=str(e))
+                    # Record/Upsert purchase
+                    pur_id = _hh.sha256(f"{req.txHash}:{req.buyerAddress}".encode()).hexdigest()[:16]
+                    p = s.exec(_select(Purchase).where(Purchase.purchase_id == pur_id)).first()
+                    if p is None:
+                        p = Purchase(
+                            purchase_id=pur_id,
+                            quote_id=q.quote_id,
+                            buyer_address=req.buyerAddress,
+                            asset=q.asset,
+                            amount_paid=int(q.total_price),
+                            tx_hash=req.txHash,
+                            status="confirmed",
+                        )
+                        s.add(p)
+                    else:
+                        p.status = "confirmed"
+                    # Mint subkey and upsert tenant
+                    try:
+                        # Map units → consumption limit and expiry (24h default)
+                        limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
+                        cons = {"diem": int(q.units)} if limit_kind == "diem" else {limit_kind: int(q.units)}
+                        expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
+                        sub = keys.issue_scoped_key(
+                            (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or ""),
+                            label=f"Buyer {req.buyerAddress[:6]}...",
+                            consumption_limit=cons,
+                            expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        )
+                        # Extract values
+                        def _extract(obj: dict, keys: list[str]) -> str:
+                            for k in keys:
+                                v = obj.get(k)
+                                if isinstance(v, str) and v:
+                                    return v
+                            return ""
+
+                        subkey = _extract(sub, ["apiKey", "api_key", "key", "token", "api_key_value"]) or ""
+                        kid = _extract(sub, ["id", "keyId", "apiKeyId", "api_key_id"]) or None
+                        if not subkey:
+                            raise RuntimeError("failed to mint subkey")
+                        # Choose tenant id: reuse provided or derive from wallet address
+                        tenant_id = req.tenantId or ("w:" + req.buyerAddress.lower())
+                        store.upsert(Tenant(id=tenant_id, label="Buyer", subkey=subkey, quota=q.units, expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")))
+                        p.status = "fulfilled"
+                        p.tenant_id = tenant_id
+                        p.subkey = subkey
+                        p.key_id = kid
+                        p.expires_at = expires_at
+                        p.fulfilled_at = _dt.utcnow()
+                    except Exception as e:  # noqa: BLE001
+                        # Keep as confirmed; fulfill later
+                        p.status = "confirmed"
+                    s.add(p)
+                    s.commit()
+                    return {
+                        "purchaseId": p.purchase_id,
+                        "status": p.status,
+                        "tenantId": p.tenant_id,
+                        "subkey": p.subkey,
+                        "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
+                    }
+
+            @app.get("/v1/purchases/{purchase_id}", response_model=PurchaseStatus)
+            def get_purchase(purchase_id: str) -> dict:
+                with next(get_session()) as s:  # type: ignore[call-arg]
+                    p = s.exec(_select(Purchase).where(Purchase.purchase_id == purchase_id)).first()
+                    if p is None:
+                        raise HTTPException(status_code=404, detail="purchase not found")
+                    return {
+                        "purchaseId": p.purchase_id,
+                        "status": p.status,
+                        "tenantId": p.tenant_id,
+                        "subkey": p.subkey,
+                        "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
+                    }
+    except Exception as _e_features:  # noqa: BLE001
+        logger.warning("features init error: %s", _e_features)
 
     def _get_broker_limits_obj(tenant_id: str) -> dict:
         win_s = RATE_LIMIT_WINDOW_SECONDS

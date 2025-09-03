@@ -147,3 +147,15 @@ Updated shortcuts and operations
 - CLI compaction: `make db-compact` (may not see in-memory KV; prefer server compaction in that case).
 - Tune limits then re-probe: `make limits-set TENANT=<id> WINDOW=60 MAX=60` followed by `make rotate-probe TENANT=<id>`.
 - Model override per request: `make chat-admin TENANT=<id> MESSAGE="hi" MODEL="venice-uncensored"` or set `BROKER_DEFAULT_MODEL`.
+
+Buyer Flow (flag-gated)
+- Enable features via env and restart broker:
+  - `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`
+  - `CORS_ENABLED=true` with `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
+  - Pricing: `PRICE_UNIT_USDC` and/or `PRICE_UNIT_ETH_WEI`; optional `PRICE_QUOTE_TTL_SECONDS`
+  - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and `USDC_ADDRESS` for USDC
+- UI path: `/admin/buy.html` → connect wallet → get quote → pay → paste tx hash → receive subkey
+- API endpoints:
+  - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`
+  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
+  - `GET /v1/purchases/{purchaseId}`

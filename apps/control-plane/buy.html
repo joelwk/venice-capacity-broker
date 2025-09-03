@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Buy Compute</title>
+    <link rel="stylesheet" href="/admin/style.css" />
+    <style>
+      .row { display: grid; gap: 8px; }
+      .grid-2 { grid-template-columns: 1fr 1fr; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f7f7f9; padding: 10px; border-radius: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Buy Compute</h1>
+      <nav>
+        <a href="/">API Home</a>
+        <a href="/admin/">Admin</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Wallet</h2>
+        <div class="row">
+          <button id="connectBtn">Connect Wallet</button>
+          <div id="walletStatus" class="status"></div>
+          <div id="payInfo" class="mono"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Quote</h2>
+        <div class="row grid-2">
+          <div>
+            <label>Units (e.g., DIEM/day)</label>
+            <input id="units" type="number" min="1" value="60" />
+            <label>Asset</label>
+            <select id="asset">
+              <option value="USDC">USDC</option>
+              <option value="ETH">ETH</option>
+            </select>
+            <button id="getQuoteBtn">Get Quote</button>
+            <div id="quoteMsg" class="status"></div>
+          </div>
+          <pre id="quoteOut" class="mono"></pre>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Pay & Verify</h2>
+        <div class="row">
+          <label>Paste Payment Tx Hash</label>
+          <input id="txHash" placeholder="0x..." />
+          <button id="verifyBtn">Verify & Get Key</button>
+          <div id="verifyMsg" class="status"></div>
+          <pre id="keyOut" class="mono"></pre>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const qs = (id) => document.getElementById(id);
+      let account = null;
+      let quote = null;
+      let envInfo = null;
+
+      async function loadEnv() {
+        try {
+          const r = await fetch('/v1/env');
+          if (!r.ok) return;
+          const j = await r.json();
+          envInfo = j;
+          const pay = j && j.payments || {};
+          const assets = (pay.accepted_assets || []).join(', ');
+          const addr = pay.treasury_address || '(not set)';
+          qs('payInfo').textContent = `Treasury: ${addr}\nAssets: ${assets}`;
+        } catch (e) {}
+      }
+
+      async function connectWallet() {
+        try {
+          if (!window.ethereum) { qs('walletStatus').textContent = 'No wallet found (install Metamask)'; return; }
+          const accs = await window.ethereum.request({ method: 'eth_requestAccounts' });
+          account = accs && accs[0] || null;
+          qs('walletStatus').textContent = account ? `Connected: ${account}` : 'Not connected';
+        } catch (e) { qs('walletStatus').textContent = 'Connect failed: ' + e; }
+      }
+
+      async function getQuote() {
+        qs('quoteMsg').textContent = '';
+        qs('quoteOut').textContent = '';
+        const units = parseInt(qs('units').value || '0', 10);
+        const asset = qs('asset').value;
+        try {
+          const res = await fetch(`/v1/quotes?units=${units}&asset=${encodeURIComponent(asset)}`);
+          if (!res.ok) { throw new Error(await res.text()); }
+          quote = await res.json();
+          qs('quoteOut').textContent = JSON.stringify(quote, null, 2);
+          qs('quoteMsg').textContent = 'Send payment to the published treasury address, then paste tx hash below.';
+        } catch (e) {
+          qs('quoteMsg').textContent = 'Quote failed: ' + e;
+        }
+      }
+
+      async function verify() {
+        qs('verifyMsg').textContent = '';
+        qs('keyOut').textContent = '';
+        if (!quote) { qs('verifyMsg').textContent = 'Get a quote first.'; return; }
+        if (!account) { qs('verifyMsg').textContent = 'Connect wallet first.'; return; }
+        const tx = qs('txHash').value.trim();
+        if (!tx) { qs('verifyMsg').textContent = 'Paste transaction hash.'; return; }
+        try {
+          const res = await fetch('/v1/purchases/verify', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quoteId: quote.quoteId, txHash: tx, buyerAddress: account })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) { throw new Error(body.detail || JSON.stringify(body)); }
+          qs('keyOut').textContent = JSON.stringify(body, null, 2);
+          qs('verifyMsg').textContent = 'Key issued (copy and store securely).';
+        } catch (e) { qs('verifyMsg').textContent = 'Verify failed: ' + e; }
+      }
+
+      qs('connectBtn').onclick = connectWallet;
+      qs('getQuoteBtn').onclick = getQuote;
+      qs('verifyBtn').onclick = verify;
+      loadEnv();
+    </script>
+  </body>
+  </html>

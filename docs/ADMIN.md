@@ -77,6 +77,14 @@ Makefile Shortcuts (handy in Replit Shell)
 - `make limits-get TENANT=t1` / `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
 - `make db-compact` and `make db-counters TENANT=t1 [LIMIT=20]`
 
+Buyer Page
+- Navigate to `/admin/buy.html` for a minimal Buyer flow: connect wallet, request quote, pay to the treasury address, paste tx hash, and retrieve the issued key.
+
+Updates
+- Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
+- Rotate + probe from shell: `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`.
+- Server compaction: `make server-db-compact [MINUTES=60 DELETE_AFTER=false]` (works with in-memory KV); then `make db-counters TENANT=t1 [LIMIT=20]`.
+
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
 - Rotate + probe from shell: `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`.
