@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Buy Compute</title>
-    <link rel="stylesheet" href="/admin/style.css" />
-    <style>
-      .row { display: grid; gap: 8px; }
-      .grid-2 { grid-template-columns: 1fr 1fr; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f7f7f9; padding: 10px; border-radius: 6px; }
-    </style>
-  </head>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Buy Compute</title>
+      <link rel="stylesheet" href="/admin/style.css" />
+      <!-- Remove page-local light mono style to use higher-contrast theme -->
+      <style>
+        .row { display: grid; gap: 8px; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+      </style>
+    </head>
   <body>
     <header>
       <h1>Buy Compute</h1>
@@ -22,10 +22,11 @@
 
     <main>
       <style>
-        .layout-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+        .layout-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items:start; }
         @media (max-width: 900px){ .layout-2 { grid-template-columns: 1fr; } }
-        .kvs { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
-        .kvs div{ display:flex; justify-content:space-between; gap:8px; padding:6px 8px; background:#0d0f15; border:1px solid var(--border); border-radius:8px; }
+        .kvs { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
+        .kvs div{ display:flex; justify-content:space-between; gap:8px; padding:8px 10px; background:#0d1016; border:1px solid var(--border); border-radius:8px; }
+        .kvs div strong{ font-variant-numeric: tabular-nums; }
       </style>
 
       <div class="layout-2">
