@@ -136,7 +136,14 @@ Appendix: Replit SQL Quick Setup
 6) Compact counters: `uv run python apps/cli/main.py data:compact-counters --force` or `make db-compact`.
 7) Verify: open `/v1/debug/counters?tenant_id=<id>&limit=20` or `make db-counters TENANT=t1`.
 
- Automation notes
+Automation notes
  - When `BROKER_STORE_BACKEND=sql` is active, the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
  - The CLI auto-creates tables before `data:compact-counters` and `counters:show` if needed.
  - KV autodetection: Redis if `REDIS_URL`/`KV_REDIS_URL` is set; Replit DB if `REPLIT_DB_URL`/`KV_URL` is set; in-memory otherwise. `/v1/env` and `make env-status` reflect this.
+
+Updated shortcuts and operations
+- Rotate + probe in one step: `make rotate-probe TENANT=<id> [LABEL=TeamA MESSAGE=Hello]`.
+- Server-side compaction (works with in-memory KV): `make server-db-compact [MINUTES=60 DELETE_AFTER=false]`.
+- CLI compaction: `make db-compact` (may not see in-memory KV; prefer server compaction in that case).
+- Tune limits then re-probe: `make limits-set TENANT=<id> WINDOW=60 MAX=60` followed by `make rotate-probe TENANT=<id>`.
+- Model override per request: `make chat-admin TENANT=<id> MESSAGE="hi" MODEL="venice-uncensored"` or set `BROKER_DEFAULT_MODEL`.

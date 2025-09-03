@@ -134,6 +134,15 @@ Admin Control Panel:
 
 ## Docker Compose (Postgres + Redis)
 
+
+### New/Updated Make Targets
+
+- make setup-db: install SQL extras (sqlmodel + psycopg2-binary) via uv or pip.
+- make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]: rotate subkey, then probe /v1/chat.
+- make server-db-compact [MINUTES=60 DELETE_AFTER=false]: compact KV ? SQL in-process (works with in-memory KV).
+- make demo-e2e TENANT=t1 [FORCE_SQL=1 ...]: use FORCE_SQL=1 to seed a local SQL tenant instead of Venice.
+- make chat-admin now sets a default Idempotency-Key automatically; override with IDK=<value>.
+
 Spin up Postgres and Redis locally for full E2E validation (SQL store + Redis-backed limiter):
 
 ```
@@ -403,3 +412,37 @@ Idempotency
 - 429 fraction: below 10% during sustained probe at target `ok_rps` (tune `RATE_LIMIT_*` and per-tenant limits accordingly).
 - Error rate: < 1% non-429 errors during probe.
 - Metrics coverage: `/metrics` exposes request counters and latency; add alerts if p90 > 200 ms or 429 fraction > 10% for 5m.
+
+## New/Updated Make Targets
+
+- `make setup-db`: install SQL extras (sqlmodel + psycopg2-binary) via uv or pip.
+- `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`: rotate subkey, then probe `/v1/chat`.
+- `make server-db-compact [MINUTES=60 DELETE_AFTER=false]`: compact KV → SQL in-process (works with in-memory KV).
+- `make demo-e2e TENANT=t1 [FORCE_SQL=1 ...]`: use `FORCE_SQL=1` to seed a local SQL tenant instead of Venice.
+- `make chat-admin` now sets a default Idempotency-Key automatically; override with `IDK=<value>`.
+
+## End-to-End Demo (MVP)
+
+1) Install SQL extras and set env
+- `uv sync --extra db` (or `make setup-db`)
+- Set `SQL_DATABASE_URL` (or `DATABASE_URL`/`POSTGRES_*`) and `BROKER_ADMIN_TOKEN`.
+- Optional: `BROKER_STORE_BACKEND=sql`, `BROKER_DEFAULT_MODEL=venice-uncensored`.
+
+2) Start API and verify
+- `uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 8000`
+- `make env-status`
+
+3) Rotate + probe (recommended)
+- `make rotate-probe TENANT=t1 LABEL="Team A" MESSAGE="Hello $(date +%s)"`
+
+4) Compact + view counters
+- `make server-db-compact DELETE_AFTER=1`
+- `make db-counters TENANT=t1 LIMIT=20`
+
+5) Tune limits and re-probe
+- `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
+- `make rotate-probe TENANT=t1 MESSAGE="after limits"`
+
+Notes
+- CLI compaction (`make db-compact`) may find no keys if KV is in-memory; use `make server-db-compact` in that case.
+- Some Venice deployments do not expose `/openapi.json`; if `venice:probe-openapi` fails, set paths directly if needed (e.g., `VENICE_CREATE_SUBKEY_PATH=/api_keys`).
