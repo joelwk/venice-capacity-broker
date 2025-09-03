@@ -3,7 +3,7 @@
 Minimal static admin UI mounted under the Broker API at `/admin`.
 
 Overview
-- Purpose: day‑to‑day ops + demo leverage without extra infra
+- Purpose: day-to-day ops + demo leverage without extra infra
 - Served by: `apps/broker-api/app.py` mounts `apps/control-plane` via Starlette `StaticFiles`
 - Tech: plain HTML + vanilla JS; token stored in browser `localStorage`
 
@@ -21,7 +21,7 @@ Features (MVP)
   - Health: `GET /health`
   - Env snapshot: `GET /v1/env`
 - Chat Probe
-  - Admin act‑as tenant: `POST /v1/chat` with `X-Tenant-Id: <id>`
+  - Admin act-as tenant: `POST /v1/chat` with `X-Tenant-Id: <id>`
   - Model: request `model` or global `BROKER_DEFAULT_MODEL`
 
 Run Instructions
@@ -29,20 +29,20 @@ Run Instructions
 - Install (venv/pip): create venv, `pip install -r requirements.txt`, then `python -m uvicorn app:app --app-dir apps/broker-api --reload`
 - Open UI: `http://127.0.0.1:8000/admin/`
 - Paste token: `BROKER_ADMIN_TOKEN` into the Auth card (stored in localStorage)
- - Shortcut: `make run-broker` starts the API; `make env-status` prints server/local env including KV detection.
+- Shortcut: `make run-broker` starts the API; `make env-status` prints server/local env including KV detection.
 
 Security
-- Production: set `BROKER_REQUIRE_ADMIN_TOKEN=true` and a strong `BROKER_ADMIN_TOKEN`
+- In production set `BROKER_REQUIRE_ADMIN_TOKEN=true` and a strong `BROKER_ADMIN_TOKEN`
 - UI stores token only in the browser; click Clear to remove it
 - Admin actions use the same backend auth as the `/v1/*` endpoints
 
 Environment & Backends
-- Store backend: `BROKER_STORE_BACKEND=sql|json` (SQL requires SQLModel + configured `SQL_DATABASE_URL`).
-- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in‑memory. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
+- Store backend: SQL is default (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Set `BROKER_STORE_BACKEND=json` only for local file-based development.
+- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in-memory. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
 - Metrics: `/metrics` uses starlette-exporter if installed (`METRICS_BACKEND=starlette`), else builtin text metrics.
 
 Troubleshooting (what we hit)
-- Nix read‑only store errors with pip: install into a venv or use `--user`
+- Nix read-only store errors with pip: install into a venv or use `--user`
 - uvicorn import string must be `module:attribute` (use `app:app` with `--app-dir apps/broker-api`)
 - 401 Unauthorized on admin actions: set/paste `BROKER_ADMIN_TOKEN`
 - 400 on chat probe: set `BROKER_DEFAULT_MODEL` or specify a model in the form
@@ -59,7 +59,7 @@ Reflection: What worked vs. didn’t
 
 Next Steps (from implementation-plan)
 - SQL Store
-  - Set `BROKER_STORE_BACKEND=sql`, configure `SQL_DATABASE_URL`.
+  - Default backend is SQL; configure `SQL_DATABASE_URL`.
   - Drive traffic; compact counters: `make demo-e2e TENANT=t1` or run `python apps/cli/main.py data:compact-counters --force` after some `/v1/chat` calls.
   - Verify counters: `GET /v1/debug/counters?tenant_id=<id>&limit=20` or `make db-counters TENANT=<id>`.
 - Observability
@@ -73,18 +73,13 @@ Next Steps (from implementation-plan)
 
 Makefile Shortcuts (handy in Replit Shell)
 - `make create-tenant TENANT=t1 LABEL="Team A"`
-- `make chat-admin TENANT=t1 [MESSAGE=Hello]` (admin act‑as chat)
+- `make chat-admin TENANT=t1 [MESSAGE=Hello]` (admin act-as chat)
 - `make limits-get TENANT=t1` / `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
 - `make db-compact` and `make db-counters TENANT=t1 [LIMIT=20]`
 
 Buyer Page
 - Navigate to `/admin/buy.html` for a minimal Buyer flow: connect wallet, request quote, pay to the treasury address, paste tx hash, and retrieve the issued key.
- - For ETH quotes, the page offers a one-click `eth_sendTransaction` and an EIP‑681 deeplink. For USDC, copy address/amount helpers and a token link are provided.
-
-Updates
-- Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
-- Rotate + probe from shell: `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`.
-- Server compaction: `make server-db-compact [MINUTES=60 DELETE_AFTER=false]` (works with in-memory KV); then `make db-counters TENANT=t1 [LIMIT=20]`.
+- For ETH quotes, the page offers a one-click `eth_sendTransaction` and an EIP-681 deeplink. For USDC, copy address/amount helpers and a token link are provided.
 
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.

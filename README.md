@@ -119,6 +119,27 @@ Admin Control Panel:
 - Browse `/admin/` for a minimal UI to manage tenants and limits, inspect health/env, and send a chat probe.
 - The UI prompts once for `BROKER_ADMIN_TOKEN` and stores it in your browser `localStorage`.
 - Chat probe requires a model: set `BROKER_DEFAULT_MODEL` (or provide a model field in the form).
+
+## Implementation Status (Plan Alignment)
+
+This repository tracks the implementation plan in `implementation-plan` and prioritizes core infrastructure and marketplace first.
+
+- Done: Broker core and marketplace scaffolding
+  - Broker API: multi-tenant `/v1` endpoints (tenants, chat, limits), idempotency middleware, optional KV-backed sliding-window limiter, basic metrics, SQL store (default) with JSON fallback.
+  - Admin UI: static control panel mounted at `/admin` with auth prompt, health/env view, tenant and limits management, chat probe. Buyer page at `/admin/buy.html`.
+  - Marketplace: feature-gated Quotes and Purchases endpoints with on-chain ETH/USDC payment verification on Base; issues scoped Venice subkeys on success.
+  - Venice SDK + Key Manager: autonomous root/subkey flows; CLI and Makefile helpers for rotation, probing, and compaction.
+
+- Needs attention: hardening and productionization
+  - Migrations and compaction flows: ensure docs and scripts are reliable for prod.
+  - Observability: prefer `starlette-exporter` metrics; consider tracing integration for agent/graph workflows.
+  - Security: enforce `BROKER_REQUIRE_ADMIN_TOKEN=true` in production; CORS allowlists for buyer/admin; secret hygiene; clear defaults for `BROKER_DEFAULT_MODEL`.
+  - Pricing/risk: evolve static pricing to policy-driven engine; validate rate/decimals across assets; add receipts/audit trails.
+
+- Next steps (in order)
+  1) Core hardening: finalize metrics and env introspection; optional Redis-backed limiter where available.
+  2) Marketplace to production: enable flags in deploys, admin tables for quotes/purchases/utilization, finalize receipts; polish buyer UX.
+  3) Agent operations: wire AgentKit actions end-to-end, expand StakeMaster/ArbiDiem loops, add Quorum and AI Treasurer workflows via LangGraph.
  - Full guide: see `docs/ADMIN.md`.
 
 ## Makefile Shortcuts
@@ -168,7 +189,7 @@ docker compose down -v
 
 Notes:
 - The application still runs fine without Docker: tests fall back to SQLite; Redis-dependent tests skip if `REDIS_URL` is unset.
-- Use `BROKER_STORE_BACKEND=sql` to force the SQL tenant store if validating DB paths.
+  
 
 Idempotency TTL
 - Canonical env is `IDEMPOTENCY_TTL_SECONDS` (default 300). For compatibility, the app also reads `IDEM_TTL_SECONDS`.
@@ -188,9 +209,9 @@ Notes:
     - Uniswap V2 router ABI (`abi/uniswap_v2_router.json`) with `TRADE_PATH`
     - Aerodrome router ABI (`abi/aerodrome_router.json`) single-hop with `AERODROME_STABLE`
 - Venice client now performs real HTTP requests; endpoints are configurable via env.
-- Broker store backend:
-  - Default stores tenants in JSON at `apps/broker-api/tenants.json`.
-  - To use SQL, set `BROKER_STORE_BACKEND=sql` and configure `SQL_DATABASE_URL` (or POSTGRES_* envs). Install `sqlmodel` and a DB driver like `psycopg2-binary`.
+ - Broker store backend:
+  - Default uses SQL (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Install `sqlmodel` and a DB driver like `psycopg2-binary`.
+  - For file-based dev only, set `BROKER_STORE_BACKEND=json` (stores `apps/broker-api/tenants.json`).
 - Broker limits (admin):
   - View: `GET /v1/tenants/{tenantId}/broker-limits` (requires admin bearer).
   - Set: `POST /v1/tenants/{tenantId}/broker-limits` with `{ "windowSeconds": 60, "maxRequests": 120, "label": "premium" }`.
@@ -278,7 +299,7 @@ Tenants & keys
 SQL backend quick smoke (local or Replit SQL)
 - Set `SQL_DATABASE_URL` or `DATABASE_URL` to a Postgres connection string.
 - Optionally run migrations: `uv run alembic upgrade head` (tables will auto-create on first use otherwise).
-- Start API with `BROKER_STORE_BACKEND=sql`.
+- Start API.
 - Create a tenant via `POST /v1/tenants` (requires `BROKER_ADMIN_TOKEN` and `VENICE_PARENT_KEY`).
 - Compact counters (if using the limiter): `uv run python apps/cli/main.py data:compact-counters --force`.
 - Inspect via admin endpoint: `GET /v1/debug/counters?tenant_id=<id>&limit=20` or CLI `counters:show`.
@@ -453,7 +474,7 @@ Buyer UI
 1) Install SQL extras and set env
 - `uv sync --extra db` (or `make setup-db`)
 - Set `SQL_DATABASE_URL` (or `DATABASE_URL`/`POSTGRES_*`) and `BROKER_ADMIN_TOKEN`.
-- Optional: `BROKER_STORE_BACKEND=sql`, `BROKER_DEFAULT_MODEL=venice-uncensored`.
+- Optional: set `BROKER_DEFAULT_MODEL=venice-uncensored` (or your default model).
 
 2) Start API and verify
 - `uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 8000`

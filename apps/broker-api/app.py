@@ -171,7 +171,7 @@ try:
     # Choose store backend: SQL if requested and available, else JSON file
     import os as _os
 
-    _backend = (_os.getenv("BROKER_STORE_BACKEND") or "json").strip().lower()
+    _backend = (_os.getenv("BROKER_STORE_BACKEND") or "sql").strip().lower()
     if _backend == "sql" and _SQLTenantStore is not None:
         try:
             store = _SQLTenantStore()  # type: ignore[call-arg]

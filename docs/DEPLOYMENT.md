@@ -28,10 +28,11 @@ Makefile shortcuts (operator quality-of-life)
 - `make demo-e2e TENANT=t1 [LABEL=TeamA]` seeds a tenant (SQL if no Venice parent key), sends a chat, compacts counters, and prints recent counters.
 - `make db-compact` compacts KV -> SQL counters; `make db-counters TENANT=t1 [LIMIT=20]` shows recent counters.
 
-Optional: SQL-backed store (Replit SQL)
-- Set `BROKER_STORE_BACKEND=sql` and `SQL_DATABASE_URL`.
+Default: SQL-backed store (Replit SQL or Postgres)
+- Ensure `SQL_DATABASE_URL` (or `POSTGRES_*`) is configured.
 - (Optional) `uv run alembic upgrade head` to apply migrations.
-- Use CLI to compact KV → SQL counters:
+- For a file-based dev fallback, set `BROKER_STORE_BACKEND=json`.
+- Use CLI to compact KV + SQL counters:
   - `uv run python apps/cli/main.py data:compact-counters --force` or `make db-compact`
 - Inspect counters:
   - API: `GET /v1/debug/counters?tenant_id=<id>&limit=20`
@@ -72,72 +73,32 @@ Optional: SQL-backed store (Replit SQL)
 
 Secrets — Recovery & Rotation
 - Purpose: regain admin access if secrets are wiped or rotate on schedule.
-- Scope: affects only admin‑gated endpoints; tenant subkeys continue to function.
+- Scope: affects only admin-gated endpoints; tenant subkeys continue to function.
 
 1) Generate a new strong admin token
 - Python: `python -c "import secrets; print(secrets.token_urlsafe(48))"`
 - OpenSSL: `openssl rand -hex 32`
 - Node.js: `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`
 - PowerShell (Windows):
-  `\$b = New-Object 'Byte[]' 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes(\$b); [Convert]::ToBase64String(\$b)`
+  `$b = New-Object 'Byte[]' 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`
 
 2) Set or restore the secret in your environment
 - Replit: Deployments → Secrets → add `BROKER_ADMIN_TOKEN` (and set `BROKER_REQUIRE_ADMIN_TOKEN=true` for production).
-- Local dev: add to `.env` (see `.env.example`), then export or use your runner (`uv run` reads env by default).
-- GitHub Actions: Settings → Secrets and variables → Actions → New repository secret `BROKER_ADMIN_TOKEN`.
-- Kubernetes: `kubectl create secret generic broker-secrets --from-literal=BROKER_ADMIN_TOKEN=<token> --dry-run=client -o yaml | kubectl apply -f -` and ensure the deployment mounts it as env.
+- Local dev: add to your shell env or `.env`.
 
-3) Restart or redeploy to pick up the new value
-- Replit: Stop/Run or Redeploy the Web Service.
-- Local: restart the uvicorn process.
-- Kubernetes: `kubectl rollout restart deployment/<broker-deployment>`.
-
-4) Verify health and admin access
-- Health (no auth): `curl -fsS http://<host>/health` → `{ "status": "ok" }`.
-- Admin‑gated endpoint (requires token): for example, create a test tenant (replace values):
-  `curl -X POST http://<host>/v1/tenants -H "Authorization: Bearer $BROKER_ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"tenant_id":"test1","label":"test","quota":0}'`
-  - Expected: `200` with tenant payload; otherwise `401` indicates the token is not set or incorrect.
-
-Emergency operation (if admin token is missing)
-- Temporarily allow startup without admin token by setting `BROKER_REQUIRE_ADMIN_TOKEN=false`.
-- Only use for development or to regain access, then immediately set a new `BROKER_ADMIN_TOKEN`, flip `BROKER_REQUIRE_ADMIN_TOKEN=true`, and restart.
-
-Notes & impact
-- Rotating `BROKER_ADMIN_TOKEN` does not affect existing tenant subkeys; it only protects admin endpoints.
-- Keep the token out of source control; store in secret managers (Replit Secrets, GitHub Actions, K8s Secrets).
-- Prefer long, random, URL‑safe tokens (≥32 bytes entropy).
-
-5) Manual Tenant Flow (Admin)
-1. Create tenant: `POST /v1/tenants` with `{ tenant_id, label, quota }`.
-2. Get tenant: `GET /v1/tenants/{id}`.
-3. Set per-tenant broker limits: `POST /v1/tenants/{id}/broker-limits` with `{ "windowSeconds": 60, "maxRequests": 120, "label": "premium" }`.
-4. Revoke: `POST /v1/tenants/{id}/revoke`.
-
-Notes
-- Do not publish this package to public registries. CI guards forbid publish commands; enforce CI as a required status check.
-- Keep LICENSE and NOTICE in the repo to make proprietary status explicit.
-- For any doubts, prefer Replit Deployments over custom infra.
-
-
-
-Appendix: Replit SQL Quick Setup
-1) Add Cloud Service → SQL Database in your Repl.
-2) Click “View database connection credentials”. Copy the Connection URI.
-3) In Deployments → Secrets, add:
-   - `BROKER_STORE_BACKEND=sql`
-   - `SQL_DATABASE_URL` = paste the URI. Acceptable forms:
-     - `postgresql://USER:PASSWORD@HOST:PORT/DBNAME` (recommended)
-     - `postgresql+psycopg2://USER:PASSWORD@HOST:PORT/DBNAME`
-     - If it starts with `postgres://`, change to `postgresql://`
-     - If TLS is enforced, append `?sslmode=require`
-   - Alternatively, set: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
-4) Run migrations (one‑time): `uv run alembic upgrade head` (or `python -m alembic upgrade head`).
+Database: Postgres URL formats (Replit SQL)
+- `postgresql://USER:PASSWORD@HOST:PORT/DBNAME` (recommended)
+- `postgresql+psycopg2://USER:PASSWORD@HOST:PORT/DBNAME`
+- If it starts with `postgres://`, change to `postgresql://`
+- If TLS is enforced, append `?sslmode=require`
+- Alternatively, set: `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`.
+4) Run migrations (one-time): `uv run alembic upgrade head` (or `python -m alembic upgrade head`).
 5) Drive traffic (create a tenant, send `/v1/chat`). Quick path: `make demo-e2e TENANT=t1`.
 6) Compact counters: `uv run python apps/cli/main.py data:compact-counters --force` or `make db-compact`.
 7) Verify: open `/v1/debug/counters?tenant_id=<id>&limit=20` or `make db-counters TENANT=t1`.
 
 Automation notes
- - When `BROKER_STORE_BACKEND=sql` is active, the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
+ - With the SQL backend (default), the API ensures tables exist at startup via `SQLModel.metadata.create_all(...)`.
  - The CLI auto-creates tables before `data:compact-counters` and `counters:show` if needed.
  - KV autodetection: Redis if `REDIS_URL`/`KV_REDIS_URL` is set; Replit DB if `REPLIT_DB_URL`/`KV_URL` is set; in-memory otherwise. `/v1/env` and `make env-status` reflect this.
 
@@ -149,7 +110,7 @@ Updated shortcuts and operations
 - Model override per request: `make chat-admin TENANT=<id> MESSAGE="hi" MODEL="venice-uncensored"` or set `BROKER_DEFAULT_MODEL`.
 
 Buyer Flow (flag-gated)
-- Shortcut: run 'make enable-buyer' to append the common flags to .env, then restart the broker.
+- Shortcut: run `make enable-buyer` to append the common flags to `.env`, then restart the broker.
 - Enable features via env and restart broker:
   - `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`
   - `CORS_ENABLED=true` with `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
@@ -157,6 +118,6 @@ Buyer Flow (flag-gated)
   - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and `USDC_ADDRESS` for USDC
 - UI path: `/admin/buy.html` → connect wallet → get quote → pay → paste tx hash → receive subkey
 - API endpoints:
-  - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`
-  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
-  - `GET /v1/purchases/{purchaseId}`
+ - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`
+ - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
+ - `GET /v1/purchases/{purchaseId}`
