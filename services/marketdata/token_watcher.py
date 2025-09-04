@@ -9,6 +9,14 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+# Optional: load .env automatically if python-dotenv is installed
+try:  # pragma: no cover - optional convenience
+    from dotenv import load_dotenv  # type: ignore
+
+    load_dotenv()
+except Exception:
+    pass
+
 from db.session import get_session, create_db_and_tables
 from db.models import AssetToken, TokenSnapshot
 

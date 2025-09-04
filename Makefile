@@ -142,8 +142,9 @@ demo-e2e:
 
 .PHONY: watch-tokens
 watch-tokens:
-	@if [ -z "$$BASESCAN_API_KEY" ] && [ -z "$$ETHERSCAN_API_KEY" ]; then echo "Set BASESCAN_API_KEY or ETHERSCAN_API_KEY"; exit 1; fi
-	@$(RUNPY) services/marketdata/token_watcher.py
+	@set -a; [ -f .env ] && . .env; set +a; \
+	if [ -z "$$BASESCAN_API_KEY" ] && [ -z "$$ETHERSCAN_API_KEY" ]; then echo "Set BASESCAN_API_KEY or ETHERSCAN_API_KEY"; exit 1; fi; \
+	$(RUNPY) services/marketdata/token_watcher.py
 # Pull defaults from .env/.env.example without overriding exported env
 # These are used only for Make computations (e.g., default MODEL)
 BROKER_DEFAULT_MODEL_FILE := $(strip $(shell awk -F= '/^BROKER_DEFAULT_MODEL[[:space:]]*=/{print $$2}' .env 2>/dev/null | tr -d '\r'))
