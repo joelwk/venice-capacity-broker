@@ -142,7 +142,8 @@ demo-e2e:
 
 .PHONY: watch-tokens
 watch-tokens:
-	@set -a; [ -f .env ] && . .env; set +a; \
+	@# Load .env if present (ignore if missing)
+	@if [ -f .env ]; then set -a; . .env; set +a; fi; \
 	if [ -z "$$BASESCAN_API_KEY" ] && [ -z "$$ETHERSCAN_API_KEY" ]; then echo "Set BASESCAN_API_KEY or ETHERSCAN_API_KEY"; exit 1; fi; \
 	$(RUNPY) services/marketdata/token_watcher.py
 # Pull defaults from .env/.env.example without overriding exported env
