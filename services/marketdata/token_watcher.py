@@ -184,6 +184,19 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
     symbol = sym2
     name = name2
     decimals = dec2
+    # Fallback to token_info if web3 metadata is unavailable
+    if (not symbol or decimals is None) and isinstance(info, dict):
+        try:
+            if not symbol:
+                symbol = (info.get("symbol") or info.get("tokenSymbol") or None)  # type: ignore[assignment]
+            if not name:
+                name = (info.get("tokenName") or info.get("name") or None)  # type: ignore[assignment]
+            if decimals is None:
+                dv = info.get("divisor") or info.get("decimals")
+                if dv is not None:
+                    decimals = int(str(dv))
+        except Exception:
+            pass
     _dbg_sources: Dict[str, str] = {}
     _dbg_sources["metadata"] = "web3" if symbol or decimals is not None else "unknown"
 
@@ -199,7 +212,13 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
                 holders = int(str(v))
         except Exception:
             holders = None
-    transfers_24h = client.recent_transfers_count(address, minutes=1440, max_events=200)
+    # Configurable cap to avoid heavy responses on hot tokens
+    _max_events = 0
+    try:
+        _max_events = int(os.getenv("TOKEN_WATCH_MAX_EVENTS") or "200")
+    except Exception:
+        _max_events = 200
+    transfers_24h = client.recent_transfers_count(address, minutes=1440, max_events=_max_events)
     _dbg_sources["transfers_24h"] = "logs.getLogs" if isinstance(transfers_24h, int) else "none"
 
     # Price: attempt to read from tokeninfo.price.rate; else DEX quote
