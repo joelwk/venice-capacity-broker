@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
-import sqlalchemy as sa
+try:  # optional: only needed when building real SQL tables
+    import sqlalchemy as sa  # type: ignore
+    _HAS_SA = hasattr(sa, "Column") and hasattr(sa, "Numeric")
+except Exception:  # noqa: BLE001
+    sa = None  # type: ignore
+    _HAS_SA = False
 
 try:
     from sqlmodel import SQLModel, Field
@@ -133,10 +138,18 @@ class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
     ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
     price_usd: Optional[float] = None
     # Use high-precision NUMERIC to avoid BIGINT overflow for large ERC-20 supplies
-    supply_total: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
-    supply_circulating: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    # In test environments without SQLAlchemy, fall back to plain Optional[int]
+    if _HAS_SA:
+        supply_total: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+        supply_circulating: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    else:
+        supply_total: Optional[int] = None
+        supply_circulating: Optional[int] = None
     holders: Optional[int] = None
     transfers_24h: Optional[int] = None
     marketcap_usd: Optional[float] = None
-    max_total_supply: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    if _HAS_SA:
+        max_total_supply: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    else:
+        max_total_supply: Optional[int] = None
     raw_json: Optional[str] = None  # lightly structured JSON payload for auditing
