@@ -32,6 +32,13 @@ KNOWN_TOKENS = {
     "0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf": {"symbol": "VVV", "name": "Venice Finance", "decimals": 18},
 }
 
+# Default quote token per chain (used if QUOTE_TOKEN_ADDRESS is not set)
+# Currently only Base mainnet is defined; extend as needed.
+DEFAULT_QUOTE_TOKEN_BY_CHAIN: Dict[int, str] = {
+    # Base mainnet USDC (6 decimals)
+    8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+}
+
 
 @dataclass
 class TokenMetrics:
@@ -187,6 +194,26 @@ def _truthy_env(name: str, default: str = "false") -> bool:
     return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _effective_quote_token_address() -> Optional[str]:
+    """Return QUOTE_TOKEN_ADDRESS from env or a chain-specific default.
+
+    The default helps local/dev runs where .env is incomplete. For Base (8453),
+    default to USDC. If a default is used, emit a debug note.
+    """
+    env_qt = os.getenv("QUOTE_TOKEN_ADDRESS")
+    if env_qt:
+        return env_qt.strip()
+    # Determine chain id from env (fall back to Base)
+    try:
+        chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
+    except Exception:
+        chain_id = 8453
+    default_qt = DEFAULT_QUOTE_TOKEN_BY_CHAIN.get(chain_id)
+    if default_qt and _truthy_env("TOKEN_WATCH_DEBUG"):
+        print(f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set; using default for chain {chain_id}: {default_qt}")
+    return default_qt
+
+
 def _price_via_dex(address: str) -> Optional[float]:
     # Price token in QUOTE_TOKEN_ADDRESS (e.g., USDC) using the DEX aggregator.
     try:
@@ -195,10 +222,10 @@ def _price_via_dex(address: str) -> Optional[float]:
         if _truthy_env("TOKEN_WATCH_DEBUG"):
             print(f"[token-watcher][debug] Attempting DEX price for {address}")
         
-        quote = os.getenv("QUOTE_TOKEN_ADDRESS")
+        quote = _effective_quote_token_address()
         if not quote:
             if _truthy_env("TOKEN_WATCH_DEBUG"):
-                print(f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set")
+                print(f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set and no default available")
             return None
         if address.lower() == quote.lower():
             return 1.0
@@ -285,10 +312,14 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
         price_usd = px
         if px is not None:
             _dbg_sources["price_usd"] = "dex"
-        elif os.getenv("QUOTE_TOKEN_ADDRESS") and address.lower() == os.getenv("QUOTE_TOKEN_ADDRESS").lower():
-            _dbg_sources["price_usd"] = "quote=1.0"
         else:
-            _dbg_sources["price_usd"] = "none"
+            # If the token is the quote token, set price to 1.0 even without DEX
+            qt = _effective_quote_token_address()
+            if qt and address.lower() == qt.lower():
+                price_usd = 1.0
+                _dbg_sources["price_usd"] = "quote=1.0"
+            else:
+                _dbg_sources["price_usd"] = "none"
 
     supply_circ: Optional[int] = None
     max_total_supply: Optional[int] = None
