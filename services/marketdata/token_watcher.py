@@ -139,34 +139,6 @@ class BaseScanClient:
         except Exception:
             return None
 
-    def recent_transfers_count(self, address: str, minutes: int = 1440, max_events: int = 200) -> Optional[int]:
-        try:
-            j = self._get(
-                {
-                    "module": "account",
-                    "action": "tokentx",
-                    "contractaddress": address,
-                    "page": "1",
-                    "offset": str(max_events),
-                    "sort": "desc",
-                }
-            )
-            res = j.get("result")
-            if not isinstance(res, list):
-                return None
-            cutoff = int(time.time() - minutes * 60)
-            cnt = 0
-            for ev in res:
-                try:
-                    ts = int(ev.get("timeStamp") or ev.get("timeStamp"))
-                except Exception:
-                    continue
-                if ts >= cutoff:
-                    cnt += 1
-            return cnt
-        except Exception:
-            return None
-
 
 def _erc20_metadata_via_web3(address: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     try:
@@ -181,6 +153,10 @@ def _erc20_metadata_via_web3(address: str) -> Tuple[Optional[str], Optional[str]
         return symbol, name, decimals
     except Exception:
         return None, None, None
+
+
+def _truthy_env(name: str, default: str = "false") -> bool:
+    return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _price_via_dex(address: str) -> Optional[float]:
@@ -202,31 +178,59 @@ def _price_via_dex(address: str) -> Optional[float]:
 
 
 def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
-    # Prefer on-chain metadata to avoid API schema inconsistencies
+    # Prefer on-chain metadata; keep token_info only for optional fields/raw
+    info = client.token_info(address) or {}
     sym2, name2, dec2 = _erc20_metadata_via_web3(address)
     symbol = sym2
     name = name2
     decimals = dec2
+    _dbg_sources: Dict[str, str] = {}
+    _dbg_sources["metadata"] = "web3" if symbol or decimals is not None else "unknown"
 
     # Supply and holders
     total_supply = client.total_supply(address)
+    _dbg_sources["supply_total"] = "stats.tokensupply" if total_supply is not None else "none"
     # Holder counts are optional and often gated; skip unless explicitly enabled
-    holders: Optional[int]
-    if (os.getenv("TOKEN_WATCH_ENABLE_HOLDERS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
-        holders = client.token_info(address).get("holders") if client.token_info(address) else None  # type: ignore[assignment]
-    else:
-        holders = None
+    holders: Optional[int] = None
+    if _truthy_env("TOKEN_WATCH_ENABLE_HOLDERS"):
+        try:
+            v = info.get("holders") if isinstance(info, dict) else None
+            if v is not None:
+                holders = int(str(v))
+        except Exception:
+            holders = None
     transfers_24h = client.recent_transfers_count(address, minutes=1440, max_events=200)
+    _dbg_sources["transfers_24h"] = "logs.getLogs" if isinstance(transfers_24h, int) else "none"
 
     # Price: attempt to read from tokeninfo.price.rate; else DEX quote
     price_usd: Optional[float] = None
     # Do not rely on tokeninfo for price; use DEX or 1.0 for quote token
     if price_usd is None:
-        price_usd = _price_via_dex(address)
+        px = _price_via_dex(address)
+        price_usd = px
+        if px is not None:
+            _dbg_sources["price_usd"] = "dex"
+        elif os.getenv("QUOTE_TOKEN_ADDRESS") and address.lower() == os.getenv("QUOTE_TOKEN_ADDRESS").lower():
+            _dbg_sources["price_usd"] = "quote=1.0"
+        else:
+            _dbg_sources["price_usd"] = "none"
 
-    supply_circ = None
-    max_total_supply = None
-    # Circulating/max supply are often absent; keep None unless provided via token_info
+    supply_circ: Optional[int] = None
+    max_total_supply: Optional[int] = None
+    # Circulating/max supply: optional best-effort from token_info
+    if isinstance(info, dict):
+        try:
+            circ = info.get("circulatingSupply") or info.get("circulating_supply")
+            if circ is not None:
+                supply_circ = int(float(str(circ)))
+        except Exception:
+            pass
+        try:
+            m = info.get("maxTotalSupply") or info.get("max_supply")
+            if m is not None:
+                max_total_supply = int(float(str(m)))
+        except Exception:
+            pass
 
     marketcap_usd = None
     try:
@@ -234,8 +238,22 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
             base_supply = supply_circ if supply_circ is not None else total_supply
             if base_supply is not None:
                 marketcap_usd = float(price_usd) * float(base_supply) / float(10 ** (decimals or 0))
+                _dbg_sources["marketcap_usd"] = "computed"
     except Exception:
         pass
+
+    # Optional debug print of sources
+    if _truthy_env("TOKEN_WATCH_DEBUG"):
+        try:
+            dbg = {
+                "address": address,
+                "symbol": symbol,
+                "decimals": decimals,
+                "sources": _dbg_sources,
+            }
+            print("[token-watcher][debug] "+json.dumps(dbg))
+        except Exception:
+            pass
 
     return TokenMetrics(
         address=address,
@@ -316,6 +334,7 @@ def run_watch_loop() -> None:
         raise RuntimeError("No token addresses configured. Set TOKEN_WATCH_ADDRESSES or VVV_TOKEN_ADDRESS/DIEM_TOKEN_ADDRESS/USDC_ADDRESS")
 
     client = BaseScanClient(api_key=api_key, base_url=base_url, chain_id=chain_id)
+    once = _truthy_env("TOKEN_WATCH_ONCE") or _truthy_env("WATCH_TOKENS_ONCE")
     print(f"[token-watcher] tracking {len(addrs)} token(s): {', '.join(addrs)}; interval={interval}s")
     while True:
         for addr in addrs:
@@ -325,6 +344,8 @@ def run_watch_loop() -> None:
                 print(f"[token-watcher] {metrics.symbol or ''} {addr[:6]}.. price={metrics.price_usd} holders={metrics.holders} tx24h={metrics.transfers_24h}")
             except Exception as e:  # noqa: BLE001
                 print(f"[token-watcher] error for {addr}: {e}")
+        if once:
+            break
         time.sleep(interval)
 
 
