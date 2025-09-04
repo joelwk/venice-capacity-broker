@@ -21,7 +21,8 @@ from db.session import get_session, create_db_and_tables
 from db.models import AssetToken, TokenSnapshot
 
 
-DEFAULT_BASESCAN_URL = "https://api.basescan.org/api"
+# Default to Etherscan V2 unified endpoint and pass chainid for Base (8453)
+DEFAULT_ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api"
 
 
 @dataclass
@@ -41,13 +42,21 @@ class TokenMetrics:
 
 
 class BaseScanClient:
-    def __init__(self, api_key: str, base_url: str = DEFAULT_BASESCAN_URL, timeout_s: int = 20) -> None:
+    def __init__(self, api_key: str, base_url: str = DEFAULT_ETHERSCAN_V2_URL, chain_id: Optional[int] = None, timeout_s: int = 20) -> None:
         self.api_key = api_key
         self.base_url = base_url
+        # Etherscan V2 requires a chainid parameter; default to Base mainnet (8453)
+        if chain_id is None:
+            try:
+                chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
+            except Exception:
+                chain_id = 8453
+        self.chain_id = chain_id
         self.timeout_s = timeout_s
 
     def _get(self, params: Dict[str, str]) -> Dict[str, object]:
-        p = {**params, "apikey": self.api_key}
+        # Etherscan V2 style: base_url + module/action with chainid + apikey
+        p = {**params, "apikey": self.api_key, "chainid": str(self.chain_id)}
         r = requests.get(self.base_url, params=p, timeout=self.timeout_s)
         r.raise_for_status()
         j = r.json()
@@ -266,10 +275,15 @@ def persist_metrics(m: TokenMetrics) -> None:
 
 
 def run_watch_loop() -> None:
-    api_key = os.getenv("BASESCAN_API_KEY") or os.getenv("ETHERSCAN_API_KEY")
+    api_key = os.getenv("ETHERSCAN_API_KEY") or os.getenv("BASESCAN_API_KEY")
     if not api_key:
         raise RuntimeError("Set BASESCAN_API_KEY or ETHERSCAN_API_KEY in environment")
-    base_url = os.getenv("BASESCAN_API_URL", DEFAULT_BASESCAN_URL)
+    # Prefer Etherscan V2 endpoint; allow override for testing
+    base_url = os.getenv("ETHERSCAN_API_URL") or os.getenv("BASESCAN_API_URL") or DEFAULT_ETHERSCAN_V2_URL
+    try:
+        chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
+    except Exception:
+        chain_id = 8453
     interval = int(os.getenv("TOKEN_WATCH_INTERVAL_SECONDS") or 300)
 
     # Addresses to track: prefer explicit list, else known env tokens.
@@ -285,7 +299,7 @@ def run_watch_loop() -> None:
     if not addrs:
         raise RuntimeError("No token addresses configured. Set TOKEN_WATCH_ADDRESSES or VVV_TOKEN_ADDRESS/DIEM_TOKEN_ADDRESS/USDC_ADDRESS")
 
-    client = BaseScanClient(api_key=api_key, base_url=base_url)
+    client = BaseScanClient(api_key=api_key, base_url=base_url, chain_id=chain_id)
     print(f"[token-watcher] tracking {len(addrs)} token(s): {', '.join(addrs)}; interval={interval}s")
     while True:
         for addr in addrs:
