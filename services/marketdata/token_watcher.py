@@ -67,13 +67,12 @@ class BaseScanClient:
             raise RuntimeError(str(j.get("result") or j))
         return j
 
+    # Optional helper kept for future expansion; not relied upon for core fields
     def token_info(self, address: str) -> Optional[dict]:
         try:
             j = self._get({"module": "token", "action": "tokeninfo", "contractaddress": address})
             res = j.get("result")
-            # Etherscan v2 may return a dict with nested token info and price
             if isinstance(res, dict):
-                # Common shapes: { tokenInfo: {...}, price: {...} }
                 ti = res.get("tokenInfo") if isinstance(res.get("tokenInfo"), dict) else None
                 if ti:
                     out = dict(ti)
@@ -83,9 +82,9 @@ class BaseScanClient:
                 return res
             if isinstance(res, list) and res:
                 return res[0]
-            return None
         except Exception:
-            return None
+            pass
+        return None
 
     def total_supply(self, address: str) -> Optional[int]:
         try:
@@ -98,28 +97,47 @@ class BaseScanClient:
         except Exception:
             return None
 
-    def holder_count(self, address: str) -> Optional[int]:
-        # Not all chains or plans expose a direct holder count in v2. Try a few shapes.
-        for action in ("tokenholdercount", "tokenholders", "tokenholderlist"):
-            try:
-                j = self._get({"module": "token", "action": action, "contractaddress": address, "page": "1", "offset": "1"})
-                res = j.get("result")
-                # Direct numeric
-                if isinstance(res, str) and res.isdigit():
-                    return int(res)
-                # Dict with total/count
-                if isinstance(res, dict):
-                    for k in ("total", "count", "recordsFiltered", "recordsTotal"):
-                        v = res.get(k)
-                        if v is not None:
-                            try:
-                                return int(str(v))
-                            except Exception:
-                                pass
-                # Some endpoints return list only; cannot infer total
-            except Exception:
-                continue
-        return None
+    def block_number_by_time(self, ts_epoch: int) -> Optional[int]:
+        try:
+            j = self._get({"module": "block", "action": "getblocknobytime", "timestamp": str(ts_epoch), "closest": "before"})
+            res = j.get("result")
+            if isinstance(res, str) and res.isdigit():
+                return int(res)
+            return int(str(res))
+        except Exception:
+            return None
+
+    def recent_transfers_count(self, address: str, minutes: int = 1440, max_events: int = 1000) -> Optional[int]:
+        """Count Transfer events in the last window via logs/getLogs (v2-compatible).
+
+        Uses block.getblocknobytime to compute fromBlock.
+        """
+        try:
+            cutoff_ts = int(time.time() - minutes * 60)
+            from_block = self.block_number_by_time(cutoff_ts)
+            if not from_block:
+                return None
+            # ERC-20 Transfer signature
+            topic0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+            j = self._get(
+                {
+                    "module": "logs",
+                    "action": "getLogs",
+                    "address": address,
+                    "fromBlock": str(from_block),
+                    "toBlock": "latest",
+                    "topic0": topic0,
+                    "page": "1",
+                    "offset": str(max_events),
+                    "sort": "desc",
+                }
+            )
+            res = j.get("result")
+            if isinstance(res, list):
+                return min(len(res), max_events)
+            return None
+        except Exception:
+            return None
 
     def recent_transfers_count(self, address: str, minutes: int = 1440, max_events: int = 200) -> Optional[int]:
         try:
@@ -184,55 +202,31 @@ def _price_via_dex(address: str) -> Optional[float]:
 
 
 def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
-    info = client.token_info(address) or {}
-    # Parse metadata, fallback to on-chain if missing
-    symbol = (info.get("symbol") if isinstance(info, dict) else None) or None
-    name = (info.get("tokenName") if isinstance(info, dict) else None) or info.get("name") if isinstance(info, dict) else None
-    try:
-        decimals = int(info.get("divisor") or info.get("decimals")) if isinstance(info, dict) else None
-    except Exception:
-        decimals = None
-    if not symbol or decimals is None:
-        sym2, name2, dec2 = _erc20_metadata_via_web3(address)
-        symbol = symbol or sym2
-        name = name or name2
-        decimals = decimals if decimals is not None else dec2
+    # Prefer on-chain metadata to avoid API schema inconsistencies
+    sym2, name2, dec2 = _erc20_metadata_via_web3(address)
+    symbol = sym2
+    name = name2
+    decimals = dec2
 
     # Supply and holders
     total_supply = client.total_supply(address)
-    holders = client.holder_count(address)
+    # Holder counts are optional and often gated; skip unless explicitly enabled
+    holders: Optional[int]
+    if (os.getenv("TOKEN_WATCH_ENABLE_HOLDERS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+        holders = client.token_info(address).get("holders") if client.token_info(address) else None  # type: ignore[assignment]
+    else:
+        holders = None
     transfers_24h = client.recent_transfers_count(address, minutes=1440, max_events=200)
 
     # Price: attempt to read from tokeninfo.price.rate; else DEX quote
     price_usd: Optional[float] = None
-    if isinstance(info, dict):
-        try:
-            price_obj = info.get("price")
-            if isinstance(price_obj, dict):
-                # Try common v2 fields
-                rate = price_obj.get("rate") or price_obj.get("usd") or price_obj.get("usdPrice") or price_obj.get("priceUsd")
-                if rate is not None:
-                    price_usd = float(rate)
-        except Exception:
-            pass
+    # Do not rely on tokeninfo for price; use DEX or 1.0 for quote token
     if price_usd is None:
         price_usd = _price_via_dex(address)
 
     supply_circ = None
     max_total_supply = None
-    if isinstance(info, dict):
-        try:
-            circ = info.get("circulatingSupply") or info.get("circulating_supply")
-            if circ is not None:
-                supply_circ = int(float(str(circ)))
-        except Exception:
-            pass
-        try:
-            m = info.get("maxTotalSupply") or info.get("max_supply")
-            if m is not None:
-                max_total_supply = int(float(str(m)))
-        except Exception:
-            pass
+    # Circulating/max supply are often absent; keep None unless provided via token_info
 
     marketcap_usd = None
     try:
