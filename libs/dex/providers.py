@@ -87,13 +87,21 @@ class AerodromeDexProvider(DexProvider):
         self.stable = stable
 
     def _routes(self, path: List[Address], stable: Optional[bool] = None) -> List[Tuple[Address, Address, bool]]:
-        # Single hop route only for now
-        if len(path) != 2:
-            raise ValueError("Aerodrome provider currently supports single-hop routes only")
-        # Import locally to avoid import at module load time
+        # Build multi-hop routes for Aerodrome: [(tokenIn, tokenOut, stable), ...]
         from web3 import Web3 as _Web3  # type: ignore
+        if len(path) < 2:
+            raise ValueError("path must include at least [token_in, token_out]")
         st = bool(self.stable) if stable is None else bool(stable)
-        return [(_Web3.to_checksum_address(path[0]), _Web3.to_checksum_address(path[1]), st)]
+        hops: List[Tuple[Address, Address, bool]] = []
+        for i in range(len(path) - 1):
+            hops.append(
+                (
+                    _Web3.to_checksum_address(path[i]),
+                    _Web3.to_checksum_address(path[i + 1]),
+                    st,
+                )
+            )
+        return hops
 
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
         # Try with configured stable flag first; if it fails, try toggled stable flag.

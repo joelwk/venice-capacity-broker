@@ -45,6 +45,46 @@ DEFAULT_BRIDGE_TOKEN_BY_CHAIN: Dict[int, str] = {
     8453: "0x4200000000000000000000000000000000000006",
 }
 
+# In-memory cache for successful pricing paths per token
+# Keyed by "<token_addr.lower()>-><quote_addr.lower()>" → (path, timestamp)
+_PRICE_PATH_CACHE: Dict[str, Tuple[List[str], float]] = {}
+
+def _cache_key(token: str, quote: str) -> str:
+    return f"{token.lower()}->{quote.lower()}"
+
+def _cache_get_path(token: str, quote: str) -> Optional[List[str]]:
+    try:
+        ttl = int(os.getenv("PRICE_PATH_CACHE_TTL_SECONDS") or "1800")
+    except Exception:
+        ttl = 1800
+    key = _cache_key(token, quote)
+    ent = _PRICE_PATH_CACHE.get(key)
+    if not ent:
+        return None
+    path, ts = ent
+    if (time.time() - ts) > ttl:
+        _PRICE_PATH_CACHE.pop(key, None)
+        return None
+    return list(path)
+
+def _cache_set_path(token: str, quote: str, path: List[str]) -> None:
+    key = _cache_key(token, quote)
+    try:
+        max_entries = int(os.getenv("PRICE_PATH_CACHE_MAX") or "256")
+    except Exception:
+        max_entries = 256
+    # Evict oldest if over capacity
+    if len(_PRICE_PATH_CACHE) >= max_entries:
+        try:
+            oldest_key = min(_PRICE_PATH_CACHE.items(), key=lambda kv: kv[1][1])[0]
+            _PRICE_PATH_CACHE.pop(oldest_key, None)
+        except Exception:
+            _PRICE_PATH_CACHE.clear()
+    _PRICE_PATH_CACHE[key] = (list(path), float(time.time()))
+
+def _cache_delete(token: str, quote: str) -> None:
+    _PRICE_PATH_CACHE.pop(_cache_key(token, quote), None)
+
 
 @dataclass
 class TokenMetrics:
@@ -227,53 +267,152 @@ def _price_via_dex(address: str) -> Optional[float]:
 
         if _truthy_env("TOKEN_WATCH_DEBUG"):
             print(f"[token-watcher][debug] Attempting DEX price for {address}")
-        
+
         quote = _effective_quote_token_address()
         if not quote:
             if _truthy_env("TOKEN_WATCH_DEBUG"):
-                print(f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set and no default available")
+                print(
+                    f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set and no default available"
+                )
             return None
         if address.lower() == quote.lower():
             return 1.0
-            
+
         md = MarketDataProvider()
-        path = [address, quote]
+        provider_name: Optional[str] = None
         price: Optional[float] = None
-        # First try direct pair
+
+        # Try cached successful path first
+        cached = _cache_get_path(address, quote)
+        if cached:
+            try:
+                best0 = md.best_price(cached, amount_in_decimal=1.0)
+                price = float(best0["price"])
+                provider_name = str(best0.get("provider") or "")
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(f"[token-watcher][debug] Using cached price path {cached} from {provider_name}: {price}")
+                return price
+            except Exception as e:
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(f"[token-watcher][debug] Cached path failed; evicting. {type(e).__name__}: {e}")
+                _cache_delete(address, quote)
+
+        # First try direct pair [address, quote]
         try:
-            best = md.best_price(path, amount_in_decimal=1.0)
-            price = float(best.get("price"))
+            path1 = [address, quote]
+            best = md.best_price(path1, amount_in_decimal=1.0)
+            price = float(best["price"])
+            provider_name = str(best.get("provider") or "")
+            _cache_set_path(address, quote, path1)
         except Exception as e:
             if _truthy_env("TOKEN_WATCH_DEBUG"):
-                print(f"[token-watcher][debug] Direct DEX price failed: {type(e).__name__}: {e}")
-        # If no direct quote, try bridge token (e.g., WETH)
+                print(
+                    f"[token-watcher][debug] Direct DEX price failed: {type(e).__name__}: {e}"
+                )
+
+        # If no direct quote, try configured/default bridge token (e.g., WETH): [address, bridge, quote]
         if price is None:
             try:
                 bridge_env = os.getenv("DEX_BRIDGE_TOKEN_ADDRESS")
                 try:
-                    chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
+                    chain_id = int(
+                        os.getenv("ETHERSCAN_CHAIN_ID")
+                        or os.getenv("BASE_CHAIN_ID")
+                        or 8453
+                    )
                 except Exception:
                     chain_id = 8453
                 bridge_default = DEFAULT_BRIDGE_TOKEN_BY_CHAIN.get(chain_id)
-                bridge = (bridge_env or bridge_default)
+                bridge = bridge_env or bridge_default
                 if bridge and bridge.lower() not in {address.lower(), quote.lower()}:
                     if _truthy_env("TOKEN_WATCH_DEBUG"):
-                        print(f"[token-watcher][debug] Trying bridge route via {bridge}")
-                    best2 = md.best_price([address, bridge, quote], amount_in_decimal=1.0)
-                    price = float(best2.get("price"))
+                        print(
+                            f"[token-watcher][debug] Trying bridge route via {bridge}"
+                        )
+                    path2 = [address, bridge, quote]
+                    best2 = md.best_price(path2, amount_in_decimal=1.0)
+                    price = float(best2["price"])
+                    provider_name = str(best2.get("provider") or "")
+                    _cache_set_path(address, quote, path2)
             except Exception as e:
                 if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(f"[token-watcher][debug] Bridge DEX price failed: {type(e).__name__}: {e}")
+                    print(
+                        f"[token-watcher][debug] Bridge DEX price failed: {type(e).__name__}: {e}"
+                    )
+
+        # If still no price, try VVV as an alternate bridge when available
+        if price is None:
+            try:
+                vvv_addr = (
+                    os.getenv("VVV_TOKEN_ADDRESS")
+                    or next(
+                        (
+                            addr
+                            for addr, meta in KNOWN_TOKENS.items()
+                            if str(meta.get("symbol", "")).upper() == "VVV"
+                        ),
+                        None,
+                    )
+                )
+                if vvv_addr and vvv_addr.lower() not in {
+                    address.lower(),
+                    quote.lower(),
+                }:
+                    if _truthy_env("TOKEN_WATCH_DEBUG"):
+                        print(
+                            f"[token-watcher][debug] Trying VVV bridge route via {vvv_addr}"
+                        )
+                    # Prefer shortest path [address, VVV, quote]
+                    try:
+                        path3 = [address, vvv_addr, quote]
+                        best3 = md.best_price(path3, amount_in_decimal=1.0)
+                        price = float(best3["price"])
+                        provider_name = str(best3.get("provider") or "")
+                        _cache_set_path(address, quote, path3)
+                    except Exception:
+                        # If VVV->QUOTE direct pool not available, try [address, VVV, bridge, quote]
+                        bridge_env = os.getenv("DEX_BRIDGE_TOKEN_ADDRESS")
+                        try:
+                            chain_id = int(
+                                os.getenv("ETHERSCAN_CHAIN_ID")
+                                or os.getenv("BASE_CHAIN_ID")
+                                or 8453
+                            )
+                        except Exception:
+                            chain_id = 8453
+                        bridge_default = DEFAULT_BRIDGE_TOKEN_BY_CHAIN.get(chain_id)
+                        bridge = bridge_env or bridge_default
+                        if (
+                            bridge
+                            and bridge.lower()
+                            not in {address.lower(), vvv_addr.lower(), quote.lower()}
+                        ):
+                            path4 = [address, vvv_addr, bridge, quote]
+                            best4 = md.best_price(path4, amount_in_decimal=1.0)
+                            price = float(best4["price"])
+                            provider_name = str(best4.get("provider") or "")
+                            _cache_set_path(address, quote, path4)
+            except Exception as e:
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(
+                        f"[token-watcher][debug] VVV bridge DEX price failed: {type(e).__name__}: {e}"
+                    )
+
         if price is None:
             return None
-        
+
         if _truthy_env("TOKEN_WATCH_DEBUG"):
-            print(f"[token-watcher][debug] DEX price success: {price}")
-        
+            src = provider_name or "unknown"
+            print(
+                f"[token-watcher][debug] DEX price success from {src}: {price}"
+            )
+
         return price
     except Exception as e:
         if _truthy_env("TOKEN_WATCH_DEBUG"):
-            print(f"[token-watcher][debug] DEX price error for {address}: {type(e).__name__}: {e}")
+            print(
+                f"[token-watcher][debug] DEX price error for {address}: {type(e).__name__}: {e}"
+            )
         return None
 
 

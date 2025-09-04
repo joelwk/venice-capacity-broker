@@ -14,6 +14,12 @@ Overview
    - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
    - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
+   - DEX aggregator (for on-chain pricing in token watcher):
+     - `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
+     - `DEX_PROVIDERS=uniswap_v2,aerodrome`
+     - `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`
+     - Optional: `DEX_BRIDGE_TOKEN_ADDRESS` (e.g., Base WETH)
+     - Optional: price path cache tuning `PRICE_PATH_CACHE_TTL_SECONDS` (default 1800), `PRICE_PATH_CACHE_MAX` (default 256)
 3. Click Run. The app binds to `0.0.0.0:$PORT` and serves `GET /health`.
 4. Deployments panel → Create Web Service (auto-detects run command from `.replit`).
 5. Verify health: open the webview → `/health` returns `{ "status": "ok" }`.

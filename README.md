@@ -207,7 +207,7 @@ Notes:
   - ABIs: `abi/erc20.json` (provided), plus project-specific `abi/staking.json`, `abi/diem.json`.
   - Trading supports:
     - Uniswap V2 router ABI (`abi/uniswap_v2_router.json`) with `TRADE_PATH`
-    - Aerodrome router ABI (`abi/aerodrome_router.json`) single-hop with `AERODROME_STABLE`
+    - Aerodrome router ABI (`abi/aerodrome_router.json`) with multi-hop support; pool type toggled via `AERODROME_STABLE` (the system auto-tries both stable/volatile)
 - Venice client now performs real HTTP requests; endpoints are configurable via env.
  - Broker store backend:
   - Default uses SQL (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Install `sqlmodel` and a DB driver like `psycopg2-binary`.
@@ -237,6 +237,15 @@ LangSmith tracing:
 ## Configuration
 
 See `config/default.yml` and `.env.example` for environment variables and defaults.
+
+DEX aggregator (Base mainnet example)
+- Set providers: `DEX_PROVIDERS=uniswap_v2,aerodrome`
+- Routers: `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`
+- Quote token: `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
+- Bridge token: `DEX_BRIDGE_TOKEN_ADDRESS` (e.g., Base WETH) for multi-hop
+- Pricing path cache (in-memory, token→quote):
+  - `PRICE_PATH_CACHE_TTL_SECONDS` (default 1800)
+  - `PRICE_PATH_CACHE_MAX` (default 256)
 
 URLs & env vars:
 - `BASE_URL`: shell convenience used in examples to hold your API base URL (not read by the app).

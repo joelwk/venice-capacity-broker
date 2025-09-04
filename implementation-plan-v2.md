@@ -119,3 +119,49 @@ The goal is a minimal yet functional end‑to‑end system: stake VVV, monitor D
    * Implement a marketplace for DIEM rentals using escrow contracts.
 
 ---
+
+### 🚀 Next Steps Toward Final System (Focused on Agents + System Features)
+
+1) Marketdata + Watchers (stabilize, then freeze)
+- Confirm multi-hop Aerodrome quoting works in prod (Base) and cache hit-rates are healthy.
+- Add metrics: cache hits/misses, quote failures by provider, and average price latency.
+- Finalize env defaults in `.env.example` (routers, quote/bridge tokens, cache TTL/max) and document in README/DEPLOYMENT.
+- Freeze interfaces for `MarketDataProvider`, `TokenMetrics`, and DEX aggregator inputs.
+
+2) DIEM Module (on-chain actions)
+- Implement `services/diem` mint/burn with Web3 + AgentKit wallet; wire gas estimation and error surfacing.
+- Add a dry-run mode and idempotency guard for mint/burn operations.
+- Emit domain events (minted, burned, failed) for the orchestrator.
+
+3) Risk Service (MVP)
+- Add `services/risk` with simple budget/exposure checks and tunable thresholds (ENV-backed).
+- Provide a stateless API the orchestrator can call before taking actions (stake, mint, trade).
+
+4) Orchestrator (Quorum) Build-Out
+- Compose `stake_master`, `arbi_diem`, `capacity_broker`, and `ai_treasurer` under a unified graph.
+- Add listen-interval policy and backoff; centralize signal ingestion (DIEM/VVV signals + token watcher snapshots).
+- Persist decisions and outcomes for observability.
+
+5) ArbiDiem Agent
+- Implement premium detection loop (already in plan) to trigger mint/sell (or hold) based on thresholds and risk limits.
+- Integrate with DEX prices for execution preview; validate expected slippage via aggregator quotes.
+
+6) Capacity Broker Agent
+- Add dynamic pricing logic for reselling unused capacity; use `libs/pricing` and `MarketPricingEngine` as baseline.
+- Implement allocation logic using Broker API (quote → purchase → key issuance lifecycle).
+
+7) AI Treasurer Agent
+- Define treasury constraints and objectives; allocate between VVV/DIEM/USDC given risk budget.
+- Schedule periodic rebalancing; produce proposals logged with explanations.
+
+8) Observability + Ops
+- Extend `/metrics` to include agent loop metrics, DIEM transactions, and error classes.
+- Add structured logs for all agent decisions with correlation IDs.
+- Provide admin toggles to pause/resume agents and adjust thresholds live.
+
+9) Hardening + Tests
+- Add integration tests for: multi-hop quotes, DIEM mint/burn happy paths (mock chain), and orchestrator decision branches.
+- Gate agent actions behind feature flags and environment readiness checks.
+
+10) Documentation (sources of truth)
+- Keep `README.md` (developer quickstart), `docs/DEPLOYMENT.md` (ops), and `implementation-plan-v2.md` (architecture + roadmap) updated as features land.
