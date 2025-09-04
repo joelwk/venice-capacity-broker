@@ -46,6 +46,26 @@
         <pre id="purchasesOut" class="mono"></pre>
       </section>
 
+      <section class="card" id="tokens">
+        <h2>Tokens</h2>
+        <div class="actions">
+          <button id="refreshTokensBtn">Refresh Tokens</button>
+        </div>
+        <div id="tokensTable"></div>
+        <div class="row" style="margin-top:12px">
+          <div style="flex:1">
+            <label>Address</label>
+            <input id="tokenAddr" placeholder="0x..." />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="loadTokenHistoryBtn">Load History (24h)</button>
+          </div>
+        </div>
+        <canvas id="tokenChart" width="800" height="180" style="margin-top:8px;max-width:100%"></canvas>
+        <pre id="tokenHistoryOut" class="mono"></pre>
+      </section>
+
       <section class="card" id="utilization">
         <h2>Utilization (Last 24h)</h2>
         <div class="actions">

@@ -45,6 +45,84 @@
     if (el) el.textContent = JSON.stringify(obj, null, 2);
   }
 
+  // --- Tokens panel ---
+  function renderTokensTable(list) {
+    const host = qs('#tokensTable');
+    if (!host) return;
+    if (!Array.isArray(list) || list.length === 0) {
+      host.innerHTML = '<div class="status">No tokens</div>';
+      return;
+    }
+    const rows = list
+      .map(
+        (t) => `
+        <tr>
+          <td><code>${t.address}</code></td>
+          <td>${t.symbol || ''}</td>
+          <td>${t.name || ''}</td>
+          <td>${t.decimals ?? ''}</td>
+          <td>${t.priceUsd != null ? Number(t.priceUsd).toFixed(6) : ''}</td>
+          <td>${t.holders ?? ''}</td>
+          <td>${t.transfers24h ?? ''}</td>
+          <td>${t.lastTs || ''}</td>
+        </tr>`
+      )
+      .join('');
+    host.innerHTML = `
+      <table>
+        <thead><tr><th>Address</th><th>Symbol</th><th>Name</th><th>Dec</th><th>Price USD</th><th>Holders</th><th>Tx 24h</th><th>Last</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  async function refreshTokens() {
+    try {
+      const j = await fetchJSON('/v1/market/tokens');
+      renderTokensTable(j);
+    } catch (e) {
+      const host = qs('#tokensTable');
+      if (host) host.innerHTML = `<div class="status error">${String(e)}</div>`;
+    }
+  }
+
+  function drawLineChart(canvas, points) {
+    if (!canvas || !canvas.getContext) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (!Array.isArray(points) || points.length === 0) return;
+    const xs = points.map(p => (new Date(p.ts)).getTime());
+    const ys = points.map(p => (p.priceUsd == null ? null : Number(p.priceUsd))).filter(v => v != null);
+    if (ys.length === 0) return;
+    const xmin = Math.min(...xs), xmax = Math.max(...xs);
+    const ymin = Math.min(...ys), ymax = Math.max(...ys);
+    const pad = 10;
+    function xscale(x){ return pad + (w - 2*pad) * ((x - xmin) / (xmax - xmin || 1)); }
+    function yscale(y){ return h - pad - (h - 2*pad) * ((y - ymin) / (ymax - ymin || 1)); }
+    ctx.strokeStyle = '#8ab4f8'; ctx.lineWidth = 2; ctx.beginPath();
+    points.forEach((p, i) => {
+      if (p.priceUsd == null) return;
+      const X = xscale((new Date(p.ts)).getTime());
+      const Y = yscale(Number(p.priceUsd));
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.stroke();
+  }
+
+  async function loadTokenHistory() {
+    const addr = (qs('#tokenAddr')?.value || '').trim();
+    const out = qs('#tokenHistoryOut');
+    if (!addr) { if (out) out.textContent = 'Enter token address'; return; }
+    try {
+      // since default = 24h window on server; keep it simple
+      const j = await fetchJSON(`/v1/market/token/${encodeURIComponent(addr)}/history?asc=true&limit=500`);
+      if (out) setJSON('#tokenHistoryOut', j);
+      drawLineChart(qs('#tokenChart'), j);
+    } catch (e) {
+      if (out) out.textContent = String(e);
+    }
+  }
+
   function updateAuthStatus() {
     const tok = getToken();
     const masked = tok ? tok.slice(0, 3) + '…' + tok.slice(-4) : '(none)';
@@ -256,6 +334,10 @@
 
     // Chat
     bind('#sendChatBtn', 'click', sendChat);
+
+    // Tokens
+    bind('#refreshTokensBtn', 'click', refreshTokens);
+    bind('#loadTokenHistoryBtn', 'click', loadTokenHistory);
 
     // Initial loads
     refreshHealth();

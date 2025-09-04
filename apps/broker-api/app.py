@@ -1088,6 +1088,125 @@ try:
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(e))
 
+    # --- Token snapshots (BaseScan/Etherscan watcher) ---
+    from pydantic import BaseModel as _BM
+
+    class TokenSummary(_BM):
+        address: str
+        chain: str | None = None
+        symbol: str | None = None
+        name: str | None = None
+        decimals: int | None = None
+        lastTs: str | None = None
+        priceUsd: float | None = None
+        holders: int | None = None
+        transfers24h: int | None = None
+        marketcapUsd: float | None = None
+
+    @app.get("/v1/market/tokens", response_model=list[TokenSummary])
+    @_traceable("broker.market_tokens")
+    def market_tokens() -> list[TokenSummary]:
+        try:
+            from sqlmodel import Session, select
+            from db.session import get_engine
+            from db.models import AssetToken, TokenSnapshot
+        except Exception as _e:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"SQL dependencies unavailable: {_e}")
+
+        engine = get_engine()
+        out: list[TokenSummary] = []
+        with Session(engine) as s:  # type: ignore[call-arg]
+            tokens = s.exec(select(AssetToken)).all()
+            for t in tokens:
+                snap = s.exec(
+                    select(TokenSnapshot)
+                    .where(TokenSnapshot.token_address == t.address)
+                    .order_by(TokenSnapshot.ts.desc())
+                    .limit(1)
+                ).first()
+                out.append(
+                    TokenSummary(
+                        address=t.address,
+                        chain=getattr(t, "chain", None),
+                        symbol=getattr(t, "symbol", None),
+                        name=getattr(t, "name", None),
+                        decimals=getattr(t, "decimals", None),
+                        lastTs=(snap.ts.isoformat() + "Z") if snap and snap.ts else None,
+                        priceUsd=getattr(snap, "price_usd", None) if snap else None,
+                        holders=getattr(snap, "holders", None) if snap else None,
+                        transfers24h=getattr(snap, "transfers_24h", None) if snap else None,
+                        marketcapUsd=getattr(snap, "marketcap_usd", None) if snap else None,
+                    )
+                )
+        return out
+
+    class TokenHistoryPoint(_BM):
+        ts: str
+        priceUsd: float | None = None
+        holders: int | None = None
+        transfers24h: int | None = None
+        marketcapUsd: float | None = None
+
+    @app.get("/v1/market/token/{address}/history", response_model=list[TokenHistoryPoint])
+    @_traceable("broker.market_token_history")
+    def market_token_history(
+        address: str,
+        since: str | None = Query(default=None, description="ISO8601 or epoch seconds"),
+        until: str | None = Query(default=None, description="ISO8601 or epoch seconds"),
+        limit: int = Query(default=500, ge=1, le=5000),
+        asc: bool = Query(default=True),
+    ) -> list[TokenHistoryPoint]:
+        try:
+            from sqlmodel import Session, select
+            from sqlalchemy import desc as _desc
+            from datetime import datetime as _dt, timedelta as _td
+            from db.session import get_engine
+            from db.models import TokenSnapshot
+        except Exception as _e:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"SQL dependencies unavailable: {_e}")
+
+        # Default window: last 24h if since is not provided
+        if not since:
+            try:
+                since_dt = _dt.utcnow() - _td(hours=24)
+                since = since_dt.isoformat() + "Z"
+            except Exception:
+                pass
+
+        def _as_dt(val: str | None):
+            if not val:
+                return None
+            try:
+                return _parse_dt(val)  # type: ignore[name-defined]
+            except Exception:
+                return None
+
+        since_dt = _as_dt(since)
+        until_dt = _as_dt(until)
+
+        engine = get_engine()
+        with Session(engine) as s:  # type: ignore[call-arg]
+            q = select(TokenSnapshot).where(TokenSnapshot.token_address == address)
+            if since_dt is not None:
+                q = q.where(TokenSnapshot.ts >= since_dt)
+            if until_dt is not None:
+                q = q.where(TokenSnapshot.ts <= until_dt)
+            q = q.order_by(TokenSnapshot.ts if asc else _desc(TokenSnapshot.ts)).limit(int(limit))
+            rows = s.exec(q).all()
+
+        out: list[TokenHistoryPoint] = []
+        for r in rows:
+            out.append(
+                TokenHistoryPoint(
+                    ts=(r.ts.isoformat() + "Z"),
+                    priceUsd=r.price_usd,
+                    holders=r.holders,
+                    transfers24h=r.transfers_24h,
+                    marketcapUsd=r.marketcap_usd,
+                )
+            )
+        return out
+
     # --- Quotes & Purchases (flag-gated; non-admin) ---
     try:
         _features = {

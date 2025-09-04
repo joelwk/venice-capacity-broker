@@ -221,7 +221,9 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
 
 
 def persist_metrics(m: TokenMetrics) -> None:
-    create_db_and_tables()
+    # Allow disabling create_all in production where Alembic migrations are expected
+    if (os.getenv("SQL_CREATE_ALL_ON_START") or "true").strip().lower() in {"1", "true", "yes", "on"}:
+        create_db_and_tables()
     with next(get_session()) as s:  # type: ignore[call-arg]
         # Upsert AssetToken
         tok = s.get(AssetToken, m.address)
@@ -290,4 +292,3 @@ def run_watch_loop() -> None:
 
 if __name__ == "__main__":
     run_watch_loop()
-
