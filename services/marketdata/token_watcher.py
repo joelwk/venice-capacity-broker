@@ -39,6 +39,12 @@ DEFAULT_QUOTE_TOKEN_BY_CHAIN: Dict[int, str] = {
     8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
 }
 
+# Default bridge token per chain for multi-hop quotes when no direct pool exists
+DEFAULT_BRIDGE_TOKEN_BY_CHAIN: Dict[int, str] = {
+    # Base WETH
+    8453: "0x4200000000000000000000000000000000000006",
+}
+
 
 @dataclass
 class TokenMetrics:
@@ -231,9 +237,35 @@ def _price_via_dex(address: str) -> Optional[float]:
             return 1.0
             
         md = MarketDataProvider()
-        best = md.best_price([address, quote], amount_in_decimal=1.0)
-        # best['price'] is quote per token (e.g., USDC per 1 token)
-        price = float(best.get("price"))
+        path = [address, quote]
+        price: Optional[float] = None
+        # First try direct pair
+        try:
+            best = md.best_price(path, amount_in_decimal=1.0)
+            price = float(best.get("price"))
+        except Exception as e:
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] Direct DEX price failed: {type(e).__name__}: {e}")
+        # If no direct quote, try bridge token (e.g., WETH)
+        if price is None:
+            try:
+                bridge_env = os.getenv("DEX_BRIDGE_TOKEN_ADDRESS")
+                try:
+                    chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
+                except Exception:
+                    chain_id = 8453
+                bridge_default = DEFAULT_BRIDGE_TOKEN_BY_CHAIN.get(chain_id)
+                bridge = (bridge_env or bridge_default)
+                if bridge and bridge.lower() not in {address.lower(), quote.lower()}:
+                    if _truthy_env("TOKEN_WATCH_DEBUG"):
+                        print(f"[token-watcher][debug] Trying bridge route via {bridge}")
+                    best2 = md.best_price([address, bridge, quote], amount_in_decimal=1.0)
+                    price = float(best2.get("price"))
+            except Exception as e:
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(f"[token-watcher][debug] Bridge DEX price failed: {type(e).__name__}: {e}")
+        if price is None:
+            return None
         
         if _truthy_env("TOKEN_WATCH_DEBUG"):
             print(f"[token-watcher][debug] DEX price success: {price}")
@@ -311,7 +343,11 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
         px = _price_via_dex(address)
         price_usd = px
         if px is not None:
-            _dbg_sources["price_usd"] = "dex"
+            qt0 = _effective_quote_token_address()
+            if qt0 and address.lower() == qt0.lower():
+                _dbg_sources["price_usd"] = "quote=1.0"
+            else:
+                _dbg_sources["price_usd"] = "dex"
         else:
             # If the token is the quote token, set price to 1.0 even without DEX
             qt = _effective_quote_token_address()

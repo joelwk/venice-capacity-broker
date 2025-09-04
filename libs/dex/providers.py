@@ -29,7 +29,6 @@ class DexProvider:
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         raise NotImplementedError
 
-
 class UniswapV2DexProvider(DexProvider):
     name = "uniswap_v2"
 
@@ -87,15 +86,24 @@ class AerodromeDexProvider(DexProvider):
         self.recipient: Optional[str] = None
         self.stable = stable
 
-    def _routes(self, path: List[Address]) -> List[Tuple[Address, Address, bool]]:
+    def _routes(self, path: List[Address], stable: Optional[bool] = None) -> List[Tuple[Address, Address, bool]]:
         # Single hop route only for now
         if len(path) != 2:
             raise ValueError("Aerodrome provider currently supports single-hop routes only")
-        return [(Web3.to_checksum_address(path[0]), Web3.to_checksum_address(path[1]), bool(self.stable))]
+        st = bool(self.stable) if stable is None else bool(stable)
+        return [(Web3.to_checksum_address(path[0]), Web3.to_checksum_address(path[1]), st)]
 
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
+        # Try with configured stable flag first; if it fails, try toggled stable flag.
+        # This helps when env stable setting doesn't match the actual pool type.
         try:
-            routes = self._routes(path)
+            routes = self._routes(path, stable=self.stable)
+            amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
+            return Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+        except Exception:
+            pass
+        try:
+            routes = self._routes(path, stable=not bool(self.stable))
             amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
             return Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
         except Exception:
