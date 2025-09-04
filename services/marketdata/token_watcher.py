@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -23,6 +24,13 @@ from db.models import AssetToken, TokenSnapshot
 
 # Default to Etherscan V2 unified endpoint and pass chainid for Base (8453)
 DEFAULT_ETHERSCAN_V2_URL = "https://api.etherscan.io/v2/api"
+
+# Known token metadata for Base mainnet (fallback when Web3 unavailable)
+KNOWN_TOKENS = {
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {"symbol": "USDC", "name": "USD Coin", "decimals": 6},
+    "0xf4d97f2da56e8c3098f3a8d538db630a2606a024": {"symbol": "DIEM", "name": "Venice DIEM", "decimals": 18},
+    "0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf": {"symbol": "VVV", "name": "Venice Finance", "decimals": 18},
+}
 
 
 @dataclass
@@ -142,16 +150,36 @@ class BaseScanClient:
 
 def _erc20_metadata_via_web3(address: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     try:
+        # Check if BASE_RPC_URL is set before attempting connection
+        if not os.getenv("BASE_RPC_URL"):
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] BASE_RPC_URL not set, skipping Web3 metadata")
+            return None, None, None
+            
         from web3 import Web3  # lazy import
         from libs.agentkit_ext.web3_utils import get_contract, get_web3
 
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] Attempting Web3 metadata for {address}")
+        
         w3 = get_web3()
+        if not w3.is_connected():
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] Web3 not connected!")
+            return None, None, None
+            
         erc20 = get_contract(w3, Web3.to_checksum_address(address), "erc20.json")
         name = str(erc20.functions.name().call())
         symbol = str(erc20.functions.symbol().call())
         decimals = int(erc20.functions.decimals().call())
+        
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] Web3 metadata success: {symbol}, {name}, {decimals}")
+        
         return symbol, name, decimals
-    except Exception:
+    except Exception as e:
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] Web3 metadata error for {address}: {type(e).__name__}: {e}")
         return None, None, None
 
 
@@ -164,16 +192,29 @@ def _price_via_dex(address: str) -> Optional[float]:
     try:
         from services.marketdata.provider import MarketDataProvider
 
-        md = MarketDataProvider()
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] Attempting DEX price for {address}")
+        
         quote = os.getenv("QUOTE_TOKEN_ADDRESS")
         if not quote:
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] QUOTE_TOKEN_ADDRESS not set")
             return None
         if address.lower() == quote.lower():
             return 1.0
+            
+        md = MarketDataProvider()
         best = md.best_price([address, quote], amount_in_decimal=1.0)
         # best['price'] is quote per token (e.g., USDC per 1 token)
-        return float(best.get("price"))
-    except Exception:
+        price = float(best.get("price"))
+        
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] DEX price success: {price}")
+        
+        return price
+    except Exception as e:
+        if _truthy_env("TOKEN_WATCH_DEBUG"):
+            print(f"[token-watcher][debug] DEX price error for {address}: {type(e).__name__}: {e}")
         return None
 
 
@@ -184,6 +225,17 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
     symbol = sym2
     name = name2
     decimals = dec2
+    
+    # Fallback to known tokens if Web3 unavailable
+    if (not symbol or decimals is None):
+        known = KNOWN_TOKENS.get(address.lower())
+        if known:
+            symbol = symbol or known["symbol"]
+            name = name or known["name"]
+            decimals = decimals if decimals is not None else known["decimals"]
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] Using known metadata for {address}: {symbol}")
+    
     # Fallback to token_info if web3 metadata is unavailable
     if (not symbol or decimals is None) and isinstance(info, dict):
         try:
@@ -198,11 +250,15 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
         except Exception:
             pass
     _dbg_sources: Dict[str, str] = {}
-    _dbg_sources["metadata"] = "web3" if symbol or decimals is not None else "unknown"
+    _dbg_sources["metadata"] = "web3" if sym2 or dec2 is not None else ("known" if symbol else "unknown")
 
     # Supply and holders
     total_supply = client.total_supply(address)
     _dbg_sources["supply_total"] = "stats.tokensupply" if total_supply is not None else "none"
+    
+    if _truthy_env("TOKEN_WATCH_DEBUG") and total_supply is not None:
+        print(f"[token-watcher][debug] Total supply for {address}: {total_supply}")
+    
     # Holder counts are optional and often gated; skip unless explicitly enabled
     holders: Optional[int] = None
     if _truthy_env("TOKEN_WATCH_ENABLE_HOLDERS"):
@@ -268,6 +324,9 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
                 "address": address,
                 "symbol": symbol,
                 "decimals": decimals,
+                "total_supply": total_supply,
+                "price_usd": price_usd,
+                "transfers_24h": transfers_24h,
                 "sources": _dbg_sources,
             }
             print("[token-watcher][debug] "+json.dumps(dbg))
@@ -328,9 +387,9 @@ def persist_metrics(m: TokenMetrics) -> None:
 
 
 def run_watch_loop() -> None:
-    api_key = os.getenv("ETHERSCAN_API_KEY") or os.getenv("BASESCAN_API_KEY")
+    api_key = os.getenv("ETHERSCAN_API_KEY") 
     if not api_key:
-        raise RuntimeError("Set BASESCAN_API_KEY or ETHERSCAN_API_KEY in environment")
+        raise RuntimeError("Set ETHERSCAN_API_KEY in environment")
     # Prefer Etherscan V2 endpoint; allow override for testing
     base_url = os.getenv("ETHERSCAN_API_URL") or os.getenv("BASESCAN_API_URL") or DEFAULT_ETHERSCAN_V2_URL
     try:
@@ -338,6 +397,15 @@ def run_watch_loop() -> None:
     except Exception:
         chain_id = 8453
     interval = int(os.getenv("TOKEN_WATCH_INTERVAL_SECONDS") or 300)
+    
+    # Debug environment variables
+    if _truthy_env("TOKEN_WATCH_DEBUG"):
+        print("[token-watcher][debug] Environment check:")
+        print(f"  - BASE_RPC_URL: {os.getenv('BASE_RPC_URL', 'NOT SET')}")
+        print(f"  - RPC_URL: {os.getenv('RPC_URL', 'NOT SET')}")
+        print(f"  - QUOTE_TOKEN_ADDRESS: {os.getenv('QUOTE_TOKEN_ADDRESS', 'NOT SET')}")
+        print(f"  - API endpoint: {base_url}")
+        print(f"  - Chain ID: {chain_id}")
 
     # Addresses to track: prefer explicit list, else known env tokens.
     explicit = os.getenv("TOKEN_WATCH_ADDRESSES")
@@ -369,4 +437,15 @@ def run_watch_loop() -> None:
 
 
 if __name__ == "__main__":
+    # Quick check for minimal configuration
+    if not (os.getenv("ETHERSCAN_API_KEY")):
+        print("ERROR: ETHERSCAN_API_KEY")
+        print("\nMinimal setup:")
+        print("export ETHERSCAN_API_KEY='your_api_key'")
+        print("export TOKEN_WATCH_DEBUG='true'  # See what's happening")
+        print("\nOptional but recommended:")
+        print("export BASE_RPC_URL='https://base.publicnode.com'  # For metadata")
+        print("export QUOTE_TOKEN_ADDRESS='0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  # USDC for pricing")
+        sys.exit(1)
+    
     run_watch_loop()
