@@ -57,6 +57,7 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "httpx",
+  "alembic>=1.12",
 ]
 
 [tool.uv]

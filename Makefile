@@ -1,4 +1,5 @@
 .PHONY: help health create-tenant chat-admin rotate-probe limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e enable-buyer
+ .PHONY: db-setup-and-migrate
 
 # Broker base URL; can be overridden via environment or CLI
 # Example: make create-tenant BROKER_BASE_URL=https://<your-repl>.repl.co
@@ -21,7 +22,7 @@ setup-cli:
 env-status:
 	@$(RUNPY) apps/cli/main.py env:status
 
-help:
+	help:
 	@echo "Targets:"
 	@echo "  make health                          - GET /health"
 	@echo "  make create-tenant TENANT=t1 LABEL=TeamA [QUOTA=0 EXPIRES=...]"
@@ -32,6 +33,7 @@ help:
 	@echo "  make run-broker                      - start uvicorn app:app with --app-dir"
 	@echo "  make db-migrate                      - alembic upgrade head"
 	@echo "  make db-stamp                        - alembic stamp head (mark current)"
+	@echo "  make db-setup-and-migrate           - install DB deps + alembic, then upgrade head"
 	@echo "  make db-compact                      - compact KV counters into SQL (force)"
 	@echo "  make db-counters TENANT=t1 [LIMIT=20] - show recent counters from SQL"
 	@echo "  make demo-e2e TENANT=t1 [LABEL=TeamA MESSAGE=Hello LIMIT=20 MODEL=<m>] - seed+probe+compact+show"
@@ -90,6 +92,18 @@ db-migrate:
 
 db-stamp:
 	@$(RUNPY) -m alembic stamp head
+
+# Install DB extras and Alembic, then upgrade head using the current Python runner
+db-setup-and-migrate:
+	@echo "Installing DB extras and Alembic, then running migrations..."
+	@$(MAKE) -s setup-db
+	@if command -v uv >/dev/null 2>&1; then \
+	  uv sync --extra dev; \
+	else \
+	  python -m pip install --upgrade pip setuptools wheel || true; \
+	  python -m pip install alembic; \
+	fi
+	@$(RUNPY) -m alembic upgrade head
 
 db-compact:
 	@$(RUNPY) apps/cli/main.py data:compact-counters --force
