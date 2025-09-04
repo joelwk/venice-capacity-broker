@@ -39,7 +39,8 @@ class UniswapV2DexProvider(DexProvider):
         self.w3 = get_web3()
         self.router_addr = Web3.to_checksum_address(router_address)
         self.router = get_contract(self.w3, self.router_addr, "uniswap_v2_router.json")
-        self.recipient = Web3.to_checksum_address(get_address())
+        # Lazily resolve recipient during trade to avoid wallet requirement for quotes
+        self.recipient: Optional[str] = None
 
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
         try:
@@ -62,10 +63,13 @@ class UniswapV2DexProvider(DexProvider):
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         # Ensure allowance for input token to router
         token_in = path[0]
-        approve_hash = self._ensure_allowance(token_in, self.recipient, self.router_addr, amount_in) or ""
+        # Resolve recipient lazily
+        from web3 import Web3 as _Web3  # type: ignore
+        recipient = self.recipient or _Web3.to_checksum_address(get_address())
+        approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, amount_in) or ""
 
         deadline = int(time.time()) + 20 * 60
-        fn = self.router.functions.swapExactTokensForTokens(amount_in, min_amount_out, path, self.recipient, deadline)
+        fn = self.router.functions.swapExactTokensForTokens(amount_in, min_amount_out, path, recipient, deadline)
         built = fn.build_transaction({})  # only need data for AgentKit provider
         tx_hash = send_tx(self.router_addr, built["data"])
         return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
@@ -80,7 +84,7 @@ class AerodromeDexProvider(DexProvider):
         self.w3 = get_web3()
         self.router_addr = Web3.to_checksum_address(router_address)
         self.router = get_contract(self.w3, self.router_addr, "aerodrome_router.json")
-        self.recipient = Web3.to_checksum_address(get_address())
+        self.recipient: Optional[str] = None
         self.stable = stable
 
     def _routes(self, path: List[Address]) -> List[Tuple[Address, Address, bool]]:
@@ -100,7 +104,8 @@ class AerodromeDexProvider(DexProvider):
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         token_in = path[0]
         # Ensure allowance for input token to router
-        erc20_owner = self.recipient
+        from web3 import Web3 as _Web3  # type: ignore
+        erc20_owner = self.recipient or _Web3.to_checksum_address(get_address())
         erc20_spender = self.router_addr
         try:
             erc20 = get_contract(self.w3, token_in, "erc20.json")
@@ -119,7 +124,7 @@ class AerodromeDexProvider(DexProvider):
             Web3.to_checksum_address(path[0]),
             Web3.to_checksum_address(path[1]),
             bool(self.stable),
-            self.recipient,
+            erc20_owner,
             deadline,
         )
         built = fn.build_transaction({})

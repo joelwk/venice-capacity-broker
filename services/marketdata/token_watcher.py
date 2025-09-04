@@ -71,10 +71,18 @@ class BaseScanClient:
         try:
             j = self._get({"module": "token", "action": "tokeninfo", "contractaddress": address})
             res = j.get("result")
+            # Etherscan v2 may return a dict with nested token info and price
+            if isinstance(res, dict):
+                # Common shapes: { tokenInfo: {...}, price: {...} }
+                ti = res.get("tokenInfo") if isinstance(res.get("tokenInfo"), dict) else None
+                if ti:
+                    out = dict(ti)
+                    if isinstance(res.get("price"), dict):
+                        out["price"] = res["price"]
+                    return out
+                return res
             if isinstance(res, list) and res:
                 return res[0]
-            if isinstance(res, dict):
-                return res
             return None
         except Exception:
             return None
@@ -91,15 +99,27 @@ class BaseScanClient:
             return None
 
     def holder_count(self, address: str) -> Optional[int]:
-        # Not all chains expose a direct count; try best-effort.
-        try:
-            j = self._get({"module": "token", "action": "tokenholdercount", "contractaddress": address})
-            res = j.get("result")
-            if isinstance(res, str) and res.isdigit():
-                return int(res)
-            return int(str(res))
-        except Exception:
-            return None
+        # Not all chains or plans expose a direct holder count in v2. Try a few shapes.
+        for action in ("tokenholdercount", "tokenholders", "tokenholderlist"):
+            try:
+                j = self._get({"module": "token", "action": action, "contractaddress": address, "page": "1", "offset": "1"})
+                res = j.get("result")
+                # Direct numeric
+                if isinstance(res, str) and res.isdigit():
+                    return int(res)
+                # Dict with total/count
+                if isinstance(res, dict):
+                    for k in ("total", "count", "recordsFiltered", "recordsTotal"):
+                        v = res.get(k)
+                        if v is not None:
+                            try:
+                                return int(str(v))
+                            except Exception:
+                                pass
+                # Some endpoints return list only; cannot infer total
+            except Exception:
+                continue
+        return None
 
     def recent_transfers_count(self, address: str, minutes: int = 1440, max_events: int = 200) -> Optional[int]:
         try:
@@ -154,6 +174,8 @@ def _price_via_dex(address: str) -> Optional[float]:
         quote = os.getenv("QUOTE_TOKEN_ADDRESS")
         if not quote:
             return None
+        if address.lower() == quote.lower():
+            return 1.0
         best = md.best_price([address, quote], amount_in_decimal=1.0)
         # best['price'] is quote per token (e.g., USDC per 1 token)
         return float(best.get("price"))
@@ -187,8 +209,8 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
         try:
             price_obj = info.get("price")
             if isinstance(price_obj, dict):
-                # Etherscan v2 returns {'rate': '1.23', 'diff': '...', ...}
-                rate = price_obj.get("rate") or price_obj.get("usd")
+                # Try common v2 fields
+                rate = price_obj.get("rate") or price_obj.get("usd") or price_obj.get("usdPrice") or price_obj.get("priceUsd")
                 if rate is not None:
                     price_usd = float(rate)
         except Exception:
