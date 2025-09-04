@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+import sqlalchemy as sa
 
 try:
     from sqlmodel import SQLModel, Field
@@ -131,10 +132,11 @@ class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
     token_address: str = Field(foreign_key="assettoken.address")
     ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
     price_usd: Optional[float] = None
-    supply_total: Optional[int] = None
-    supply_circulating: Optional[int] = None
+    # Use high-precision NUMERIC to avoid BIGINT overflow for large ERC-20 supplies
+    supply_total: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    supply_circulating: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
     holders: Optional[int] = None
     transfers_24h: Optional[int] = None
     marketcap_usd: Optional[float] = None
-    max_total_supply: Optional[int] = None
+    max_total_supply: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
     raw_json: Optional[str] = None  # lightly structured JSON payload for auditing
