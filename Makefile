@@ -96,13 +96,7 @@ db-stamp:
 # Install DB extras and Alembic, then upgrade head using the current Python runner
 db-setup-and-migrate:
 	@echo "Installing DB extras and Alembic, then running migrations..."
-	@if command -v uv >/dev/null 2>&1; then \
-	  # Ensure both db and dev extras are installed together to avoid removal of sqlmodel/psycopg2
-	  uv sync --extra db --extra dev; \
-	else \
-	  python -m pip install --upgrade pip setuptools wheel || true; \
-	  python -m pip install sqlmodel psycopg2-binary alembic; \
-	fi
+	@if command -v uv >/dev/null 2>&1; then uv sync --extra db --extra dev; else python -m pip install --upgrade pip setuptools wheel || true; python -m pip install sqlmodel psycopg2-binary alembic; fi
 	@$(RUNPY) -m alembic upgrade head
 
 db-compact:
