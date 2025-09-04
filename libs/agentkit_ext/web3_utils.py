@@ -23,9 +23,10 @@ def load_abi(name: str) -> List[Dict[str, Any]]:
 
 def get_web3() -> 'Web3':
     from web3 import Web3  # type: ignore
-    rpc = os.getenv("BASE_RPC_URL")
+    # Prefer generic RPC_URL if provided; fall back to BASE_RPC_URL
+    rpc = os.getenv("RPC_URL") or os.getenv("BASE_RPC_URL")
     if not rpc:
-        raise EnvironmentError("BASE_RPC_URL is required for Web3 operations")
+        raise EnvironmentError("RPC_URL or BASE_RPC_URL is required for Web3 operations")
     w3 = Web3(Web3.HTTPProvider(rpc))
     if not w3.is_connected():  # web3.py>=6 uses camelCase
         raise ConnectionError(f"Failed to connect to RPC: {rpc}")

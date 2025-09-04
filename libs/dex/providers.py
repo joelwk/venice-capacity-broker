@@ -90,8 +90,10 @@ class AerodromeDexProvider(DexProvider):
         # Single hop route only for now
         if len(path) != 2:
             raise ValueError("Aerodrome provider currently supports single-hop routes only")
+        # Import locally to avoid import at module load time
+        from web3 import Web3 as _Web3  # type: ignore
         st = bool(self.stable) if stable is None else bool(stable)
-        return [(Web3.to_checksum_address(path[0]), Web3.to_checksum_address(path[1]), st)]
+        return [(_Web3.to_checksum_address(path[0]), _Web3.to_checksum_address(path[1]), st)]
 
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
         # Try with configured stable flag first; if it fails, try toggled stable flag.
@@ -129,8 +131,8 @@ class AerodromeDexProvider(DexProvider):
         fn = self.router.functions.swapExactTokensForTokensSimple(
             amount_in,
             min_amount_out,
-            Web3.to_checksum_address(path[0]),
-            Web3.to_checksum_address(path[1]),
+            _Web3.to_checksum_address(path[0]),
+            _Web3.to_checksum_address(path[1]),
             bool(self.stable),
             erc20_owner,
             deadline,
