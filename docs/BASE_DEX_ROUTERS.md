@@ -48,6 +48,11 @@ DIEM_TOKEN_ADDRESS=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024
 # Token watcher settings
 TOKEN_WATCH_ENABLE_HOLDERS=1
 TOKEN_WATCH_MAX_EVENTS=1000  # Increase from default 200 for accurate counts
+
+# Pricing path for DIEM (used by MarketDataProvider.prices):
+# Set TRADE_PATH so the first token is DIEM and the second is USDC to yield a price in USDC per DIEM.
+# Example:
+TRADE_PATH=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ```
 
 ## Troubleshooting DIEM Pricing

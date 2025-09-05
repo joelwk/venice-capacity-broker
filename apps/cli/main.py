@@ -446,6 +446,30 @@ def cmd_run_quorum(args: argparse.Namespace) -> None:
     logger.info(f"Quorum/flow decision (dry={args.dry_run}): {decided}")
 
 
+def cmd_run_orchestrator(args: argparse.Namespace) -> None:
+    """Run the orchestrator loop coordinating ArbiDiem decisions with persistence."""
+    import time
+
+    from services.marketdata.provider import MarketDataProvider
+    from services.diem.client import DIEMService
+    from libs.dex.providers import build_aggregator_from_env
+    from agents.arbi_diem.agent import ArbiDiem
+    from graph.workflows.orchestrator import Orchestrator
+
+    market = MarketDataProvider()
+    diem = DIEMService(build_aggregator_from_env())
+    arbi = ArbiDiem(diem)
+    orch = Orchestrator(market=market, arbi=arbi)
+
+    cycles = int(args.max_cycles)
+    sleep_s = float(args.sleep)
+    for i in range(cycles):
+        logger.info(f"Orchestrator cycle {i+1}/{cycles} (dry={args.dry_run})")
+        orch.run_once(dry_run=bool(args.dry_run))
+        if i < cycles - 1 and sleep_s > 0:
+            time.sleep(sleep_s)
+
+
 def cmd_run_graph(args: argparse.Namespace) -> None:
     """Run the LangGraph pipeline once with optional broker messages."""
     import json
@@ -880,6 +904,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--auth-bearer", required=False, default=os.getenv("PROBE_AUTH_BEARER") or None, help="Tenant subkey")
     sp.add_argument("--tenant", dest="tenant_id", required=False, default=os.getenv("PROBE_TENANT_ID") or None, help="Tenant id for admin mode")
     sp.set_defaults(func=cmd_probe_limits)
+
+    # Orchestrator loop
+    sp = sub.add_parser("run:orchestrator", help="Run orchestrator loop for ArbiDiem with persistence")
+    sp.add_argument("--dry-run", action="store_true", default=True)
+    sp.add_argument("--max-cycles", default="1")
+    sp.add_argument("--sleep", default="1.0")
+    sp.set_defaults(func=cmd_run_orchestrator)
 
     # Broker revoke tenant key (admin)
     def cmd_broker_tenant_revoke(args: argparse.Namespace) -> None:

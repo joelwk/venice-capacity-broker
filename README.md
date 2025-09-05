@@ -13,11 +13,11 @@ apps/
   cli/               # Operator CLI (argparse-based)
 services/
   wallet/            # Wallet providers (Smart Wallet + ETH account)
-  staking/           # VVV staking client (stubs)
-  diem/              # DIEM mint/burn/trade (stubs)
+  staking/           # VVV staking client (on-chain via AgentKit)
+  diem/              # DIEM mint/burn/trade (on-chain via AgentKit)
   venice_keys/       # Venice API key issuance manager
-  marketdata/        # Price/quotes provider (stub)
-  risk/              # Simple risk budget checks
+  marketdata/        # Price/quotes provider (DEX aggregator + Venice)
+  risk/              # Risk policy (limits + exposure helpers)
 agents/
   stake_master/      # Keeps staking optimal
   arbi_diem/         # DIEM arbitrage executor
@@ -30,6 +30,7 @@ graph/
 libs/
   venice_sdk/        # Thin Venice client (autonomous key flow)
   agentkit_ext/      # AgentKit action wrappers (stubs)
+  risk/              # Risk policy helpers
   pricing/           # DIEM fair value helpers
   telemetry/         # Logging and basic tracing
 infra/
@@ -80,6 +81,15 @@ On-chain and wallets:
   - Smart Wallet: set `WALLET_PROVIDER=smart_wallet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`, `OWNER`, `NETWORK_ID` (base-mainnet|base-sepolia), optional `PAYMASTER_URL`.
   - Base gating enforced: only base-mainnet or base-sepolia are allowed.
 To enable on-chain calls: set `BASE_RPC_URL` and provide ABIs in `abi/`.
+
+Risk policy:
+- Configure DIEM trade sizing and exposure limits via env:
+  - `RISK_MAX_DIEM_TRADE_USD` (default 10000)
+  - `RISK_MAX_DIEM_INVENTORY_USD` (default 100000)
+  - `RISK_MAX_DIEM_TRADE_UNITS` (optional absolute unit cap)
+  - `DIEM_DECIMALS` (optional override to avoid on-chain reads; default 18 if fetch fails)
+- ArbiDiem sizing:
+  - Desired units via `ARBI_DIEM_MINT_UNITS` (default 1000). Final units are min(desired, risk-allowed) at current DIEM price.
 
 Run the CLI help:
 
@@ -209,6 +219,7 @@ Notes:
     - Uniswap V2 router ABI (`abi/uniswap_v2_router.json`) with `TRADE_PATH`
     - Aerodrome router ABI (`abi/aerodrome_router.json`) with multi-hop support; pool type toggled via `AERODROME_STABLE` (the system auto-tries both stable/volatile)
 - Venice client now performs real HTTP requests; endpoints are configurable via env.
+ - Risk policy integrated with ArbiDiem to gate mint/sell sizes by USD or unit caps.
  - Broker store backend:
   - Default uses SQL (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Install `sqlmodel` and a DB driver like `psycopg2-binary`.
   - For file-based dev only, set `BROKER_STORE_BACKEND=json` (stores `apps/broker-api/tenants.json`).

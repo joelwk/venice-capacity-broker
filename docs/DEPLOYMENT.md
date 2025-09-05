@@ -14,12 +14,17 @@ Overview
    - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
    - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
-   - DEX aggregator (for on-chain pricing in token watcher):
+ - DEX aggregator (for on-chain pricing in token watcher):
      - `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
      - `DEX_PROVIDERS=uniswap_v2,aerodrome`
      - `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`
      - Optional: `DEX_BRIDGE_TOKEN_ADDRESS` (e.g., Base WETH)
      - Optional: price path cache tuning `PRICE_PATH_CACHE_TTL_SECONDS` (default 1800), `PRICE_PATH_CACHE_MAX` (default 256)
+  - Risk policy (for ArbiDiem sizing and exposure limits):
+    - `RISK_MAX_DIEM_TRADE_USD` (default 10000)
+    - `RISK_MAX_DIEM_INVENTORY_USD` (default 100000)
+    - `RISK_MAX_DIEM_TRADE_UNITS` (optional hard cap per trade)
+    - `DIEM_DECIMALS` (optional override to avoid on-chain reads)
 3. Click Run. The app binds to `0.0.0.0:$PORT` and serves `GET /health`.
 4. Deployments panel → Create Web Service (auto-detects run command from `.replit`).
 5. Verify health: open the webview → `/health` returns `{ "status": "ok" }`.
@@ -51,6 +56,9 @@ Default: SQL-backed store (Replit SQL or Postgres)
   - Or pip: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
 - Start API: `uv run uvicorn app:app --app-dir apps/broker-api --reload`
 - Health: `GET http://127.0.0.1:8000/health`
+
+Risk-aware ArbiDiem (optional operators):
+- Set `ARBI_DIEM_MINT_UNITS` to your desired mint lot size (in token units). The risk policy will reduce it as needed using the live DIEM price.
 
 3) GitHub — Safe CI Only (no publish)
 - The repo includes `.github/workflows/ci.yml` which:

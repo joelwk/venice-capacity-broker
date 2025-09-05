@@ -29,6 +29,18 @@ class DexProvider:
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         raise NotImplementedError
 
+    # --- Optional exact-out (buy-side) APIs ---
+    def quote_exact_out(self, amount_out: int, path: List[Address]) -> Optional[Quote]:
+        """Return a Quote with required amount_in to achieve amount_out along path.
+
+        Providers may override; default is unsupported (None).
+        """
+        return None
+
+    def trade_exact_out(self, amount_out: int, max_amount_in: int, path: List[Address]) -> Dict[str, str]:
+        """Execute exact-out swap, enforcing a maximum input (slippage guard)."""
+        raise NotImplementedError
+
 class UniswapV2DexProvider(DexProvider):
     name = "uniswap_v2"
 
@@ -45,6 +57,13 @@ class UniswapV2DexProvider(DexProvider):
         try:
             amounts = self.router.functions.getAmountsOut(amount_in, path).call()
             return Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+        except Exception:
+            return None
+
+    def quote_exact_out(self, amount_out: int, path: List[Address]) -> Optional[Quote]:
+        try:
+            amounts = self.router.functions.getAmountsIn(amount_out, path).call()
+            return Quote(provider=self.name, amount_in=int(amounts[0]), amount_out=amount_out, path=path)
         except Exception:
             return None
 
@@ -149,6 +168,21 @@ class AerodromeDexProvider(DexProvider):
         tx_hash = send_tx(self.router_addr, built["data"])
         return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
 
+    def trade_exact_out(self, amount_out: int, max_amount_in: int, path: List[Address]) -> Dict[str, str]:
+        # Ensure allowance for input token to router up to the max allowed amount
+        token_in = path[0]
+        from web3 import Web3 as _Web3  # type: ignore
+        recipient = self.recipient or _Web3.to_checksum_address(get_address())
+        approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, max_amount_in) or ""
+
+        deadline = int(time.time()) + 20 * 60
+        fn = self.router.functions.swapTokensForExactTokens(
+            amount_out, max_amount_in, path, recipient, deadline
+        )
+        built = fn.build_transaction({})
+        tx_hash = send_tx(self.router_addr, built["data"])
+        return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
+
 
 class DexAggregator:
     def __init__(self, providers: List[DexProvider]) -> None:
@@ -177,6 +211,33 @@ class DexAggregator:
         # Find the provider instance by name
         provider = next(p for p in self.providers if p.name == quote.provider)
         return provider.trade(amount_in, min_out, path)
+
+    # --- Exact-out (buy-side) helpers ---
+    def quote_all_exact_out(self, amount_out: int, path: List[Address]) -> List[Quote]:
+        quotes: List[Quote] = []
+        for p in self.providers:
+            try:
+                q = p.quote_exact_out(amount_out, path)
+            except Exception:
+                q = None
+            if q is not None:
+                quotes.append(q)
+        return quotes
+
+    def best_quote_exact_out(self, amount_out: int, path: List[Address]) -> Optional[Quote]:
+        quotes = self.quote_all_exact_out(amount_out, path)
+        if not quotes:
+            return None
+        # For exact-out, prefer the smallest required input amount
+        return min(quotes, key=lambda q: q.amount_in)
+
+    def trade_best_exact_out(self, amount_out: int, max_in_bps: int, path: List[Address]) -> Dict[str, str]:
+        quote = self.best_quote_exact_out(amount_out, path)
+        if quote is None:
+            raise RuntimeError("No exact-out quotes available from configured DEX providers")
+        max_in = quote.amount_in * (10_000 + max_in_bps) // 10_000
+        provider = next(p for p in self.providers if p.name == quote.provider)
+        return provider.trade_exact_out(amount_out, max_in, path)
 
 
 def build_aggregator_from_env() -> DexAggregator:

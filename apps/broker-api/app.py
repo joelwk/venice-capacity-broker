@@ -1035,7 +1035,16 @@ try:
         @app.get(METRICS_PATH)
         @_traceable("broker.metrics")
         def metrics() -> PlainTextResponse:
-            return PlainTextResponse(_metrics.render_prom(), media_type="text/plain; version=0.0.4; charset=utf-8")
+            # Builtin HTTP metrics
+            text = _metrics.render_prom()
+            # Append agent metrics if available
+            try:
+                from libs.telemetry.metrics import render_prom as _render_agents
+
+                text = text + _render_agents()
+            except Exception:
+                pass
+            return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # --- Admin: per-tenant broker limits (caps/labels) ---
     from pydantic import Field

@@ -1,167 +1,88 @@
-### ✅ Current State Summary (What’s Implemented)
+### ✅ Current State Summary (What's Implemented)
 
-| Area                                           | Evidence & Notes                                                                                                                                                                                                                                                                      |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Wallet & Staking (services/staking)**        | `StakingService` wraps VVV approve, stake, claim, and unstake functions; `status()` uses on‑chain calls to report staked and reward balances. This satisfies the basic staking module from the original plan.                                                                         |
-| **Market Data**                                | `MarketDataProvider` implements quoting, price fetching and DIEM/VVV signal retrieval, with caching and retry logic. It is functional for best‑price and unified signals.                                                                                                             |
-| **Key Management (services/venice\_keys)**     | `KeyManager` issues root and scoped subkeys via `VeniceClient` and revokes them; it delegates to Venice API endpoints.  It respects environment overrides for API paths.                                                                                                              |
-| **Venice SDK**                                 | `VeniceClient` sets the base URL and trims trailing slashes to avoid the double‑slash bug, and supports overrideable paths for root key, subkey creation, models and chat.  This solves environment pitfalls described in `VeniceProgress.txt`.                                       |
-| **Stake‑Master & DIEM Controller (LangGraph)** | `graph/langgraph/nodes.py` defines nodes for wallet verification, staking status, DIEM premium calculation (based on `DIEM_FAIR_ALPHA` & `DIEM_PREMIUM_THRESHOLD`) and a broker router.  The `diem_controller_node` returns `mint_sell` or `hold` decisions and logs rationale spans. |
-| **Broker API**                                 | `apps/broker-api/app.py` defines tenant creation, chat proxying with rate limits, per‑tenant limit configuration, and a debug counters endpoint (admin‑only).  It uses SQL storage by default, with JSON fallback.                                                                    |
-| **Idempotency & Rate Limiting**                | Middleware to prevent duplicate chat requests is implemented; it generates a digest key and returns 409 on replay.  Rate limiting per tenant uses sliding windows with KV or Redis; tests cover base cases.                                                                           |
-| **Tests & Observability**                      | There are tests for DIEM premium thresholds and rate‑limiting; `VeniceProgress.txt` notes tests for admin counters and broker limits have been added.  Metrics are exposed via Prometheus.                                                                                            |
+- Wallet + AgentKit: Smart Wallet and ETH account providers with Base-only gating; unified send/sign/address helpers. Files: `libs/agentkit_ext/agentkit_wallet.py`, `services/wallet/provider.py`.
+- Staking: `StakingService` wraps approve/stake/claim/unstake; `status()` performs safe, ABI-light on-chain reads. Files: `services/staking/client.py`, `libs/agentkit_ext/actions.py`, `abi/staking.json`.
+- DIEM service: On-chain `mint`/`burn` via AgentKit, plus DEX trading through an aggregator (Uniswap V2, Aerodrome). Files: `services/diem/client.py`, `libs/agentkit_ext/actions.py`, `libs/dex/providers.py`, `abi/*.json`.
+- Market data: Best-price quoting via aggregator; DIEM/VVV signal fetch with caching/retry; unified signals. Files: `services/marketdata/provider.py`, `libs/pricing/diem.py`.
+- Token watcher (Base/Etherscan v2): Periodic snapshots for price (via DEX), supply, holders, 24h transfers; persists to SQL. Files: `services/marketdata/token_watcher.py`, `db/models.py`.
+- Venice SDK + Keys: Configurable paths, chat/models/signals; KeyManager supports challenge-based root key and scoped subkeys; revoke and list helpers. Files: `libs/venice_sdk/client.py`, `services/venice_keys/manager.py`.
+- Broker API: FastAPI service with tenants, chat proxying, per-tenant limits, idempotency middleware, optional KV-backed rate limiting, `/v1/debug/counters`, `/v1/env`, metrics, and static admin UI at `/admin`. Files: `apps/broker-api/app.py`, `apps/broker-api/tenant_store*.py`, `apps/control-plane/*`.
+- CLI + Operator tools: Idempotency purge, KV→SQL compaction, counters view, env status, rotate/probe, Venice OpenAPI probe. Files: `apps/cli/main.py`, `scripts/*`, `Makefile`.
+- Graph + nodes: Minimal sequential or LangGraph-based pipeline (wallet → staking → DIEM decision → broker router) with optional LangSmith tracing. Files: `graph/langgraph/*.py`.
+- Agents: StakeMaster (claim in live mode), ArbiDiem (risk-gated mint/sell decision and execution), CapacityBroker (key issuance wrapper), AI Treasurer (initial rebalance heuristic). Files: `agents/*`.
+- Tests (select highlights): Risk policy sizing and conversions; ArbiDiem integrates risk limits; DIEM service delegates to on-chain actions; Broker idempotency + purge CLI; Rate limits (KV/memory/redis-optional); Admin counters endpoint stubs. Files: `tests/*.py`.
+- Docs + config: Deployment guide, Base DEX router addresses, README with make targets and env guidance. Files: `docs/*.md`, `config/*.yml`, `.env.example`.
 
 ---
 
 ### 🔍 Gaps and Pending Tasks
 
-1. **DIEM Module Completion**
-
-   * `services/diem/client.py` still has stubs for `mint` and `burn`.  Actual on‑chain minting (locking sVVV to mint DIEM) and burning (unlocking sVVV) must be implemented.  This includes constructing and sending Base L2 transactions, handling gas estimation, and updating state post‑transaction.
-
-2. **Risk Module**
-
-   * The `services/risk` folder only has an `__init__.py`.  The original plan proposed risk models (e.g., position sizing, volatility, utilization) to adjust staking or trading.  A basic risk service should at least compute portfolio exposure (VVV vs DIEM vs USD), apply configurable stop‑loss/limit parameters, and expose decisions to the quorum agent.
-
-3. **Capacity Broker & AI Treasurer Agents**
-
-   * The original plan described a `capacity_broker` agent to resell unused Diem capacity and a multi‑tenant broker API.  While the broker API exists, the agent logic to dynamically price and rent capacity is not implemented.  Similarly, the `ai_treasurer` agent for managing VVV/DIEM treasury allocations (e.g., budgeting, hedging, and reinvesting rewards) is missing.
-
-4. **Quorum / Multi‑Agent Orchestrator**
-
-   * The current graph only includes basic nodes (wallet, stake\_master, diem\_controller, broker\_router).  A full quorum orchestrator (listening to multiple signals, voting on actions, adjusting listen intervals) is not yet present.  This orchestrator should coordinate `stake_master`, `arbi_diem`, `capacity_broker`, and `ai_treasurer`.
-
-5. **DIEM Arbitrage & Market Integration**
-
-   * The plan included an `arbi_diem` agent to mint DIEM when the premium is above threshold and to burn or hold when below.  Although the decision logic exists, actual execution (minting, trading via DEX aggregator, monitoring slippage) needs to be wired up to `MarketDataProvider` and `DIEMService`.  Additional tests should cover these flows.
-
-6. **Risk‑Aware Idle Capacity Use**
-
-   * The project aims to sell unused Diem capacity to third parties via scoped keys.  This requires:
-
-     * Pricing models (e.g., cost plus margin).
-     * Quota management (ensuring own operations stay within staked capacity).
-     * Dynamic issuance/expiration of subkeys via `VeniceClient`.
-     * Documentation/guides for clients and an admin dashboard.
-
-7. **Documentation & Developer Experience**
-
-   * The README currently focuses on environment pitfalls and quick start instructions.  You requested a more development‑oriented technical reference: step‑by‑step workflows for pushing code to Replit, handling env variables (`VENICE_API_BASE_URL`, `VENICE_PARENT_KEY`, `VENICE_CREATE_SUBKEY_PATH`), managing dependencies (`uv` vs `pip`), and troubleshooting base URLs and double slashes.  A full overhaul is needed to capture lessons learned (e.g., verifying base URL via `/openapi.json`, difference between parent and API keys).
+- DEX trading modes: Only exact-in “sell” path is wired end-to-end. Missing exact-out “buy” flow (getAmountsIn + swapTokensForExactTokens) and fee-on-transfer fallback routing; aggregator API needs a buy-side path and slippage validation hooks.
+- Risk depth: Portfolio exposure (VVV/DIEM/USDC) not computed; no liquidity/volatility-aware sizing; no pool-depth/slippage guardrails; risk context not persisted or surfaced in observability.
+- Orchestrator maturity: Quorum scaffolding exists but not coordinating all agents nor persisting decisions/outcomes; no listen-interval/backoff policy; no unified eventing between nodes/agents.
+- Capacity Broker agent: Minimal key issuance only; lacks dynamic pricing/allocation logic tied to utilization and market pricing; missing integration loops with Broker API (quote → purchase verify → subkey issuance) for resale.
+- AI Treasurer: Only a simple buffer-based rebalance delta; needs budget/constraint modeling, coordination with staking/DIEM inventory, and explainable proposals.
+- On-chain ops safety: No dry-run/idempotency guards on mint/burn; no domain events emitted; limited error-class surfacing and correlation IDs in logs.
+- Observability: Agent loop metrics and decision logs not exposed in `/metrics`; limited structured tracing across agents/graph; limited admin toggles to pause/resume agents and adjust thresholds live.
+- Hardening: Security defaults (require admin token in prod), CORS allowlists, robust receipts/audit trails for quotes/purchases, env sanity checks; encoding artifacts in some docs should be cleaned up.
+- E2E coverage: Integration tests missing for exact-out trades, aggregator slippage guards, orchestrator decision branches, and buyer lifecycle.
 
 ---
 
 ### 📦 Updated Implementation Plan to Reach v1
 
-The goal is a minimal yet functional end‑to‑end system: stake VVV, monitor DIEM premiums, mint/sell DIEM, resell unused capacity via broker API, and coordinate decisions through a simple quorum.
+1) DEX + Trading Enhancements
+- Add exact-out “buy” support to `libs/dex.providers` and `DIEMACTIONS.trade` (getAmountsIn + swapTokensForExactTokens).
+- Add fee-on-transfer fallback for exact-in (swapExactTokensForTokensSupportingFeeOnTransferTokens).
+- Extend aggregator API to choose path per side with explicit slippage guards and provider health telemetry.
 
-1. **Complete DIEMService**
+2) DIEM Service Safety + Events
+- Add `dry_run` and idempotency key options to `services/diem/client.py` for mint/burn.
+- Emit structured domain events for mint/burn/trade with correlation IDs; surface error classes consistently.
 
-   * **Implement mint & burn**: Use Coinbase AgentKit or direct Web3 calls to interact with the DIEM smart contract on Base.  Write `mint(s_vvv_amount: int)` to lock sVVV and return minted DIEM; `burn(diem_amount: int)` to unlock sVVV.  Update `services/diem/client.py` accordingly and add tests.
+3) Risk Policy 1.1
+- Compute portfolio exposure (USD) across VVV/DIEM/USDC using TokenWatcher or MarketDataProvider.
+- Add liquidity/volatility-aware sizing caps and slippage thresholds; expose decisions in a compact struct.
+- Gate DIEM actions through risk API; persist last decision and reason for audits.
 
-2. **Add Risk Module**
+4) Orchestrator (Quorum) Build-Out
+- Compose StakeMaster, ArbiDiem, CapacityBroker, and AITreasurer in a unified graph/runner.
+- Add listen-interval/backoff policy, centralize signal ingestion, and persist decisions/outcomes (SQL or KV).
+- CLI entry to run orchestrator with flags for dry-run/live and feature gates.
 
-   * Create `services/risk/policy.py` with functions to compute portfolio exposure (current VVV, DIEM, USD), and recommend safe position sizes.  Allow configurable parameters for max exposure, minimum liquidity, and stop‑loss thresholds.  Integrate this into the quorum so decisions respect risk constraints.
+5) Capacity Broker Agent 1.0
+- Integrate `libs/pricing.engine` (Static/Market) for dynamic pricing; add utilization feedback from counters.
+- Build loop to publish quotes, verify purchases, and issue scoped subkeys via Broker API.
 
-3. **Finish Market & Arbitrage Logic**
+6) AI Treasurer 0.1
+- Define budget/constraints; compute allocations across VVV/DIEM/USDC; integrate staking actions where safe.
+- Produce explainable proposals and optionally auto-apply under feature flag.
 
-   * Extend `MarketDataProvider` to compute DIEM fair value and premium using available signals and on‑chain data.  Integrate `arbi_diem` agent logic: call `mint` when premium ≥ threshold and `burn` when below, factoring in risk and rate limits.  Ensure trades use the aggregator for best price and handle slippage.  Add tests to verify that decisions result in the correct on‑chain transactions.
+7) Observability + Ops
+- Extend `/metrics` with agent loop metrics, DIEM ops, and error classes; add structured logs with correlation IDs.
+- Admin toggles via env or API to pause/resume agents and adjust thresholds without redeploys.
 
-4. **Capacity Broker and Tenant Management**
+8) Hardening + Security
+- Enforce `BROKER_REQUIRE_ADMIN_TOKEN=true` in production; set CORS allowlists for admin/buyer surfaces.
+- Improve receipts/audit logs for quotes/purchases; document recovery/rotation runbooks.
 
-   * Flesh out a `capacity_broker` agent to:
+9) Tests + CI
+- Add integration tests for exact-out trades and slippage checks; orchestrator branches and buyer lifecycle.
+- Keep mocks and monkeypatches lightweight to avoid external dependencies in CI; document required env gates.
 
-     * Calculate spare capacity (unused DIEM credits).
-     * Price and sell capacity to tenants via the broker API.
-     * Use `VeniceClient` to issue scoped subkeys with quotas and expirations.
-     * Adjust prices dynamically based on utilization and market demand.
-   * Build a simple web UI or CLI to view tenants, capacity usage and pricing.
-
-5. **Treasury Management**
-
-   * Implement `ai_treasurer` agent to oversee treasury functions:
-
-     * Stake/unstake VVV based on risk and premium.
-     * Allocate minted DIEM between internal usage, resale, and burning.
-     * Track emissions rewards and restake as appropriate.
-
-6. **Quorum & Agent Orchestration**
-
-   * Build a `quorum` agent using LangGraph to:
-
-     * Collect signals from `stake_master`, `arbi_diem`, `capacity_broker`, `ai_treasurer`, and `risk`.
-     * Vote or apply weighted rules to decide the final action (e.g., “mint and sell DIEM”, “increase price on broker API”).
-     * Adjust `listen interval` based on volatility (as per original plan) to react faster during high demand.
-
-7. **Testing and Validation**
-
-   * Expand the test suite:
-
-     * Cover DIEM mint/burn flows and risk constraints.
-     * Test broker API subkey issuance and quotas.
-     * Validate quorum decisions under different market scenarios.
-     * Include integration tests that stake VVV, mint DIEM, sell DIEM, and check balances.
-
-8. **Documentation & Developer Workflow**
-
-   * Overhaul the README to serve as a technical reference:
-
-     * Step‑by‑step setup for Replit: environment variables, `uv` installation, path trimming (`BASE_URL%/`), verifying Venice base URL via `openapi.json`, and subkey path overrides.
-     * Differences between parent key and standard API key, how to acquire each, and when to use them.
-     * Guide for using the broker CLI, issuing subkeys, and calling chat completions.
-     * Troubleshooting section: common errors (e.g., 404 on subkey creation due to wrong base path) and how to fix them.
-   * Document contribution workflows: branch naming, testing (`pytest`), environment compaction, deployment on Replit, and how to update the SQL schema when adding new services.
-
-9. **Optional Enhancements** (future sprints after v1)
-
-   * Add risk‑adjusted dynamic pricing models.
-   * Integrate on‑chain governance for parameter tuning.
-   * Support other AI models via multi‑provider routing.
-   * Implement a marketplace for DIEM rentals using escrow contracts.
+10) Docs + Defaults
+- Update `.env.example` for DEX/buyer/orchestrator flags; refresh README/DEPLOYMENT with new flows and runbooks.
+- Fix encoding artifacts in plan/docs; ensure Base router docs reflect current addresses.
 
 ---
 
 ### 🚀 Next Steps Toward Final System (Focused on Agents + System Features)
 
-1) Marketdata + Watchers (stabilize, then freeze)
-- Confirm multi-hop Aerodrome quoting works in prod (Base) and cache hit-rates are healthy.
-- Add metrics: cache hits/misses, quote failures by provider, and average price latency.
-- Finalize env defaults in `.env.example` (routers, quote/bridge tokens, cache TTL/max) and document in README/DEPLOYMENT.
-- Freeze interfaces for `MarketDataProvider`, `TokenMetrics`, and DEX aggregator inputs.
+- Implement buy-side in aggregator: add getAmountsIn + swapTokensForExactTokens, plus FOT fallback; unit tests for both providers.
+- Add `dry_run` + idempotency guard to `DIEMService.mint/burn`; return structured events and surface errors.
+- Extend `RiskPolicy` with portfolio exposure and slippage caps; wire into ArbiDiem and orchestrator.
+- Build orchestrator loop: unify agents under `graph/langgraph`, add listen-interval/backoff, persist decisions; CLI `run:quorum` to drive it.
+- Capacity Broker loop: integrate pricing → quote → purchase verify → subkey issuance; minimal utilization feedback.
+- Observability: add agent metrics and decision logs; correlation IDs across actions; optional tracing via LangSmith.
+- Documentation: update README/DEPLOYMENT and admin runbooks; ensure `.env.example` matches new flags; clean up encoding issues.
 
-2) DIEM Module (on-chain actions)
-- Implement `services/diem` mint/burn with Web3 + AgentKit wallet; wire gas estimation and error surfacing.
-- Add a dry-run mode and idempotency guard for mint/burn operations.
-- Emit domain events (minted, burned, failed) for the orchestrator.
-
-3) Risk Service (MVP)
-- Add `services/risk` with simple budget/exposure checks and tunable thresholds (ENV-backed).
-- Provide a stateless API the orchestrator can call before taking actions (stake, mint, trade).
-
-4) Orchestrator (Quorum) Build-Out
-- Compose `stake_master`, `arbi_diem`, `capacity_broker`, and `ai_treasurer` under a unified graph.
-- Add listen-interval policy and backoff; centralize signal ingestion (DIEM/VVV signals + token watcher snapshots).
-- Persist decisions and outcomes for observability.
-
-5) ArbiDiem Agent
-- Implement premium detection loop (already in plan) to trigger mint/sell (or hold) based on thresholds and risk limits.
-- Integrate with DEX prices for execution preview; validate expected slippage via aggregator quotes.
-
-6) Capacity Broker Agent
-- Add dynamic pricing logic for reselling unused capacity; use `libs/pricing` and `MarketPricingEngine` as baseline.
-- Implement allocation logic using Broker API (quote → purchase → key issuance lifecycle).
-
-7) AI Treasurer Agent
-- Define treasury constraints and objectives; allocate between VVV/DIEM/USDC given risk budget.
-- Schedule periodic rebalancing; produce proposals logged with explanations.
-
-8) Observability + Ops
-- Extend `/metrics` to include agent loop metrics, DIEM transactions, and error classes.
-- Add structured logs for all agent decisions with correlation IDs.
-- Provide admin toggles to pause/resume agents and adjust thresholds live.
-
-9) Hardening + Tests
-- Add integration tests for: multi-hop quotes, DIEM mint/burn happy paths (mock chain), and orchestrator decision branches.
-- Gate agent actions behind feature flags and environment readiness checks.
-
-10) Documentation (sources of truth)
-- Keep `README.md` (developer quickstart), `docs/DEPLOYMENT.md` (ops), and `implementation-plan-v2.md` (architecture + roadmap) updated as features land.

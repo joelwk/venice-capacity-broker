@@ -153,3 +153,13 @@ class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
     else:
         max_total_supply: Optional[int] = None
     raw_json: Optional[str] = None  # lightly structured JSON payload for auditing
+
+
+class Decision(SQLModel, table=True):  # type: ignore[call-arg]
+    """Agent/orchestrator decision log for observability."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    agent: str
+    action: str
+    details: Optional[str] = None  # JSON string with context
+    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())

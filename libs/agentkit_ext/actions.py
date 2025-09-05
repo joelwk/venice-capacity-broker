@@ -124,9 +124,34 @@ class DIEMACTIONS:
         path: List[str] = [Web3.to_checksum_address(p.strip()) for p in path_env.split(",")]
         if side.lower() not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
-        # Assume amount is in units of path[0] for sell; for buy, amount is spend of path[-1] not implemented here
+        # For 'sell': amount is amountIn (path[0] units)
+        # For 'buy': amount is desired amountOut (path[-1] units)
         if side.lower() == "buy":
-            raise NotImplementedError("'buy' by output amount not implemented; specify 'sell' with amountIn")
+            # Approve router to spend up to maxIn (computed below) of input token
+            erc20_in = get_contract(self.w3, path[0], "erc20.json")
+            # Determine required amountIn via getAmountsIn
+            amounts_in = self.router.functions.getAmountsIn(int(amount), path).call()
+            required_in = int(amounts_in[0])
+            slippage_bps = int(os.getenv("SLIPPAGE_BPS", "100"))
+            max_in = required_in * (10_000 + slippage_bps) // 10_000
+            approve_data = erc20_in.encode_abi(
+                fn_name="approve", args=[self.router.address, max_in]
+            )
+            approve_hash = send_tx(path[0], bytes.fromhex(approve_data[2:]))
+            deadline = int(time.time()) + 20 * 60
+            swap_func = self.router.functions.swapTokensForExactTokens(
+                int(amount), int(max_in), path, self._address, deadline
+            )
+            built = swap_func.build_transaction({})
+            tx_hash = send_tx(self.router.address, built["data"])
+            return {
+                "status": "sent",
+                "action": "trade",
+                "side": side,
+                "tx_hash": tx_hash,
+                "approval_tx": approve_hash,
+                "max_in": str(max_in),
+            }
 
         # Approve router to spend the input token
         erc20_in = get_contract(self.w3, path[0], "erc20.json")
