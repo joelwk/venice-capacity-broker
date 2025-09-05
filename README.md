@@ -385,9 +385,9 @@ Addresses on Base:
 - Defaults target Base mainnet (`NETWORK_ID=base-mainnet`). Prefilled values in `.env.example` and `config/addresses.base-mainnet.yml`:
   - `VVV_TOKEN_ADDRESS`: 0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf
   - `VVV_STAKING_ADDRESS`: 0x321b7ff75154472B18EDb199033fF4D116F340Ff
-  - `DIEM_TOKEN_ADDRESS`: 0xF4d861575ecc9493420A3f5a14F85B13f0b50EB3
+  - `DIEM_TOKEN_ADDRESS`: 0xF4d97F2da56e8c3098f3a8D538DB630A2606a024
   - `UNISWAP_V2_ROUTER_ADDRESS`: 0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24
-  - `AERODROME_ROUTER_ADDRESS`: 0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5
+  - `AERODROME_ROUTER_ADDRESS`: 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43
   - `AERODROME_STABLE`: false (DIEM/USDC volatile pool)
 
 Offline signing test:
@@ -458,9 +458,13 @@ Idempotency
   - `QUOTES_ENABLED=true` to enable `GET /v1/quotes`
   - `PURCHASES_ENABLED=true` to enable `POST /v1/purchases/verify` and `GET /v1/purchases/{id}`
   - `CORS_ENABLED=true` and `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
-- Pricing (Static engine)
-  - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
-  - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`
+ - Pricing (Static engine)
+   - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
+   - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`
+   - Notes on units/multipliers:
+     - USDC uses 6 decimals. 1 USDC = 1,000,000 minor units (`10^6`).
+     - ETH uses wei. 1 ETH = 1,000,000,000,000,000,000 wei (`10^18`).
+     - For proportions, DeFi conventions use 18‑decimals fixed point (aka WAD = `10^18`); basis points (`10^4`) are also common for simple slippage/fees.
 - Payments
   - `BASE_RPC_URL` (Base mainnet RPC)
   - `TREASURY_ADDRESS` (receiver)

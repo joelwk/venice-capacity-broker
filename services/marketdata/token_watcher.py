@@ -612,6 +612,11 @@ def run_watch_loop() -> None:
         print(f"  - QUOTE_TOKEN_ADDRESS: {os.getenv('QUOTE_TOKEN_ADDRESS', 'NOT SET')}")
         print(f"  - API endpoint: {base_url}")
         print(f"  - Chain ID: {chain_id}")
+        # DEX configuration introspection to aid pricing issues
+        print(f"  - DEX_PROVIDERS: {os.getenv('DEX_PROVIDERS', 'NOT SET')}")
+        print(f"  - UNISWAP_V2_ROUTER_ADDRESS: {os.getenv('UNISWAP_V2_ROUTER_ADDRESS', 'NOT SET')}")
+        print(f"  - AERODROME_ROUTER_ADDRESS: {os.getenv('AERODROME_ROUTER_ADDRESS', 'NOT SET')}")
+        print(f"  - AERODROME_STABLE: {os.getenv('AERODROME_STABLE', 'NOT SET')}")
 
     # Addresses to track: prefer explicit list, else known env tokens.
     explicit = os.getenv("TOKEN_WATCH_ADDRESSES")
