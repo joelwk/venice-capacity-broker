@@ -172,6 +172,7 @@ class BaseScanClient:
         """Count Transfer events in the last window via logs/getLogs (v2-compatible).
 
         Uses block.getblocknobytime to compute fromBlock.
+        Supports pagination to count all events up to max_events.
         """
         try:
             cutoff_ts = int(time.time() - minutes * 60)
@@ -180,24 +181,47 @@ class BaseScanClient:
                 return None
             # ERC-20 Transfer signature
             topic0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-            j = self._get(
-                {
-                    "module": "logs",
-                    "action": "getLogs",
-                    "address": address,
-                    "fromBlock": str(from_block),
-                    "toBlock": "latest",
-                    "topic0": topic0,
-                    "page": "1",
-                    "offset": str(max_events),
-                    "sort": "desc",
-                }
-            )
-            res = j.get("result")
-            if isinstance(res, list):
-                return min(len(res), max_events)
-            return None
-        except Exception:
+            
+            # Etherscan V2 API limits results to 1000 per page
+            page_size = min(1000, max_events)
+            total_count = 0
+            page = 1
+            
+            while total_count < max_events:
+                j = self._get(
+                    {
+                        "module": "logs",
+                        "action": "getLogs",
+                        "address": address,
+                        "fromBlock": str(from_block),
+                        "toBlock": "latest",
+                        "topic0": topic0,
+                        "page": str(page),
+                        "offset": str(page_size),
+                        "sort": "desc",
+                    }
+                )
+                res = j.get("result")
+                if not isinstance(res, list) or len(res) == 0:
+                    # No more results
+                    break
+                    
+                total_count += len(res)
+                
+                # If we got less than page_size results, we've reached the end
+                if len(res) < page_size:
+                    break
+                    
+                page += 1
+                
+                # Safety check to prevent infinite loops
+                if page > 10:  # Max 10,000 events
+                    break
+            
+            return min(total_count, max_events)
+        except Exception as e:
+            if _truthy_env("TOKEN_WATCH_DEBUG"):
+                print(f"[token-watcher][debug] Error counting transfers: {type(e).__name__}: {e}")
             return None
 
 
@@ -238,6 +262,24 @@ def _erc20_metadata_via_web3(address: str) -> Tuple[Optional[str], Optional[str]
 
 def _truthy_env(name: str, default: str = "false") -> bool:
     return (os.getenv(name) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _format_price(price: Optional[float]) -> str:
+    """Format price in human-readable format, avoiding scientific notation."""
+    if price is None:
+        return "None"
+    if price >= 1.0:
+        # For prices >= $1, show 2-4 decimal places
+        return f"{price:.4f}".rstrip('0').rstrip('.')
+    elif price >= 0.01:
+        # For prices >= $0.01, show up to 4 decimal places
+        return f"{price:.4f}".rstrip('0').rstrip('.')
+    elif price >= 0.0001:
+        # For prices >= $0.0001, show up to 6 decimal places
+        return f"{price:.6f}".rstrip('0').rstrip('.')
+    else:
+        # For very small prices, show up to 10 decimal places
+        return f"{price:.10f}".rstrip('0').rstrip('.')
 
 
 def _effective_quote_token_address() -> Optional[str]:
@@ -290,7 +332,7 @@ def _price_via_dex(address: str) -> Optional[float]:
                 price = float(best0["price"])
                 provider_name = str(best0.get("provider") or "")
                 if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(f"[token-watcher][debug] Using cached price path {cached} from {provider_name}: {price}")
+                    print(f"[token-watcher][debug] Using cached price path {cached} from {provider_name}: {_format_price(price)}")
                 return price
             except Exception as e:
                 if _truthy_env("TOKEN_WATCH_DEBUG"):
@@ -404,7 +446,7 @@ def _price_via_dex(address: str) -> Optional[float]:
         if _truthy_env("TOKEN_WATCH_DEBUG"):
             src = provider_name or "unknown"
             print(
-                f"[token-watcher][debug] DEX price success from {src}: {price}"
+                f"[token-watcher][debug] DEX price success from {src}: {_format_price(price)}"
             )
 
         return price
@@ -639,7 +681,7 @@ def run_watch_loop() -> None:
             try:
                 metrics = collect_token_metrics(addr, client)
                 persist_metrics(metrics)
-                print(f"[token-watcher] {metrics.symbol or ''} {addr[:6]}.. price={metrics.price_usd} holders={metrics.holders} tx24h={metrics.transfers_24h}")
+                print(f"[token-watcher] {metrics.symbol or ''} {addr[:6]}.. price={_format_price(metrics.price_usd)} holders={metrics.holders} tx24h={metrics.transfers_24h}")
             except Exception as e:  # noqa: BLE001
                 print(f"[token-watcher] error for {addr}: {e}")
         if once:
