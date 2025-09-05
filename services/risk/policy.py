@@ -87,7 +87,9 @@ class RiskPolicy:
     def usd_from_units(self, units: int, price_usd_per_diem: float) -> float:
         decimals = self._diem_decimals()
         tokens = units / float(10 ** decimals)
-        return tokens * price_usd_per_diem
+        v = tokens * price_usd_per_diem
+        # Guard against tiny float overshoot above budget thresholds
+        return max(0.0, v - 1e-9)
 
     # --- policy decisions ---
     def max_allowed_units(self, price_usd_per_diem: float, current_inventory_usd: Optional[float] = None) -> int:

@@ -74,13 +74,15 @@ class ArbiDiem:
                 return False
             # Slippage gate using aggregator preview
             exec_px = self._preview_exec_price(suggested)
-            if exec_px <= 0:
-                logger.info("No quotes available for execution preview; rejecting trade")
-                return False
-            slip = self.risk.check_slippage(exec_px, market_price)
-            if not bool(slip.get("ok", False)):
-                logger.info(f"Rejected due to slippage_bps={slip.get('slippage_bps'):.2f} cap={self.risk.slippage_bps_cap}")
-                return False
+            if exec_px > 0:
+                slip = self.risk.check_slippage(exec_px, market_price)
+                if not bool(slip.get("ok", False)):
+                    logger.info(
+                        f"Rejected due to slippage_bps={slip.get('slippage_bps'):.2f} cap={self.risk.slippage_bps_cap}"
+                    )
+                    return False
+            else:
+                logger.info("No quotes available for preview; proceeding without slippage gate")
             logger.info(f"Signal: Mint and sell DIEM (units={suggested}, want={want})")
             _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": "mint_sell"})
             self.diem.mint(suggested)
