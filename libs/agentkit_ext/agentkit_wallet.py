@@ -64,7 +64,9 @@ def get_agentkit_wallet() -> Tuple[object, str]:
         if "cdp_api_key_private_key" in fields:
             kwargs["cdp_api_key_private_key"] = os.getenv("CDP_API_KEY_SECRET")
         if "owner" in fields:
-            kwargs["owner"] = _must("OWNER")
+            _owner = os.getenv("OWNER")
+            if _owner:
+                kwargs["owner"] = _owner
         if "paymaster_url" in fields:
             kwargs["paymaster_url"] = os.getenv("PAYMASTER_URL")
         if "rpc_url" in fields:

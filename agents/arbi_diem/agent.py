@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from libs.telemetry.logger import get_logger
-from libs.pricing.diem import fair_value_per_diem
+from importlib import import_module
 from services.diem.client import DIEMService
 from services.risk.policy import RiskPolicy
 try:
@@ -63,6 +63,8 @@ class ArbiDiem:
             return 0.0
 
     def evaluate_and_maybe_mint(self, market_price: float, mint_rate: float = 1.0, desired_units: int | None = None) -> bool:
+        # Import lazily so tests can monkeypatch libs.pricing.diem
+        fair_value_per_diem = import_module("libs.pricing.diem").fair_value_per_diem  # type: ignore[attr-defined]
         fair = fair_value_per_diem(self.discount_rate_apy) * mint_rate / 365.0
         logger.info(f"Market px={market_price:.4f}, fair/day={fair:.4f}")
         if market_price > fair * 1.05:  # 5% threshold
