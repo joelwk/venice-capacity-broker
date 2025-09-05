@@ -20,10 +20,15 @@ class DIEMService:
     def __init__(self, aggregator: Optional[DexAggregator] = None) -> None:
         # DEX aggregator for quotes/trades (optional; lazily used)
         self.aggregator = aggregator  # may be None in tests or dry flows
-        # On-chain actions (mint/burn) via AgentKit-compatible helpers
-        # Resolve DIEMACTIONS lazily to honor monkeypatching in tests
-        actions_mod = import_module("libs.agentkit_ext.actions")
-        self._actions = getattr(actions_mod, "DIEMACTIONS")()
+        # On-chain actions via AgentKit-compatible helpers
+        # Lazily resolve DIEMACTIONS at call time to avoid importing web3 in tests
+        self._actions = None  # type: ignore[assignment]
+        self._actions_factory = lambda: getattr(import_module("libs.agentkit_ext.actions"), "DIEMACTIONS")()
+
+    def _get_actions(self):  # lazy, to avoid web3 dependency during tests
+        if self._actions is None:
+            self._actions = self._actions_factory()
+        return self._actions
 
     def mint(self, amount: int, *, dry_run: bool = False, idem_key: Optional[str] = None) -> Dict[str, Any]:
         """Mint DIEM on-chain using configured wallet provider.
@@ -41,7 +46,7 @@ class DIEMService:
             if idem_key in _idem_attr:
                 return {"status": "skipped", "action": "mint", "idempotent": True}
             _idem_attr.add(idem_key)
-        res = self._actions.mint(amount)
+        res = self._get_actions().mint(amount)
         try:
             _emit_event("diem.mint", {"amount": int(amount), **dict(res)})
         except Exception:
@@ -60,7 +65,7 @@ class DIEMService:
             if idem_key in _idem_attr:
                 return {"status": "skipped", "action": "burn", "idempotent": True}
             _idem_attr.add(idem_key)
-        res = self._actions.burn(amount)
+        res = self._get_actions().burn(amount)
         try:
             _emit_event("diem.burn", {"amount": int(amount), **dict(res)})
         except Exception:
@@ -88,7 +93,7 @@ class DIEMService:
                 res = self.aggregator.trade_best(amount, slippage_bps, path)
             else:
                 # Fallback to actions if aggregator unavailable (test/mocked path)
-                res = self._actions.trade("sell", amount)
+                res = self._get_actions().trade("sell", amount)
             out = {"status": "sent", **res}
             try:
                 _emit_event("diem.trade", {"side": side_l, "amount_in": int(amount), **dict(out)})
@@ -109,9 +114,7 @@ class DIEMService:
                 except Exception:
                     pass
             # Fallback path
-            act = getattr(self, "_actions", None)
-            if act is None:
-                raise RuntimeError("No available trading path for 'buy'")
+            act = self._get_actions()
             res = act.trade("buy", amount)
             out = {"status": "sent", **res}
             try:
