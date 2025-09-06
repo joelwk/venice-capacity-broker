@@ -23,6 +23,9 @@ Features (MVP)
     - Includes `orchestrator.dryRunFakePrice` when set (used by offline dry-runs)
     - Includes `signals.recent` with the last few `signal.market.*` events for operator visibility
     - Includes `venice` config snapshot (baseUrl, vvvPath, diemPath, offlineSignals) without secrets
+  - Venice probe: `GET /v1/admin/venice/probe?base=https://api.venice.ai` (admin) fetches OpenAPI and suggests env exports (base URL and paths)
+  - Admin UI card: “Venice Config & Signals” shows config snapshot, recent signals, and inline Path Probe (enter base URL and click “Probe Paths”)
+  - Offline indicator: status line shows “Signals: OFFLINE” when `VENICE_OFFLINE_SIGNALS=true` or recent signals indicate offline stubs
 - Chat Probe
   - Admin act-as tenant: `POST /v1/chat` with `X-Tenant-Id: <id>`
   - Model: request `model` or global `BROKER_DEFAULT_MODEL`
@@ -54,7 +57,7 @@ Environment & Backends
     - Circuit: `vvv_dex_circuit_open_total{provider}`, `vvv_dex_circuit_skips_total{provider}`. Configure with `DEX_CIRCUIT_FAILURES` and `DEX_CIRCUIT_COOL_OFF_SECONDS`.
   - Structured events: ArbiDiem/DIEM actions emit `diem.mint`, `diem.burn`, `diem.trade` (now include optional `correlationId`).
   - Risk metrics: `vvv_risk_liquidity_checks_total{adjusted}` and `vvv_risk_liquidity_slippage_bucket_total{bucket}` capture liquidity-aware sizing decisions.
-- Signal bus: emits `signal.market.prices` and `signal.market.signals` to a lightweight in-process event queue for cross-agent wiring.
+  - Signal bus: emits `signal.market.prices` and `signal.market.signals` to a lightweight in-process event queue for cross-agent wiring.
   - Offline fallback (dev): set `VENICE_OFFLINE_SIGNALS=true` to return stubbed signals from `/v1/market/signals` when Venice endpoints are unavailable.
 
 Decision Record (operators)

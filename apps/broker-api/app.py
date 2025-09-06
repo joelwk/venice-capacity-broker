@@ -394,6 +394,24 @@ try:
         except Exception:
             dr_fake_price = None
 
+        # Determine if signals are currently using an offline stub
+        def _signals_offline(recents: list[dict]) -> bool:
+            try:
+                for e in reversed(recents):
+                    # Prefer signal.market.signals events for offline detection
+                    if str(e.get("kind", "")) == "signal.market.signals":
+                        vvv = e.get("vvv") or {}
+                        diem = e.get("diem") or {}
+                        if bool(vvv.get("offline")) or bool(diem.get("offline")):
+                            return True
+                        # if explicit offline flags are absent, assume online
+                        return False
+                return False
+            except Exception:
+                return False
+
+        signals_offline = _signals_offline(recent_signals)
+
         # Venice config snapshot (no secrets)
         venice_cfg = {
             "baseUrl": (_os.getenv("VENICE_API_BASE_URL") or "").strip() or None,
@@ -453,8 +471,76 @@ try:
             },
             "signals": {
                 "recent": recent_signals,
+                "offline": bool(signals_offline),
             },
             "venice": venice_cfg,
+        }
+
+    # --- Admin: Venice OpenAPI probe (server-side) ---
+    @app.get("/v1/admin/venice/probe")
+    @_traceable("broker.venice_probe")
+    def venice_probe(
+        base: str | None = Query(default=None, description="Base host, e.g., https://api.venice.ai"),
+        timeout: float = Query(default=10.0, ge=1.0, le=60.0),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> dict:
+        """Admin-only: Fetch OpenAPI and recommend VENICE_* exports.
+
+        Tries /openapi.json then /api/openapi.json at the provided base.
+        """
+        _require_admin(authorization)
+        import requests as _rq
+
+        base_url = (base or "https://api.venice.ai").rstrip("/")
+        spec = None
+        spec_loc = None
+        for path in ("/openapi.json", "/api/openapi.json"):
+            try:
+                r = _rq.get(base_url + path, timeout=timeout)
+                if r.ok:
+                    spec = r.json()
+                    spec_loc = path
+                    break
+            except Exception:
+                continue
+        if spec is None:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch OpenAPI from {base_url}")
+
+        servers = spec.get("servers") or []
+        server_url = None
+        if servers and isinstance(servers, list) and isinstance(servers[0], dict):
+            server_url = servers[0].get("url")
+        if server_url and isinstance(server_url, str):
+            if server_url.startswith("http://") or server_url.startswith("https://"):
+                recommended_base = server_url.rstrip("/")
+            else:
+                recommended_base = base_url + ("/" + server_url.lstrip("/"))
+        else:
+            recommended_base = base_url if spec_loc == "/openapi.json" else base_url + "/api"
+
+        paths = spec.get("paths") or {}
+        def _first_present(cands: list[str]) -> str | None:
+            for c in cands:
+                if c in paths:
+                    return c
+            return None
+
+        subkey_path = _first_present(["/api_keys", "/v1/keys/sub", "/v1/keys/subkey"]) or "/api_keys"
+        root_path = _first_present(["/api_keys/generate_web3_key", "/v1/keys/generate_web3_key"]) or "/api_keys/generate_web3_key"
+        # Signals endpoints vary; default to /vvv and /diem
+        vvv_path = "/vvv" if "/vvv" in paths else ("/signals/vvv" if "/signals/vvv" in paths else "/vvv")
+        diem_path = "/diem" if "/diem" in paths else ("/signals/diem" if "/signals/diem" in paths else "/diem")
+
+        return {
+            "inputBase": base_url,
+            "specLocation": spec_loc,
+            "recommended": {
+                "VENICE_API_BASE_URL": recommended_base,
+                "VENICE_CREATE_SUBKEY_PATH": subkey_path,
+                "VENICE_CREATE_ROOT_PATH": root_path,
+                "VENICE_VVV_PATH": vvv_path,
+                "VENICE_DIEM_PATH": diem_path,
+            },
         }
 
     # --- Auth helpers ---

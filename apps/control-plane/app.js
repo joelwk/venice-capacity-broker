@@ -159,12 +159,14 @@
       const vvv = v.vvvPath || '/vvv';
       const diem = v.diemPath || '/diem';
       const off = !!v.offlineSignals;
+      const sig = (env && env.signals) || {};
+      const sigOffline = !!sig.offline;
       let msg = `Base: ${base} | VVV: ${vvv} | DIEM: ${diem}`;
       if (!base || base === '(unset)') {
         msg += ' — Missing VENICE_API_BASE_URL';
         st.classList.add('error');
-      } else if (off) {
-        msg += ' — Offline signals enabled (dev mode)';
+      } else if (off || sigOffline) {
+        msg += ' — Signals: OFFLINE (dev mode)';
         st.classList.remove('error');
       } else {
         st.classList.remove('error');
@@ -188,6 +190,18 @@
       setText('#veniceCfgOut', String(e));
       setText('#veniceSignalsOut', '');
       setText('#veniceStatus', '');
+    }
+  }
+
+  async function probeVenice() {
+    const base = (qs('#veniceBaseUrl')?.value || '').trim();
+    setText('#veniceProbeOut', '');
+    try {
+      const params = base ? ('?base=' + encodeURIComponent(base)) : '';
+      const res = await fetchJSON('/v1/admin/venice/probe' + params);
+      setJSON('#veniceProbeOut', res);
+    } catch (e) {
+      setText('#veniceProbeOut', String(e));
     }
   }
 
@@ -363,6 +377,7 @@
     bind('#refreshHealthBtn', 'click', refreshHealth);
     bind('#refreshEnvBtn', 'click', refreshEnv);
     bind('#refreshVeniceBtn', 'click', refreshVenice);
+    bind('#probeVeniceBtn', 'click', probeVenice);
 
     // Tenants
     bind('#refreshTenantsBtn', 'click', refreshTenants);
