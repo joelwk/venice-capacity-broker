@@ -65,7 +65,30 @@ class Orchestrator:
         if (os.getenv("AGENTS_PAUSED") or "false").strip().lower() in {"1", "true", "yes", "on"}:
             decision = False
         elif dry_run:
-            decision = px > 0
+            # Use agent evaluation without sending on-chain actions
+            try:
+                import inspect as _ins
+
+                params = _ins.signature(self.arbi.evaluate_and_maybe_mint).parameters  # type: ignore[attr-defined]
+                if "simulate" in params and "corr_id" in params:
+                    decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
+                        px,
+                        mint_rate=mint_rate,
+                        desired_units=None,
+                        current_inventory_usd=None,
+                        corr_id=corr,
+                        simulate=True,
+                    )
+                elif "simulate" in params:
+                    decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
+                        px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=None, simulate=True
+                    )
+                else:
+                    decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
+                        px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=None
+                    )
+            except Exception:
+                decision = px > 0
         else:
             # Pass correlation id if agent supports it
             try:

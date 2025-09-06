@@ -145,6 +145,7 @@ class ArbiDiem:
         desired_units: int | None = None,
         current_inventory_usd: float | None = None,
         corr_id: str | None = None,
+        simulate: bool = False,
     ) -> bool:
         # Import lazily so tests can monkeypatch libs.pricing.diem
         fair_value_per_diem = import_module("libs.pricing.diem").fair_value_per_diem  # type: ignore[attr-defined]
@@ -192,11 +193,12 @@ class ArbiDiem:
             if adjusted != suggested:
                 rationale.update({"liquidity_adjusted_units": int(adjusted)})
             suggested = adjusted
-            logger.info(f"Signal: Mint and sell DIEM (units={suggested}, want={want})")
+            logger.info(f"Signal: Mint and sell DIEM (units={suggested}, want={want}) simulate={simulate}")
             rationale.update({"decision": "mint_sell"})
             _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": "mint_sell"})
-            self.diem.mint(suggested, corr_id=corr_id)
-            self.diem.trade("sell", suggested, corr_id=corr_id)
+            if not simulate:
+                self.diem.mint(suggested, corr_id=corr_id)
+                self.diem.trade("sell", suggested, corr_id=corr_id)
             setattr(self, "_last_rationale", rationale)
             return True
         logger.info("No-op: market not favorable")
