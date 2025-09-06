@@ -752,11 +752,63 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("venice:models", help="List available Venice models")
     sp.set_defaults(func=cmd_venice_models)
 
-    sp = sub.add_parser("venice:signals", help="Fetch Venice VVV/DIEM tokenomic signals")
-    sp.set_defaults(func=cmd_venice_signals)
+  sp = sub.add_parser("venice:signals", help="Fetch Venice VVV/DIEM tokenomic signals")
+  sp.set_defaults(func=cmd_venice_signals)
 
-    sp = sub.add_parser("venice:validate-addresses", help="Validate configured token/contract addresses against Venice signals")
-    sp.set_defaults(func=cmd_venice_validate_addresses)
+  # Friendly alias for the OpenAPI probe
+  def cmd_venice_probe(args: argparse.Namespace) -> None:
+    base = args.base_url or "https://api.venice.ai"
+    timeout = float(args.timeout)
+    # Reuse internal logic from venice:probe-openapi
+    try:
+      import requests as _rq
+      session = _rq.Session()
+      spec = None
+      spec_loc = None
+      for path in ("/openapi.json", "/api/openapi.json"):
+        try:
+          r = session.get(base.rstrip('/') + path, timeout=timeout)
+          if r.ok:
+            spec = r.json(); spec_loc = path; break
+        except Exception:
+          continue
+      if spec is None:
+        logger.error(f"Failed to fetch OpenAPI from {base}"); return
+      servers = spec.get("servers") or []
+      server_url = servers[0].get("url") if servers and isinstance(servers[0], dict) else None
+      if server_url and isinstance(server_url, str):
+        rec_base = server_url.rstrip('/') if server_url.startswith(('http://','https://')) else base.rstrip('/') + '/' + server_url.lstrip('/')
+      else:
+        rec_base = base.rstrip('/') if spec_loc == '/openapi.json' else base.rstrip('/') + '/api'
+      paths = spec.get('paths') or {}
+      def _first(cands):
+        return next((c for c in cands if c in paths), None)
+      sub_path = _first(["/api_keys","/v1/keys/sub","/v1/keys/subkey"]) or "/api_keys"
+      root_path = _first(["/api_keys/generate_web3_key","/v1/keys/generate_web3_key"]) or "/api_keys/generate_web3_key"
+      vvv_path = "/vvv" if "/vvv" in paths else ("/signals/vvv" if "/signals/vvv" in paths else "/vvv")
+      diem_path = "/diem" if "/diem" in paths else ("/signals/diem" if "/signals/diem" in paths else "/diem")
+      print("# Recommended environment exports:")
+      print(f"export VENICE_API_BASE_URL={rec_base}")
+      print(f"export VENICE_CREATE_SUBKEY_PATH={sub_path}")
+      print(f"export VENICE_CREATE_ROOT_PATH={root_path}")
+      print(f"export VENICE_VVV_PATH={vvv_path}")
+      print(f"export VENICE_DIEM_PATH={diem_path}")
+    except Exception as e:  # noqa: BLE001
+      logger.error(f"probe failed: {e}")
+
+  sp = sub.add_parser("venice:validate-addresses", help="Validate configured token/contract addresses against Venice signals")
+  sp.set_defaults(func=cmd_venice_validate_addresses)
+
+  sp = sub.add_parser("venice:probe", help="Probe Venice OpenAPI and suggest exports")
+  sp.add_argument("--base-url", required=False, default=None, help="Venice host (e.g., https://api.venice.ai)")
+  sp.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout seconds")
+  sp.set_defaults(func=cmd_venice_probe)
+
+  # Backward-compat: accept `venice` as a shorthand for the probe
+  sp = sub.add_parser("venice", help="Alias for venice:probe")
+  sp.add_argument("--base-url", required=False, default=None, help="Venice host (e.g., https://api.venice.ai)")
+  sp.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout seconds")
+  sp.set_defaults(func=cmd_venice_probe)
 
     sp = sub.add_parser("run:stakemaster", help="Run a single StakeMaster heartbeat")
     sp.add_argument("--enable-live", action="store_true", default=False, help="Allow live on-chain actions (claim)")
@@ -797,8 +849,50 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--amount", required=False, default=1.0, help="Decimal amount of input token")
     sp.set_defaults(func=cmd_market_best_price)
 
-    sp = sub.add_parser("market:diem", help="Fetch DIEM signals via Venice API")
-    sp.set_defaults(func=cmd_market_diem)
+  sp = sub.add_parser("market:diem", help="Fetch DIEM signals via Venice API")
+  sp.set_defaults(func=cmd_market_diem)
+
+  # Quotes preview to exercise liquidity-aware metrics without trading
+  def cmd_quotes_preview(args: argparse.Namespace) -> None:
+    from services.marketdata.provider import MarketDataProvider
+    from services.diem.client import DIEMService
+    from libs.dex.providers import build_aggregator_from_env
+    from agents.arbi_diem.agent import ArbiDiem
+    from services.risk.policy import RiskPolicy
+
+    path = _require_trade_path()
+    risk = RiskPolicy.from_env()
+    # Determine market price
+    if args.price is not None:
+      px = float(args.price)
+    else:
+      md = MarketDataProvider()
+      bp = md.best_price(path, amount_in_decimal=1.0)
+      px = float(bp.get('price') or 0.0)
+    if px <= 0:
+      logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
+      return
+    # Determine desired units
+    if args.units is not None:
+      units = int(args.units)
+    else:
+      # Use max allowed units based on USD caps as a sensible preview default
+      units = int(risk.max_allowed_units(px))
+    if units <= 0:
+      logger.error('Desired/allowed units is zero. Adjust env caps or pass --units.')
+      return
+    svc = DIEMService(build_aggregator_from_env())
+    arbi = ArbiDiem(diem=svc, risk=risk)
+    adjusted, last_bps = arbi._adjust_for_liquidity(units, px)  # noqa: SLF001
+    logger.info(f"preview: price={px:.6f} desired_units={units} adjusted_units={adjusted} slippage_bps={last_bps}")
+
+  sp = sub.add_parser(
+    "quotes:preview",
+    help="Preview quotes to exercise liquidity-aware metrics (no trades)",
+  )
+  sp.add_argument("--units", type=int, required=False, help="Desired DIEM units (base units). Defaults to risk-based max.")
+  sp.add_argument("--price", type=float, required=False, help="Override market price (USD per DIEM)")
+  sp.set_defaults(func=cmd_quotes_preview)
 
     # Data compaction (KV -> SQL)
     sp = sub.add_parser("data:compact-counters", help="Compact KV sliding-window counters into SQL (env-gated)")

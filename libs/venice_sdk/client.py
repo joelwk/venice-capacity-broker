@@ -58,10 +58,21 @@ class VeniceClient:
     def _url(self, path: str) -> str:
         return f"{self.config.base_url.rstrip('/')}{path}"
 
+    def _err_hint(self, status: int, body: str) -> str:
+        base = self.config.base_url
+        if status == 404:
+            return (
+                f"Venice error 404: {body}. Hint: ensure VENICE_API_BASE_URL includes '/api/v1'"
+                f" (got '{base}'), or override VENICE_VVV_PATH / VENICE_DIEM_PATH and key paths as needed."
+            )
+        if status in (401, 403):
+            return f"Venice auth error {status}: {body}. Hint: set a valid VENICE_API_KEY."
+        return f"Venice error {status}: {body}"
+
     def _post(self, path: str, json: Dict[str, Any]) -> Dict[str, Any]:
         resp = requests.post(self._url(path), json=json, headers=self._headers(), timeout=30)
         if not resp.ok:
-            raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
+            raise RuntimeError(self._err_hint(resp.status_code, resp.text))
         return resp.json() if resp.content else {}
 
     def _post_with_key(self, path: str, json: Dict[str, Any], api_key: Optional[str]) -> Dict[str, Any]:
@@ -70,18 +81,18 @@ class VeniceClient:
             headers["Authorization"] = f"Bearer {api_key}"
         resp = requests.post(self._url(path), json=json, headers=headers, timeout=30)
         if not resp.ok:
-            raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
+            raise RuntimeError(self._err_hint(resp.status_code, resp.text))
         return resp.json() if resp.content else {}
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         resp = requests.get(self._url(path), params=params or {}, headers=self._headers(), timeout=30)
         if not resp.ok:
-            raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
+            raise RuntimeError(self._err_hint(resp.status_code, resp.text))
         return resp.json() if resp.content else {}
 
     def _delete(self, path: str) -> Dict[str, Any]:
         resp = requests.delete(self._url(path), headers=self._headers(), timeout=30)
         if not resp.ok:
-            raise RuntimeError(f"Venice error {resp.status_code}: {resp.text}")
+            raise RuntimeError(self._err_hint(resp.status_code, resp.text))
         return resp.json() if resp.content else {}
 
     # --- Autonomous key flows ---

@@ -412,12 +412,90 @@ try:
 
         signals_offline = _signals_offline(recent_signals)
 
-        # Venice config snapshot (no secrets)
+        # Venice config snapshot + readiness (no secrets)
+        ven_base = (_os.getenv("VENICE_API_BASE_URL") or "").strip()
+        ven_paths = {
+            "models": (_os.getenv("VENICE_MODELS_PATH") or "/models"),
+            "vvv": (_os.getenv("VENICE_VVV_PATH") or "/vvv"),
+            "diem": (_os.getenv("VENICE_DIEM_PATH") or "/diem"),
+        }
+        ven_key = (_os.getenv("VENICE_API_KEY") or "").strip()
+        ven_headers = {"Content-Type": "application/json"}
+        if ven_key:
+            ven_headers["Authorization"] = f"Bearer {ven_key}"
+        models_ok = False
+        vvv_ok = False
+        diem_ok = False
+        models_code: int | None = None
+        vvv_code: int | None = None
+        diem_code: int | None = None
+        if ven_base:
+            try:
+                import requests as _rq
+
+                r = _rq.get(ven_base.rstrip("/") + ven_paths["models"], headers=ven_headers, timeout=3)
+                models_ok = bool(r.ok)
+                models_code = int(r.status_code)
+            except _rq.exceptions.Timeout:
+                models_code = 0
+                models_ok = False
+            except Exception:
+                models_code = None
+                models_ok = False
+            try:
+                import requests as _rq2
+
+                r2 = _rq2.get(ven_base.rstrip("/") + ven_paths["vvv"], headers=ven_headers, timeout=3)
+                vvv_ok = bool(r2.ok)
+                vvv_code = int(r2.status_code)
+            except _rq2.exceptions.Timeout:
+                vvv_code = 0
+                vvv_ok = False
+            except Exception:
+                vvv_code = None
+                vvv_ok = False
+            try:
+                import requests as _rq3
+
+                r3 = _rq3.get(ven_base.rstrip("/") + ven_paths["diem"], headers=ven_headers, timeout=3)
+                diem_ok = bool(r3.ok)
+                diem_code = int(r3.status_code)
+            except _rq3.exceptions.Timeout:
+                diem_code = 0
+                diem_ok = False
+            except Exception:
+                diem_code = None
+                diem_ok = False
+        ven_ready = bool(models_ok and (vvv_ok or diem_ok))
+        # Build ready reasons per check
+        def _reason(ok: bool, code: int | None) -> str:
+            if ok:
+                return "ok"
+            if not ven_base:
+                return "baseUnset"
+            if not ven_key:
+                # Some deployments may allow anonymous; keep hint minimal
+                return "apiKeyMissing"
+            if code == 0:
+                return "timeout"
+            if code is None:
+                return "error"
+            return f"http:{code}"
+
         venice_cfg = {
-            "baseUrl": (_os.getenv("VENICE_API_BASE_URL") or "").strip() or None,
-            "vvvPath": (_os.getenv("VENICE_VVV_PATH") or "/vvv"),
-            "diemPath": (_os.getenv("VENICE_DIEM_PATH") or "/diem"),
+            "baseUrl": ven_base or None,
+            "vvvPath": ven_paths["vvv"],
+            "diemPath": ven_paths["diem"],
             "offlineSignals": ((_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}),
+            "ready": bool(ven_ready),
+            "modelsOk": bool(models_ok),
+            "vvvSignalsOk": bool(vvv_ok),
+            "diemSignalsOk": bool(diem_ok),
+            "readyReason": {
+                "models": _reason(models_ok, models_code),
+                "vvv": _reason(vvv_ok, vvv_code),
+                "diem": _reason(diem_ok, diem_code),
+            },
         }
 
         return {
@@ -1647,6 +1725,7 @@ try:
                             "txHash": r.tx_hash,
                             "status": r.status,
                             "tenantId": r.tenant_id,
+                            "expiresAt": r.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.expires_at else None,
                             "createdAt": r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None,
                             "fulfilledAt": r.fulfilled_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.fulfilled_at else None,
                         })

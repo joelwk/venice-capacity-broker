@@ -17,6 +17,9 @@ This document reflects the system’s current implementation, defines the “sto
 - Agents: StakeMaster (claim in live mode), ArbiDiem (risk-gated mint/sell with slippage gate), CapacityBroker (key issuance wrapper), AI Treasurer (initial rebalance heuristic). Files: `agents/*`.
 - Tests: Risk policy sizing and conversions; ArbiDiem risk integration; DIEM buy path and FOT fallback; Broker idempotency + purge CLI; rate limits; orchestrator portfolio-cap wiring. Files: `tests/*.py`.
 - Docs + config: README/DEPLOYMENT/ADMIN updated with DEX modes/metrics and flags; Base router addresses; `.env.example` includes `BROKER_REQUIRE_ADMIN_TOKEN`, `AGENTS_PAUSED`, pricing flags. Files: `README.md`, `docs/*.md`, `.env.example`.
+ - Venice readiness + ops UX: `/v1/env` exposes `venice.ready` with per-check `readyReason` (models/vvv/diem), `signals.offline`, and a `venice` snapshot; Admin UI card shows config, recent signals, inline path probe, banner when NOT READY; dev-only offline signals supported via `VENICE_OFFLINE_SIGNALS`.
+ - Admin receipts UI: Purchases table lists `purchaseId`, `quoteId`, `asset`, `amountPaid`, `status`, `expiresAt`; JSON views remain for details.
+ - Quotes preview CLI: `quotes:preview` exercises liquidity-aware metrics without trading; uses aggregator preview + risk policy and logs adjusted units and slippage.
 
 ## Gaps and Pending (Prioritized)
 
@@ -44,6 +47,7 @@ This document reflects the system’s current implementation, defines the “sto
 7) Observability
 - Add agent-loop and error-class metrics; optional tracing across agents/graph.
   - Implemented: `/v1/env` surfaces recent `signal.market.*` and a Venice config snapshot; Admin UI card shows both for quick ops validation.
+  - Implemented: Venice readiness booleans with per-check `readyReason` and offline signals indicator; server-side and CLI path probes to recommend correct env.
 
 8) Hardening
 - Enforce secure defaults (admin token in prod), CORS allowlists, receipts/audit trails for quotes/purchases, env sanity checks.
@@ -73,6 +77,7 @@ Remaining for v1 (short list to finish):
 - Minimal consumers of `signal.*` events (e.g., cache warmers) now that centralized emission exists.
 - Harden Broker API defaults (prod-safe CORS, admin token required) and finalize receipts UX/admin listings.
 - Venice config alignment runbook: add `venice:probe-openapi` guidance to ADMIN and DEPLOYMENT; ensure base includes `/api/v1` and override paths when needed.
+ - Add CI/health gate: fail builds or warn loudly when `venice.ready=false` in target env; disallow `VENICE_OFFLINE_SIGNALS=true` beyond dev.
 
 Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Quorum multi-agent orchestration and advanced agendas.
@@ -103,11 +108,13 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Add buyer lifecycle E2E (quote → purchase verify → subkey issuance) and orchestrator branch tests.
 - Add Venice alignment note: ensure `VENICE_API_BASE_URL` includes `/api/v1`, override `VENICE_VVV_PATH`/`VENICE_DIEM_PATH` when deployments differ; use `venice:probe-openapi`.
 - Cut a v1 tag with STATUS updated and core agents enabled.
+ - Gate production deploys on readiness: `venice.ready`, admin token, and CORS allowlist; add a smoke `quotes:preview` step to ensure aggregator is functional.
 
 ---
 
 Changelog
 - 2025‑09‑06: Admin UI card for Venice config + recent signals; `/v1/env` exposes `venice` snapshot; optional `VENICE_OFFLINE_SIGNALS` fallback for local dev.
+ - 2025‑09‑06: Added Venice readiness with `readyReason`; Admin receipts table; CLI `quotes:preview`; improved error hints for Venice client; server-side path probe.
 - 2025‑09‑06: Added liquidity-aware sizing with metrics; emitted centralized market signals; attached purchase receipts and events; updated docs and migration 0005.
 - 2025‑09‑06: Expanded DEX venue E2E tests; finalized router capabilities docs; ensured Web3 deps in base env; tightened UniswapV2 trade path to avoid unnecessary Web3 import in tests.
 - 2025‑09‑05: Rewrote v2 to reflect current state, clarified the v1 stop line, removed encoding issues and inconsistent formatting, and aligned scope to the original plan.

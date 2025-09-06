@@ -161,6 +161,7 @@
       const off = !!v.offlineSignals;
       const sig = (env && env.signals) || {};
       const sigOffline = !!sig.offline;
+      const ready = (typeof v.ready === 'boolean') ? v.ready : null;
       let msg = `Base: ${base} | VVV: ${vvv} | DIEM: ${diem}`;
       if (!base || base === '(unset)') {
         msg += ' — Missing VENICE_API_BASE_URL';
@@ -168,6 +169,9 @@
       } else if (off || sigOffline) {
         msg += ' — Signals: OFFLINE (dev mode)';
         st.classList.remove('error');
+      } else if (ready === false) {
+        msg += ' — Venice: NOT READY';
+        st.classList.add('error');
       } else {
         st.classList.remove('error');
       }
@@ -193,6 +197,48 @@
     }
   }
 
+  // Quotes & Purchases (admin receipts UI)
+  async function refreshQuotes() {
+    try {
+      const j = await fetchJSON('/v1/admin/quotes');
+      setJSON('#quotesOut', j);
+    } catch (e) {
+      setText('#quotesOut', String(e));
+    }
+  }
+  async function refreshPurchases() {
+    try {
+      const j = await fetchJSON('/v1/admin/purchases');
+      setJSON('#purchasesOut', j);
+      renderPurchasesTable(j);
+    } catch (e) {
+      setText('#purchasesOut', String(e));
+    }
+  }
+
+  function renderPurchasesTable(list) {
+    const host = qs('#purchasesTable');
+    if (!host) return;
+    if (!Array.isArray(list) || list.length === 0) {
+      host.innerHTML = '<div class="status">No purchases</div>';
+      return;
+    }
+    const rows = list.map((p) => `
+      <tr>
+        <td>${p.purchaseId}</td>
+        <td>${p.quoteId}</td>
+        <td>${p.asset}</td>
+        <td>${p.amountPaid}</td>
+        <td>${p.status}</td>
+        <td>${p.expiresAt || ''}</td>
+      </tr>`).join('');
+    host.innerHTML = `
+      <table>
+        <thead><tr><th>Purchase</th><th>Quote</th><th>Asset</th><th>Amount Paid</th><th>Status</th><th>Expires</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
   async function probeVenice() {
     const base = (qs('#veniceBaseUrl')?.value || '').trim();
     setText('#veniceProbeOut', '');
@@ -200,6 +246,8 @@
       const params = base ? ('?base=' + encodeURIComponent(base)) : '';
       const res = await fetchJSON('/v1/admin/venice/probe' + params);
       setJSON('#veniceProbeOut', res);
+      // Also update the venice config panel so ops see new recommendations immediately
+      await refreshVenice();
     } catch (e) {
       setText('#veniceProbeOut', String(e));
     }
@@ -397,11 +445,19 @@
     bind('#refreshTokensBtn', 'click', refreshTokens);
     bind('#loadTokenHistoryBtn', 'click', loadTokenHistory);
 
+    // Quotes & Purchases
+    bind('#refreshQuotesBtn', 'click', refreshQuotes);
+    bind('#refreshPurchasesBtn', 'click', refreshPurchases);
+
     // Initial loads
     refreshHealth();
     refreshEnv();
     refreshVenice();
-    if (getToken()) refreshTenants();
+    if (getToken()) {
+      refreshTenants();
+      refreshQuotes();
+      refreshPurchases();
+    }
   }
 
   document.addEventListener('DOMContentLoaded', init);
