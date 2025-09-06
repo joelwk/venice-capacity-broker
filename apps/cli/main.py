@@ -854,37 +854,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Quotes preview to exercise liquidity-aware metrics without trading
     def cmd_quotes_preview(args: argparse.Namespace) -> None:
-    from services.marketdata.provider import MarketDataProvider
-    from services.diem.client import DIEMService
-    from libs.dex.providers import build_aggregator_from_env
-    from agents.arbi_diem.agent import ArbiDiem
-    from services.risk.policy import RiskPolicy
+        from services.marketdata.provider import MarketDataProvider
+        from services.diem.client import DIEMService
+        from libs.dex.providers import build_aggregator_from_env
+        from agents.arbi_diem.agent import ArbiDiem
+        from services.risk.policy import RiskPolicy
 
-    path = _require_trade_path()
-    risk = RiskPolicy.from_env()
-    # Determine market price
-    if args.price is not None:
-      px = float(args.price)
-    else:
-      md = MarketDataProvider()
-      bp = md.best_price(path, amount_in_decimal=1.0)
-      px = float(bp.get('price') or 0.0)
-    if px <= 0:
-      logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
-      return
-    # Determine desired units
-    if args.units is not None:
-      units = int(args.units)
-    else:
-      # Use max allowed units based on USD caps as a sensible preview default
-      units = int(risk.max_allowed_units(px))
-    if units <= 0:
-      logger.error('Desired/allowed units is zero. Adjust env caps or pass --units.')
-      return
-    svc = DIEMService(build_aggregator_from_env())
-    arbi = ArbiDiem(diem=svc, risk=risk)
-    adjusted, last_bps = arbi._adjust_for_liquidity(units, px)  # noqa: SLF001
-    logger.info(f"preview: price={px:.6f} desired_units={units} adjusted_units={adjusted} slippage_bps={last_bps}")
+        path = _require_trade_path()
+        risk = RiskPolicy.from_env()
+        # Determine market price
+        if args.price is not None:
+            px = float(args.price)
+        else:
+            md = MarketDataProvider()
+            bp = md.best_price(path, amount_in_decimal=1.0)
+            px = float(bp.get('price') or 0.0)
+        if px <= 0:
+            logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
+            return
+        # Determine desired units
+        if args.units is not None:
+            units = int(args.units)
+        else:
+            # Use max allowed units based on USD caps as a sensible preview default
+            units = int(risk.max_allowed_units(px))
+        if units <= 0:
+            logger.error('Desired/allowed units is zero. Adjust env caps or pass --units.')
+            return
+        svc = DIEMService(build_aggregator_from_env())
+        arbi = ArbiDiem(diem=svc, risk=risk)
+        adjusted, last_bps = arbi._adjust_for_liquidity(units, px)  # noqa: SLF001
+        logger.info(f"preview: price={px:.6f} desired_units={units} adjusted_units={adjusted} slippage_bps={last_bps}")
 
     sp = sub.add_parser(
         "quotes:preview",
