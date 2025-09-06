@@ -98,6 +98,7 @@ Observability (operators)
   - Metrics at `${METRICS_PATH:/metrics}` (starlette_exporter or builtin).
   - Optional LangSmith tracing: set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY`.
 - Sanity check env: `make env-status` shows detected KV backend (redis|replit_db|memory), limiter and SQL flags.
+ - Buyer receipts: SQL must be enabled to persist purchase `receipt` JSON. Run `uv run alembic upgrade head` to apply migrations.
 
 Secrets — Recovery & Rotation
 - Purpose: regain admin access if secrets are wiped or rotate on schedule.
@@ -145,6 +146,7 @@ Buyer Flow (flag-gated)
   - Pricing: `PRICE_UNIT_USDC` and/or `PRICE_UNIT_ETH_WEI`; optional `PRICE_QUOTE_TTL_SECONDS`
   - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and `USDC_ADDRESS` for USDC
 - UI path: `/admin/buy.html` → connect wallet → get quote → pay → paste tx hash → receive subkey
+ - Receipts: Successful verification persists a JSON `receipt` on the `Purchase` row (tx, quote summary, verifiedAt). Emit `purchase.verified` on the event bus.
 - API endpoints:
  - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`
  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`

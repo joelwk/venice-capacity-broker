@@ -50,6 +50,8 @@ Environment & Backends
     - `vvv_dex_quote_latency_bucket_total{provider,bucket}` and `vvv_dex_trade_latency_bucket_total{provider,bucket}` with buckets: `lt_50ms|lt_100ms|lt_200ms|lt_500ms|lt_1s|lt_2s|ge_2s`
     - Circuit: `vvv_dex_circuit_open_total{provider}`, `vvv_dex_circuit_skips_total{provider}`. Configure with `DEX_CIRCUIT_FAILURES` and `DEX_CIRCUIT_COOL_OFF_SECONDS`.
   - Structured events: ArbiDiem/DIEM actions emit `diem.mint`, `diem.burn`, `diem.trade` (now include optional `correlationId`).
+  - Risk metrics: `vvv_risk_liquidity_checks_total{adjusted}` and `vvv_risk_liquidity_slippage_bucket_total{bucket}` capture liquidity-aware sizing decisions.
+  - Signal bus: emits `signal.market.prices` and `signal.market.signals` to a lightweight in-process event queue for cross-agent wiring.
 
 Decision Record (operators)
 - Fields: `agent`, `action`, `price`, `inventoryUsd`, `dry_run`, `correlationId`, `limits` (slippage_bps_cap, max_trade_usd, max_inventory_usd, max_trade_units), `why` (market_price, fair_per_day, threshold_mult, premium, desired_units, suggested_units, exec_price_preview, slippage_bps, slippage_ok, decision, reason), `outcome`.
@@ -95,6 +97,7 @@ Makefile Shortcuts (handy in Replit Shell)
 Buyer Page
 - Navigate to `/admin/buy.html` for a minimal Buyer flow: connect wallet, request quote, pay to the treasury address, paste tx hash, and retrieve the issued key.
 - For ETH quotes, the page offers a one-click `eth_sendTransaction` and an EIP-681 deeplink. For USDC, copy address/amount helpers and a token link are provided.
+ - Audit receipts: Each verified purchase stores a JSON `receipt` (SQL) with tx details, amount, quote summary, and verification metadata. Admin listings include status; detailed receipts can be queried via the DB.
 
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.

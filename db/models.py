@@ -110,6 +110,8 @@ class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
     expires_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
     fulfilled_at: Optional[datetime] = None
+    # JSON blob with verification/audit details (tx, amounts, chain, etc.)
+    receipt: Optional[str] = None
 
     # Simple unique constraint alternatives via indexes when SQLModel supports; rely on application checks otherwise.
 

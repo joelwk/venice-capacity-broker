@@ -21,13 +21,16 @@ This document reflects the system’s current implementation, defines the “sto
 ## Gaps and Pending (Prioritized)
 
 1) DEX trading modes
-- Broaden venue tests; codify Aerodrome exact-out non-support (ABI lacks exact-out preflight) in docs; revisit if ABI expands.
+- Completed: venue E2E (exact-out skip for Aerodrome; exact-in selection) and router docs finalized.
+- Pending: monitor Aerodrome ABI for `getAmountsIn`; add exact-out support if/when available; keep negative tests in place to guard regressions.
 
 2) Risk depth
 - Extend from slippage-caps to liquidity/volatility-aware sizing; add pool-depth guardrails inside aggregator; persist risk decision context to metrics.
+  - Implemented: conservative liquidity-aware sizing in ArbiDiem using aggregator preview + halving backoff; emits `vvv_risk_liquidity_*` metrics and records rationale.
 
 3) Orchestrator maturity
 - Centralize signal ingestion; unify eventing across agents; refine decision store schema (limits/why) as it stabilizes.
+  - Implemented: centralized `signal.market.prices` and `signal.market.signals` events emitted from MarketDataProvider; decisions already persisted with `why` context.
 
 4) CapacityBroker agent
 - Evolve from issuance wrapper to dynamic pricing/allocation tied to utilization and market pricing; integrate quote → purchase verify → subkey issuance loop.
@@ -43,9 +46,10 @@ This document reflects the system’s current implementation, defines the “sto
 
 8) Hardening
 - Enforce secure defaults (admin token in prod), CORS allowlists, receipts/audit trails for quotes/purchases, env sanity checks.
+  - Implemented: purchase verification attaches a JSON receipt to the `Purchase` row and emits `purchase.verified` events; Alembic migration `0005_purchase_receipt` added.
 
 9) E2E coverage
-- Broaden integration tests for venues (exact-out, FOT) and orchestrator branches; buyer lifecycle.
+- Add buyer lifecycle E2E: quote → on-chain purchase verification → scoped subkey issuance; expand orchestrator branch coverage.
 
 ## v1 Scope (“Stop Line”)
 
@@ -91,14 +95,15 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 
 ## Next Steps (to complete v1)
 
-- Expand E2E venue tests and finalize docs for router capabilities.
-- Add conservative liquidity-aware sizing; emit risk decision context metrics.
-- Wire basic centralized signals + event bus across agents.
-- Enforce prod defaults (admin token, CORS), add purchase receipts/audit trail.
+- Verify liquidity-aware sizing under more venues and sizes; tune buckets/labels.
+- Wire minimal consumers of `signal.*` events (e.g., orchestrator-driven cache) and surface recent signals in `/v1/env`.
+- Enforce prod defaults (admin token, CORS) in deployment profiles and add a CI check.
+- Add buyer lifecycle E2E (quote → purchase verify → subkey issuance) and orchestrator branch tests.
 - Cut a v1 tag with STATUS updated and core agents enabled.
 
 ---
 
 Changelog
+- 2025‑09‑06: Added liquidity-aware sizing with metrics; emitted centralized market signals; attached purchase receipts and events; updated docs and migration 0005.
+- 2025‑09‑06: Expanded DEX venue E2E tests; finalized router capabilities docs; ensured Web3 deps in base env; tightened UniswapV2 trade path to avoid unnecessary Web3 import in tests.
 - 2025‑09‑05: Rewrote v2 to reflect current state, clarified the v1 stop line, removed encoding issues and inconsistent formatting, and aligned scope to the original plan.
-

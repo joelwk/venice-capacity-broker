@@ -242,7 +242,10 @@ Notes:
     - `vvv_dex_quotes_total{provider,status}`, `vvv_dex_trades_total{provider,path}`, `vvv_fot_fallback_total{provider}`
     - Aggregator: `vvv_dex_agg_selected_total{provider[,mode]}`, `vvv_dex_agg_no_quotes_total`, `vvv_dex_agg_trade_total{provider,mode}`, `vvv_dex_agg_trade_errors_total{provider,mode}`
     - Latency buckets: `vvv_dex_quote_latency_bucket_total{provider,bucket}`, `vvv_dex_trade_latency_bucket_total{provider,bucket}` with buckets `lt_50ms|lt_100ms|lt_200ms|lt_500ms|lt_1s|lt_2s|ge_2s`
-  - Events: `diem.mint`, `diem.burn`, `diem.trade` events now include optional `correlationId` when orchestrated.
+- Events: `diem.mint`, `diem.burn`, `diem.trade` events now include optional `correlationId` when orchestrated.
+  - Risk: `vvv_risk_liquidity_checks_total{adjusted}` and `vvv_risk_liquidity_slippage_bucket_total{bucket}` increment when sizing is liquidity-aware.
+  - Signals: emits `signal.market.prices` and `signal.market.signals` to the in-process event bus for simple cross-agent consumption.
+  - Purchases: emits `purchase.verified` upon successful verification and subkey issuance.
 - Venice client now performs real HTTP requests; endpoints are configurable via env.
  - Risk policy integrated with ArbiDiem to gate mint/sell sizes by USD or unit caps.
  - Broker store backend:
@@ -517,6 +520,7 @@ Endpoints
 Buyer UI
 - Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
 - For ETH, the page offers a one-click “Pay with wallet (ETH)” using `eth_sendTransaction`, and an EIP‑681 deeplink. For USDC, copy address/amount helpers are shown.
+ - Receipts & audit: verification attaches a JSON receipt to each purchase (stored in SQL) with tx details, quote summary, and verification metadata.
 
 ## End-to-End Demo (MVP)
 

@@ -1284,7 +1284,7 @@ try:
                     raise RuntimeError(str(j["error"]))
                 return j["result"]
 
-            def _verify_tx(quote: DbQuote, tx_hash: str, treasury: str, usdc_addr: str | None, base_rpc: str) -> int:
+            def _verify_tx(quote: DbQuote, tx_hash: str, treasury: str, usdc_addr: str | None, base_rpc: str) -> tuple[int, dict]:
                 tx_hash = _normalize_hex(tx_hash)
                 rec = _rpc_call(base_rpc, "eth_getTransactionReceipt", [tx_hash])
                 if rec is None:
@@ -1301,7 +1301,14 @@ try:
                     val = _wei(tx.get("value", "0x0"))
                     if val < int(quote.total_price):
                         raise RuntimeError("insufficient ETH amount")
-                    return val
+                    details = {
+                        "method": "ETH",
+                        "to": tx.get("to"),
+                        "from": tx.get("from"),
+                        "blockNumber": rec.get("blockNumber"),
+                        "value": str(val),
+                    }
+                    return val, details
                 # USDC path: find Transfer(to=treasury)
                 if quote.asset.upper() == "USDC":
                     if not usdc_addr:
@@ -1309,6 +1316,7 @@ try:
                     logs = rec.get("logs", [])
                     sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # keccak(Transfer(address,address,uint256))
                     paid = 0
+                    matches: list[dict] = []
                     for lg in logs:
                         if (lg.get("address") or "").lower() != usdc_addr.lower():
                             continue
@@ -1325,9 +1333,17 @@ try:
                             continue
                         amount = _wei(lg.get("data", "0x0"))
                         paid += amount
+                        matches.append({"amount": str(amount), "index": lg.get("logIndex")})
                     if paid < int(quote.total_price):
                         raise RuntimeError("insufficient USDC amount")
-                    return paid
+                    details = {
+                        "method": "USDC",
+                        "to": treasury,
+                        "blockNumber": rec.get("blockNumber"),
+                        "matches": matches,
+                        "value": str(paid),
+                    }
+                    return paid, details
                 raise RuntimeError("unsupported asset")
 
             @app.post("/v1/purchases/verify", response_model=PurchaseStatus)
@@ -1347,7 +1363,7 @@ try:
                         raise HTTPException(status_code=404, detail="quote not found")
                     # Verify payment
                     try:
-                        _ = _verify_tx(q, req.txHash, treasury, usdc_addr, base_rpc)
+                        paid_val, receipt = _verify_tx(q, req.txHash, treasury, usdc_addr, base_rpc)
                     except Exception as e:  # noqa: BLE001
                         raise HTTPException(status_code=400, detail=str(e))
                     # Record/Upsert purchase
@@ -1359,13 +1375,35 @@ try:
                             quote_id=q.quote_id,
                             buyer_address=req.buyerAddress,
                             asset=q.asset,
-                            amount_paid=int(q.total_price),
+                            amount_paid=int(paid_val or q.total_price),
                             tx_hash=req.txHash,
                             status="confirmed",
                         )
                         s.add(p)
                     else:
                         p.status = "confirmed"
+                        p.amount_paid = int(paid_val or q.total_price)
+                    # Attach audit receipt JSON (best-effort)
+                    try:
+                        import json as _json2
+                        p.receipt = _json2.dumps(
+                            {
+                                "txHash": req.txHash,
+                                "network": (_os.getenv("NETWORK_ID") or "base-mainnet"),
+                                "asset": q.asset,
+                                "amountPaid": int(paid_val or q.total_price),
+                                "quote": {
+                                    "quoteId": q.quote_id,
+                                    "units": int(q.units),
+                                    "unitPrice": int(q.unit_price),
+                                    "totalPrice": int(q.total_price),
+                                },
+                                "verification": receipt,
+                                "verifiedAt": int(time.time()),
+                            }
+                        )
+                    except Exception:
+                        pass
                     # Mint subkey and upsert tenant
                     try:
                         # Map units → consumption limit and expiry (24h default)
@@ -1404,13 +1442,21 @@ try:
                         p.status = "confirmed"
                     s.add(p)
                     s.commit()
-                    return {
+                    out = {
                         "purchaseId": p.purchase_id,
                         "status": p.status,
                         "tenantId": p.tenant_id,
                         "subkey": p.subkey,
                         "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
                     }
+                    # Emit audit event (best-effort)
+                    try:
+                        from libs.telemetry.events import emit as _emit
+
+                        _emit("purchase.verified", {**out, "txHash": req.txHash, "asset": q.asset, "units": int(q.units)})
+                    except Exception:
+                        pass
+                    return out
 
             @app.get("/v1/purchases/{purchase_id}", response_model=PurchaseStatus)
             def get_purchase(purchase_id: str) -> dict:

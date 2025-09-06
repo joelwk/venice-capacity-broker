@@ -109,6 +109,13 @@ class MarketDataProvider:
                     out[sym] = 1.0
             else:
                 out[sym] = 1.0
+        # Emit centralized signal for prices (best-effort)
+        try:
+            from libs.telemetry.events import emit as _emit
+
+            _emit("signal.market.prices", {"symbols": [str(s) for s in symbols], "prices": dict(out)})
+        except Exception:
+            pass
         return out
 
     _diem_cache: Optional[Dict[str, Any]] = None
@@ -162,7 +169,12 @@ class MarketDataProvider:
 
         Uses individual caches; errors for either side are surfaced.
         """
-        return {
-            "vvv": self.vvv_signals(ttl_s=ttl_s),
-            "diem": self.diem_signals(ttl_s=ttl_s),
-        }
+        data = {"vvv": self.vvv_signals(ttl_s=ttl_s), "diem": self.diem_signals(ttl_s=ttl_s)}
+        # Emit centralized signal event (best-effort)
+        try:
+            from libs.telemetry.events import emit as _emit
+
+            _emit("signal.market.signals", data)
+        except Exception:
+            pass
+        return data
