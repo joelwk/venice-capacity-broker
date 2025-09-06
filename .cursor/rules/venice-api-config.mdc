@@ -1,0 +1,182 @@
+---
+description: Venice API configuration rules and troubleshooting guide for preventing 404 errors
+globs: 
+  - "**/*.py"
+  - "**/venice_sdk/**"
+  - "**/services/venice_keys/**"
+  - "**/services/marketdata/**"
+alwaysApply: true
+---
+
+# Venice API Configuration Rules
+
+This document defines the configuration rules for the Venice API integration to ensure correct endpoint usage and prevent 404 errors.
+
+## URL Construction Pattern
+
+The Venice client constructs URLs by concatenating:
+- `${VENICE_API_BASE_URL}` + `${endpoint_path}`
+
+Example: If `VENICE_API_BASE_URL=https://api.venice.ai/api/v1` and `vvv_path=/vvv`, the full URL becomes `https://api.venice.ai/api/v1/vvv`
+
+## Critical Configuration Requirements
+
+### Base URL Configuration
+The `VENICE_API_BASE_URL` **MUST** include the full API path including version:
+```bash
+# CORRECT - includes /api/v1
+export VENICE_API_BASE_URL=https://api.venice.ai/api/v1
+
+# WRONG - missing API path (will cause 404s)
+export VENICE_API_BASE_URL=https://api.venice.ai
+```
+
+### Authentication
+All requests include the Authorization header:
+```
+Authorization: Bearer ${VENICE_API_KEY}
+```
+
+## Environment Variables Reference
+
+### Core Configuration
+```bash
+# Required - Must include full API path (e.g., /api/v1)
+VENICE_API_BASE_URL=https://api.venice.ai/api/v1
+
+# Required - Your Venice API key
+VENICE_API_KEY=your_api_key_here
+```
+
+### Signal Endpoints (Default Paths)
+```bash
+# VVV signals endpoint (default: /vvv)
+VENICE_VVV_PATH=/vvv
+
+# DIEM signals endpoint (default: /diem)  
+VENICE_DIEM_PATH=/diem
+```
+
+### Alternative Signal Paths
+If your Venice deployment uses different paths (check Postman docs):
+```bash
+# Example: If signals are under /signals/* prefix
+VENICE_VVV_PATH=/signals/vvv
+VENICE_DIEM_PATH=/signals/diem
+```
+
+### Model and Chat Endpoints
+```bash
+# Models listing (default: /models)
+VENICE_MODELS_PATH=/models
+
+# Chat completions (default: /chat/completions)
+VENICE_CHAT_COMPLETIONS_PATH=/chat/completions
+```
+
+### Key Management Endpoints
+```bash
+# Create subkey (default: /api_keys)
+VENICE_CREATE_SUBKEY_PATH=/api_keys
+
+# Generate web3 root key (default: /api_keys/generate_web3_key)
+VENICE_CREATE_ROOT_PATH=/api_keys/generate_web3_key
+
+# Challenge for web3 signing (default: /api_keys/generate_web3_key)
+VENICE_CHALLENGE_PATH=/api_keys/generate_web3_key
+
+# Revoke key (default: /api_keys/{key_id})
+VENICE_REVOKE_KEY_PATH=/api_keys/{key_id}
+```
+
+### Legacy Key Management Paths
+For older Venice deployments:
+```bash
+# Alternative subkey creation paths
+VENICE_CREATE_SUBKEY_PATH=/v1/keys/sub      # or /v1/keys/subkey
+
+# Alternative web3 key generation
+VENICE_CREATE_ROOT_PATH=/v1/keys/generate_web3_key
+```
+
+### Rate Limits and Usage
+```bash
+# Rate limits info (default: /api_keys/rate_limits)
+VENICE_RATE_LIMITS_PATH=/api_keys/rate_limits
+
+# Usage logs (default: /api_keys/rate_limits/log)
+VENICE_USAGE_PATH=/api_keys/rate_limits/log
+
+# Quota fallback (default: /api_keys/rate_limits)
+VENICE_QUOTA_PATH=/api_keys/rate_limits
+```
+
+## Troubleshooting 404 Errors
+
+### Quick Verification Commands
+```bash
+# Test models endpoint
+python apps/cli/main.py venice:models
+
+# Test signals endpoints
+python apps/cli/main.py venice:signals
+
+# Probe OpenAPI to detect correct paths
+python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
+```
+
+### Common 404 Causes and Solutions
+
+1. **Missing API version in base URL**
+   - ❌ Wrong: `VENICE_API_BASE_URL=https://api.venice.ai`
+   - ✅ Correct: `VENICE_API_BASE_URL=https://api.venice.ai/api/v1`
+
+2. **Wrong signal endpoint paths**
+   - Check if your deployment uses `/signals/vvv` instead of `/vvv`
+   - Override with `VENICE_VVV_PATH` and `VENICE_DIEM_PATH`
+
+3. **Missing or invalid authentication**
+   - Ensure `VENICE_API_KEY` is set and valid
+   - Some endpoints return 404 instead of 401 for auth failures
+
+4. **Legacy endpoint paths**
+   - Older deployments may use `/v1/keys/*` instead of `/api_keys/*`
+   - Override the relevant `*_PATH` environment variables
+
+## Code References
+
+### Client Configuration
+The Venice client is configured in `libs/venice_sdk/client.py`:
+```python
+self.config = VeniceConfig(
+    base_url=base_url or os.getenv("VENICE_API_BASE_URL", "https://api.venice.ai/api/v1"),
+    vvv_path=os.getenv("VENICE_VVV_PATH", "/vvv"),
+    diem_path=os.getenv("VENICE_DIEM_PATH", "/diem"),
+    # ... other paths
+)
+```
+
+### Signal Fetching
+Signals are fetched in `services/marketdata/provider.py`:
+- `diem_signals()` - Calls `client.get_diem_signals()`
+- `vvv_signals()` - Calls `client.get_vvv_signals()`
+
+### CLI Commands
+Test endpoints using `apps/cli/main.py`:
+- `venice:models` - Tests models endpoint
+- `venice:signals` - Tests VVV and DIEM signal endpoints
+- `venice:probe-openapi` - Auto-detects correct configuration
+
+## Best Practices
+
+1. **Always include the full API path** in `VENICE_API_BASE_URL`
+2. **Test configuration** with CLI commands before running the full application
+3. **Check Postman documentation** for your specific Venice deployment
+4. **Use environment-specific configs** for different deployments (dev/staging/prod)
+5. **Handle 404s gracefully** in your code with proper error messages
+
+## Related Documentation
+
+- Venice API Postman: https://www.postman.com/veniceai/venice-ai-workspace/
+- Project README: See Venice API section for setup instructions
+- Workspace rules: This configuration applies to all Python files working with Venice API

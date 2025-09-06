@@ -394,6 +394,14 @@ try:
         except Exception:
             dr_fake_price = None
 
+        # Venice config snapshot (no secrets)
+        venice_cfg = {
+            "baseUrl": (_os.getenv("VENICE_API_BASE_URL") or "").strip() or None,
+            "vvvPath": (_os.getenv("VENICE_VVV_PATH") or "/vvv"),
+            "diemPath": (_os.getenv("VENICE_DIEM_PATH") or "/diem"),
+            "offlineSignals": ((_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}),
+        }
+
         return {
             "version": "0.1.0",
             "admin": {
@@ -446,6 +454,7 @@ try:
             "signals": {
                 "recent": recent_signals,
             },
+            "venice": venice_cfg,
         }
 
     # --- Auth helpers ---

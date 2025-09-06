@@ -149,6 +149,48 @@
     }
   }
 
+  // Venice card
+  function renderVeniceStatus(env) {
+    const st = qs('#veniceStatus');
+    if (!st) return;
+    try {
+      const v = (env && env.venice) || {};
+      const base = v.baseUrl || '(unset)';
+      const vvv = v.vvvPath || '/vvv';
+      const diem = v.diemPath || '/diem';
+      const off = !!v.offlineSignals;
+      let msg = `Base: ${base} | VVV: ${vvv} | DIEM: ${diem}`;
+      if (!base || base === '(unset)') {
+        msg += ' — Missing VENICE_API_BASE_URL';
+        st.classList.add('error');
+      } else if (off) {
+        msg += ' — Offline signals enabled (dev mode)';
+        st.classList.remove('error');
+      } else {
+        st.classList.remove('error');
+      }
+      st.textContent = msg;
+    } catch {
+      st.textContent = '';
+    }
+  }
+
+  async function refreshVenice() {
+    try {
+      const env = await fetchJSON('/v1/env', { headers: headers() });
+      // Config snapshot
+      setJSON('#veniceCfgOut', env.venice || {});
+      renderVeniceStatus(env);
+      // Recent signals
+      const sig = (env.signals && env.signals.recent) ? env.signals.recent : [];
+      setJSON('#veniceSignalsOut', sig);
+    } catch (e) {
+      setText('#veniceCfgOut', String(e));
+      setText('#veniceSignalsOut', '');
+      setText('#veniceStatus', '');
+    }
+  }
+
   // Tenants
   function renderTenantsTable(list) {
     if (!Array.isArray(list)) {
@@ -320,6 +362,7 @@
     // Health / Env
     bind('#refreshHealthBtn', 'click', refreshHealth);
     bind('#refreshEnvBtn', 'click', refreshEnv);
+    bind('#refreshVeniceBtn', 'click', refreshVenice);
 
     // Tenants
     bind('#refreshTenantsBtn', 'click', refreshTenants);
@@ -342,6 +385,7 @@
     // Initial loads
     refreshHealth();
     refreshEnv();
+    refreshVenice();
     if (getToken()) refreshTenants();
   }
 

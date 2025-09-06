@@ -141,7 +141,16 @@ class MarketDataProvider:
                 last_err = e
                 if i < retries:
                     time.sleep(backoff_s * (2**i))
-        # If all retries fail, rethrow the last error
+        # If all retries fail, optionally return offline stub
+        try:
+            import os as _os
+            if (_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+                stub = {"offline": True, "source": "stub", "kind": "diem", "ts": int(time.time())}
+                self._diem_cache, self._diem_cache_t = stub, time.time()
+                return stub
+        except Exception:
+            pass
+        # Otherwise rethrow the last error
         raise RuntimeError(f"Failed to fetch DIEM signals: {last_err}")
 
     def vvv_signals(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
@@ -162,6 +171,14 @@ class MarketDataProvider:
                 last_err = e
                 if i < retries:
                     time.sleep(backoff_s * (2**i))
+        try:
+            import os as _os
+            if (_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+                stub = {"offline": True, "source": "stub", "kind": "vvv", "ts": int(time.time())}
+                self._vvv_cache, self._vvv_cache_t = stub, time.time()
+                return stub
+        except Exception:
+            pass
         raise RuntimeError(f"Failed to fetch VVV signals: {last_err}")
 
     def unified_signals(self, ttl_s: int = 30) -> Dict[str, Any]:

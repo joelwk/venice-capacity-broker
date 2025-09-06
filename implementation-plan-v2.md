@@ -43,6 +43,7 @@ This document reflects the system’s current implementation, defines the “sto
 
 7) Observability
 - Add agent-loop and error-class metrics; optional tracing across agents/graph.
+  - Implemented: `/v1/env` surfaces recent `signal.market.*` and a Venice config snapshot; Admin UI card shows both for quick ops validation.
 
 8) Hardening
 - Enforce secure defaults (admin token in prod), CORS allowlists, receipts/audit trails for quotes/purchases, env sanity checks.
@@ -67,10 +68,11 @@ Included in v1 (must be done):
 - Docs: ADMIN/DEPLOYMENT/STATUS updated; `.env.example` consistent.
 
 Remaining for v1 (short list to finish):
-- Broaden venue tests and document Aerodrome exact-out limitation explicitly in `docs/BASE_DEX_ROUTERS.md`.
-- Add liquidity-aware sizing in risk engine (conservative defaults); persist decision context metrics.
-- Unify agent eventing and centralize signal ingestion in orchestrator (minimal viable).
-- Harden Broker API defaults (prod-safe CORS, admin token required) and add purchase receipts.
+- Broaden venue tests and document Aerodrome exact-out limitation explicitly in `docs/BASE_DEX_ROUTERS.md` (tests updated; keep monitoring ABI).
+- Validate liquidity-aware sizing across venues/sizes; tune slippage buckets/labels; add a non-dry orchestration pass for preview quotes.
+- Minimal consumers of `signal.*` events (e.g., cache warmers) now that centralized emission exists.
+- Harden Broker API defaults (prod-safe CORS, admin token required) and finalize receipts UX/admin listings.
+- Venice config alignment runbook: add `venice:probe-openapi` guidance to ADMIN and DEPLOYMENT; ensure base includes `/api/v1` and override paths when needed.
 
 Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Quorum multi-agent orchestration and advanced agendas.
@@ -96,14 +98,16 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 ## Next Steps (to complete v1)
 
 - Verify liquidity-aware sizing under more venues and sizes; tune buckets/labels.
-- Wire minimal consumers of `signal.*` events (e.g., orchestrator-driven cache) and surface recent signals in `/v1/env`.
+- Wire minimal consumers of `signal.*` events (e.g., orchestrator-driven cache). Admin UI now surfaces recent signals; keep.
 - Enforce prod defaults (admin token, CORS) in deployment profiles and add a CI check.
 - Add buyer lifecycle E2E (quote → purchase verify → subkey issuance) and orchestrator branch tests.
+- Add Venice alignment note: ensure `VENICE_API_BASE_URL` includes `/api/v1`, override `VENICE_VVV_PATH`/`VENICE_DIEM_PATH` when deployments differ; use `venice:probe-openapi`.
 - Cut a v1 tag with STATUS updated and core agents enabled.
 
 ---
 
 Changelog
+- 2025‑09‑06: Admin UI card for Venice config + recent signals; `/v1/env` exposes `venice` snapshot; optional `VENICE_OFFLINE_SIGNALS` fallback for local dev.
 - 2025‑09‑06: Added liquidity-aware sizing with metrics; emitted centralized market signals; attached purchase receipts and events; updated docs and migration 0005.
 - 2025‑09‑06: Expanded DEX venue E2E tests; finalized router capabilities docs; ensured Web3 deps in base env; tightened UniswapV2 trade path to avoid unnecessary Web3 import in tests.
 - 2025‑09‑05: Rewrote v2 to reflect current state, clarified the v1 stop line, removed encoding issues and inconsistent formatting, and aligned scope to the original plan.
