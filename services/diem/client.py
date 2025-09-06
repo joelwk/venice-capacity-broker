@@ -30,7 +30,14 @@ class DIEMService:
             self._actions = self._actions_factory()
         return self._actions
 
-    def mint(self, amount: int, *, dry_run: bool = False, idem_key: Optional[str] = None) -> Dict[str, Any]:
+    def mint(
+        self,
+        amount: int,
+        *,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Mint DIEM on-chain using configured wallet provider.
 
         Expects env DIEM_TOKEN_ADDRESS and ABI at abi/diem.json.
@@ -48,12 +55,22 @@ class DIEMService:
             _idem_attr.add(idem_key)
         res = self._get_actions().mint(amount)
         try:
-            _emit_event("diem.mint", {"amount": int(amount), **dict(res)})
+            payload = {"amount": int(amount), **dict(res)}
+            if corr_id:
+                payload["correlationId"] = str(corr_id)
+            _emit_event("diem.mint", payload)
         except Exception:
             pass
         return res
 
-    def burn(self, amount: int, *, dry_run: bool = False, idem_key: Optional[str] = None) -> Dict[str, Any]:
+    def burn(
+        self,
+        amount: int,
+        *,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Burn DIEM on-chain using configured wallet provider."""
         if dry_run:
             return {"status": "dry_run", "action": "burn", "amount": int(amount)}
@@ -67,7 +84,10 @@ class DIEMService:
             _idem_attr.add(idem_key)
         res = self._get_actions().burn(amount)
         try:
-            _emit_event("diem.burn", {"amount": int(amount), **dict(res)})
+            payload = {"amount": int(amount), **dict(res)}
+            if corr_id:
+                payload["correlationId"] = str(corr_id)
+            _emit_event("diem.burn", payload)
         except Exception:
             pass
         return res
@@ -80,7 +100,7 @@ class DIEMService:
             raise EnvironmentError("TRADE_PATH must be set: comma-separated token addresses (in,out)")
         return [p.strip() for p in path_env.split(",")]
 
-    def trade(self, side: str, amount: int) -> Dict[str, Any]:
+    def trade(self, side: str, amount: int, *, corr_id: Optional[str] = None) -> Dict[str, Any]:
         side_l = side.lower()
         # Path may not be set in tests; allow empty path for fake aggregators
         try:
@@ -96,7 +116,10 @@ class DIEMService:
                 res = self._get_actions().trade("sell", amount)
             out = {"status": "sent", **res}
             try:
-                _emit_event("diem.trade", {"side": side_l, "amount_in": int(amount), **dict(out)})
+                payload = {"side": side_l, "amount_in": int(amount), **dict(out)}
+                if corr_id:
+                    payload["correlationId"] = str(corr_id)
+                _emit_event("diem.trade", payload)
             except Exception:
                 pass
             return out
@@ -107,7 +130,10 @@ class DIEMService:
                     res = self.aggregator.trade_best_exact_out(amount, slippage_bps, path)  # type: ignore[attr-defined]
                     out = {"status": "sent", **res}
                     try:
-                        _emit_event("diem.trade", {"side": side_l, "amount_out": int(amount), **dict(out)})
+                        payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
+                        if corr_id:
+                            payload["correlationId"] = str(corr_id)
+                        _emit_event("diem.trade", payload)
                     except Exception:
                         pass
                     return out
@@ -118,7 +144,10 @@ class DIEMService:
             res = act.trade("buy", amount)
             out = {"status": "sent", **res}
             try:
-                _emit_event("diem.trade", {"side": side_l, "amount_out": int(amount), **dict(out)})
+                payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
+                if corr_id:
+                    payload["correlationId"] = str(corr_id)
+                _emit_event("diem.trade", payload)
             except Exception:
                 pass
             return out

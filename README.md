@@ -75,11 +75,18 @@ uv sync --extra web3 --extra agentkit
 uv sync --extra graph
 ```
 On-chain and wallets:
-- `coinbase-agentkit` + `cdp-sdk` integrate CDP Smart Wallet (gasless) and Eth-account providers.
+- Coinbase CDP Smart Wallet (recommended) and ETH account are supported via `coinbase-agentkit` + `cdp-sdk`.
 - Configure one of:
-  - Dev EOA: set `WALLET_PROVIDER=eth_account`, `ETH_PRIVATE_KEY`, `BASE_RPC_URL`, `BASE_CHAIN_ID`.
-  - Smart Wallet: set `WALLET_PROVIDER=smart_wallet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`, `OWNER`, `NETWORK_ID` (base-mainnet|base-sepolia), optional `PAYMASTER_URL`.
-  - Base gating enforced: only base-mainnet or base-sepolia are allowed.
+  - Smart Wallet (no EOA needed):
+    - `WALLET_PROVIDER=smart_wallet`
+    - `NETWORK_ID=base-mainnet` (or `base-sepolia`)
+    - `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
+    - Optional: `BASE_RPC_URL`, `PAYMASTER_URL`
+    - Note: `OWNER` is only required if you call `sign_message` with a smart wallet (e.g., some web3 challenges).
+  - Dev EOA:
+    - `WALLET_PROVIDER=eth_account`
+    - `ETH_PRIVATE_KEY`, `BASE_RPC_URL`, `BASE_CHAIN_ID`
+- Base gating enforced: only base-mainnet or base-sepolia are allowed.
 To enable on-chain calls: set `BASE_RPC_URL` and provide ABIs in `abi/`.
 
 Risk policy:
@@ -90,6 +97,10 @@ Risk policy:
   - `DIEM_DECIMALS` (optional override to avoid on-chain reads; default 18 if fetch fails)
 - ArbiDiem sizing:
   - Desired units via `ARBI_DIEM_MINT_UNITS` (default 1000). Final units are min(desired, risk-allowed) at current DIEM price.
+  - Slippage cap via `RISK_MAX_SLIPPAGE_BPS` (default 150 bps).
+  - Optional portfolio cap wiring in orchestrator (env-gated):
+    - `RISK_ENABLE_PORTFOLIO_CAP=true`
+    - Inventory (base units): `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`
 
 Run the CLI help:
 
@@ -101,6 +112,12 @@ Run the sample workflow (dry run):
 
 ```
 python apps/cli/main.py run:quorum --dry-run
+```
+
+Orchestrator loop:
+
+```
+python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 10
 ```
 
 Broker API (requires FastAPI + Uvicorn):
@@ -218,6 +235,14 @@ Notes:
   - Trading supports:
     - Uniswap V2 router ABI (`abi/uniswap_v2_router.json`) with `TRADE_PATH`
     - Aerodrome router ABI (`abi/aerodrome_router.json`) with multi-hop support; pool type toggled via `AERODROME_STABLE` (the system auto-tries both stable/volatile)
+  - DEX modes:
+    - Exact-in (sell): picks best `getAmountsOut` and executes `swapExactTokensForTokens`; auto-fallback to `swapExactTokensForTokensSupportingFeeOnTransferTokens` for FOT tokens.
+    - Exact-out (buy): supports `getAmountsIn` and executes `swapTokensForExactTokens` with max-input guard. Slippage set via `SLIPPAGE_BPS`. Note: Aerodrome is skipped for exact-out (ABI lacks `getAmountsIn`); Uniswap V2 handles buy-path exact-out.
+  - DEX metrics:
+    - `vvv_dex_quotes_total{provider,status}`, `vvv_dex_trades_total{provider,path}`, `vvv_fot_fallback_total{provider}`
+    - Aggregator: `vvv_dex_agg_selected_total{provider[,mode]}`, `vvv_dex_agg_no_quotes_total`, `vvv_dex_agg_trade_total{provider,mode}`, `vvv_dex_agg_trade_errors_total{provider,mode}`
+    - Latency buckets: `vvv_dex_quote_latency_bucket_total{provider,bucket}`, `vvv_dex_trade_latency_bucket_total{provider,bucket}` with buckets `lt_50ms|lt_100ms|lt_200ms|lt_500ms|lt_1s|lt_2s|ge_2s`
+  - Events: `diem.mint`, `diem.burn`, `diem.trade` events now include optional `correlationId` when orchestrated.
 - Venice client now performs real HTTP requests; endpoints are configurable via env.
  - Risk policy integrated with ArbiDiem to gate mint/sell sizes by USD or unit caps.
  - Broker store backend:

@@ -8,12 +8,13 @@ Overview
 
 1) Replit — Quick Deploy
 1. Import the repo into Replit (Python template). Ensure the Repl is private.
-2. Open “Secrets” and add required env vars (see `.env.example`). Minimal set:
+2. Open Secrets and add required env vars (see `.env.example`). Minimal set:
    - `BROKER_ADMIN_TOKEN`: a strong random string
    - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) for creating tenants
    - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
    - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
+   - Optional CDP Smart Wallet: `WALLET_PROVIDER=smart_wallet`, `NETWORK_ID=base-mainnet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
  - DEX aggregator (for on-chain pricing in token watcher):
      - `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
      - `DEX_PROVIDERS=uniswap_v2,aerodrome`
@@ -31,13 +32,13 @@ Overview
 
 Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.
-- Probe limiter (CLI): `make chat-admin TENANT=<id> [MESSAGE=Hello]` for a quick write, or run the probe `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`.
-- Idempotency: repeated identical `POST /v1/chat` should return `409` with `X-Idempotency-Accepted: false`.
+- Probe limiter (CLI): `make chat-admin TENANT=<id> [MESSAGE=Hello]` for a quick write, or run `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`.
+- Idempotency: repeated identical `POST /v1/chat` returns `409` with `X-Idempotency-Accepted: false`.
 
 Makefile shortcuts (operator quality-of-life)
 - `make env-status` prints `/v1/env` (if reachable) plus a local snapshot including KV detection (Redis vs Replit DB vs memory).
 - `make demo-e2e TENANT=t1 [LABEL=TeamA]` seeds a tenant (SQL if no Venice parent key), sends a chat, compacts counters, and prints recent counters.
-- `make db-compact` compacts KV -> SQL counters; `make db-counters TENANT=t1 [LIMIT=20]` shows recent counters.
+- `make db-compact` compacts KV → SQL counters; `make db-counters TENANT=t1 [LIMIT=20]` shows recent counters.
 
 Default: SQL-backed store (Replit SQL or Postgres)
 - Ensure `SQL_DATABASE_URL` (or `POSTGRES_*`) is configured.
@@ -50,15 +51,28 @@ Default: SQL-backed store (Replit SQL or Postgres)
   - CLI: `uv run python apps/cli/main.py counters:show --tenant <id> --limit 20 --json` or `make db-counters TENANT=<id>`
 
 2) Local — Quick Run
-- Recommended Python: 3.10
+- Recommended Python: 3.10+
 - Install deps:
   - With uv: `curl -LsSf https://astral.sh/uv/install.sh | sh && uv venv && uv sync --extra dev`
   - Or pip: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
 - Start API: `uv run uvicorn app:app --app-dir apps/broker-api --reload`
 - Health: `GET http://127.0.0.1:8000/health`
 
-Risk-aware ArbiDiem (optional operators):
+Risk-aware ArbiDiem (optional operators)
 - Set `ARBI_DIEM_MINT_UNITS` to your desired mint lot size (in token units). The risk policy will reduce it as needed using the live DIEM price.
+- Slippage cap via `RISK_MAX_SLIPPAGE_BPS` (default 150 bps).
+- Portfolio-cap wiring in orchestrator (env-gated): `RISK_ENABLE_PORTFOLIO_CAP=true` and set `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`.
+
+DEX trading modes (Base)
+- Providers: set `DEX_PROVIDERS=uniswap_v2,aerodrome`, router envs (`UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`).
+- Exact-in (sell): aggregator uses `getAmountsOut` and executes `swapExactTokensForTokens`. Fee-on-transfer tokens trigger automatic fallback to `swapExactTokensForTokensSupportingFeeOnTransferTokens`.
+- Exact-out (buy): aggregator uses `getAmountsIn` and executes `swapTokensForExactTokens` with max-input guard. Slippage via `SLIPPAGE_BPS`.
+- Operator note: Aerodrome router ABI in this repo lacks `getAmountsIn` (no exact-out). The aggregator intentionally skips Aerodrome for exact-out; Uniswap V2 handles buy-path exact-out.
+
+Observability (operators)
+- Metrics at `${METRICS_PATH:/metrics}`. Use `METRICS_BACKEND=starlette` for Prometheus middleware if installed.
+- DEX telemetry: `vvv_dex_quotes_total`, `vvv_dex_trades_total`, `vvv_fot_fallback_total`, aggregator selections/errors, and latency buckets `vvv_dex_*_latency_bucket_total`.
+- Decisions: `vvv_agent_decisions_total{agent,action}`. Events `diem.mint|burn|trade` include optional `correlationId` when called by the orchestrator.
 
 3) GitHub — Safe CI Only (no publish)
 - The repo includes `.github/workflows/ci.yml` which:
@@ -83,7 +97,7 @@ Risk-aware ArbiDiem (optional operators):
 - Observability:
   - Metrics at `${METRICS_PATH:/metrics}` (starlette_exporter or builtin).
   - Optional LangSmith tracing: set `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_API_KEY`.
- - Sanity check env: `make env-status` shows detected KV backend (redis|replit_db|memory), limiter and SQL flags.
+- Sanity check env: `make env-status` shows detected KV backend (redis|replit_db|memory), limiter and SQL flags.
 
 Secrets — Recovery & Rotation
 - Purpose: regain admin access if secrets are wiped or rotate on schedule.

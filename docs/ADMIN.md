@@ -35,11 +35,26 @@ Security
 - In production set `BROKER_REQUIRE_ADMIN_TOKEN=true` and a strong `BROKER_ADMIN_TOKEN`
 - UI stores token only in the browser; click Clear to remove it
 - Admin actions use the same backend auth as the `/v1/*` endpoints
+ - Set `AGENTS_PAUSED=true` to pause orchestrator decisions without redeploying
 
 Environment & Backends
 - Store backend: SQL is default (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Set `BROKER_STORE_BACKEND=json` only for local file-based development.
 - KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in-memory. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
 - Metrics: `/metrics` uses starlette-exporter if installed (`METRICS_BACKEND=starlette`), else builtin text metrics.
+  - Agent counters (builtin): look for `vvv_agent_decisions_total{agent,action}`.
+  - DEX metrics:
+    - `vvv_dex_quotes_total{provider,status}` and `vvv_dex_trades_total{provider,path}`
+    - `vvv_fot_fallback_total{provider}` when fee-on-transfer fallback is used
+    - `vvv_dex_agg_selected_total{provider[,mode]}` chosen route; `vvv_dex_agg_no_quotes_total` when none
+    - `vvv_dex_agg_trade_total{provider,mode}` and `vvv_dex_agg_trade_errors_total{provider,mode}`
+    - `vvv_dex_quote_latency_bucket_total{provider,bucket}` and `vvv_dex_trade_latency_bucket_total{provider,bucket}` with buckets: `lt_50ms|lt_100ms|lt_200ms|lt_500ms|lt_1s|lt_2s|ge_2s`
+    - Circuit: `vvv_dex_circuit_open_total{provider}`, `vvv_dex_circuit_skips_total{provider}`. Configure with `DEX_CIRCUIT_FAILURES` and `DEX_CIRCUIT_COOL_OFF_SECONDS`.
+  - Structured events: ArbiDiem/DIEM actions emit `diem.mint`, `diem.burn`, `diem.trade` (now include optional `correlationId`).
+
+Decision Record (operators)
+- Fields: `agent`, `action`, `price`, `inventoryUsd`, `dry_run`, `correlationId`, `limits` (slippage_bps_cap, max_trade_usd, max_inventory_usd, max_trade_units), `why` (market_price, fair_per_day, threshold_mult, premium, desired_units, suggested_units, exec_price_preview, slippage_bps, slippage_ok, decision, reason), `outcome`.
+- Example (JSON, abbreviated):
+  `{ "agent": "arbi_diem", "action": "mint_sell", "price": 2.15, "inventoryUsd": 3.0, "correlationId": "...", "limits": {"slippage_bps_cap":150}, "why": {"premium":1.12, "desired_units":1000, "suggested_units":800, "slippage_bps":45, "decision":"mint_sell"}, "outcome": true }`
 
 Troubleshooting (what we hit)
 - Nix read-only store errors with pip: install into a venv or use `--user`

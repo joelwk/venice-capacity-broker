@@ -161,5 +161,6 @@ class Decision(SQLModel, table=True):  # type: ignore[call-arg]
     id: Optional[int] = Field(default=None, primary_key=True)
     agent: str
     action: str
+    correlation_id: Optional[str] = None
     details: Optional[str] = None  # JSON string with context
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())

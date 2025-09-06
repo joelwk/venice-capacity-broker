@@ -10,7 +10,7 @@ What's Done
 
 Needs Attention
 - Migrations & recovery: ensure compaction and migration runbooks are robust.
-- Observability: prefer `starlette-exporter` metrics; add tracing hooks for graph/agents.
+- Observability: prefer `starlette-exporter` metrics; add tracing hooks for graph/agents. DEX telemetry added (quotes/trades/latency, FOT fallback), agent decisions counters, and optional correlationId on DIEM events.
 - Security: enforce `BROKER_REQUIRE_ADMIN_TOKEN=true` in prod; CORS allowlists for buyer/admin; secret hygiene; clear default model (`BROKER_DEFAULT_MODEL`).
 - Pricing/risk: evolve static pricing to policy-driven engine; verify decimals/units; add receipts and audit trails.
 - Wallet/ABIs: ensure required ABIs and Base RPCs are configured; exercise AgentKit Smart Wallet in non-dev flows.

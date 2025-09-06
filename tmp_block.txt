@@ -1,0 +1,16 @@
+    def trade_best(self, amount_in: int, min_out_bps: int, path: List[Address]) -> Dict[str, str]:
+        quote = self.best_quote(amount_in, path)
+        if quote is None:
+            raise RuntimeError("No quotes available from configured DEX providers")
+        # Apply slippage tolerance in basis points
+        min_out = quote.amount_out * (10_000 - min_out_bps) // 10_000
+        # Find the provider instance by name
+        provider = next(p for p in self.providers if p.name == quote.provider)
+        try:
+            return provider.trade(amount_in, min_out, path)
+        except Exception as e:  # noqa: BLE001
+            try:
+                _metrics_inc("dex_agg_trade_errors_total", labels={"provider": quote.provider, "mode": "exact_in"})
+            except Exception:
+                pass
+            raise e

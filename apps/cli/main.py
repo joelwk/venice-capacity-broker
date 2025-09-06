@@ -461,13 +461,13 @@ def cmd_run_orchestrator(args: argparse.Namespace) -> None:
     arbi = ArbiDiem(diem)
     orch = Orchestrator(market=market, arbi=arbi)
 
-    cycles = int(args.max_cycles)
-    sleep_s = float(args.sleep)
-    for i in range(cycles):
-        logger.info(f"Orchestrator cycle {i+1}/{cycles} (dry={args.dry_run})")
-        orch.run_once(dry_run=bool(args.dry_run))
-        if i < cycles - 1 and sleep_s > 0:
-            time.sleep(sleep_s)
+    orch.run_loop(
+        interval_s=float(args.interval),
+        backoff_s=float(args.backoff),
+        max_backoff_s=float(args.max_backoff),
+        dry_run=bool(args.dry_run),
+        max_cycles=int(args.max_cycles),
+    )
 
 
 def cmd_run_graph(args: argparse.Namespace) -> None:
@@ -906,10 +906,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_probe_limits)
 
     # Orchestrator loop
-    sp = sub.add_parser("run:orchestrator", help="Run orchestrator loop for ArbiDiem with persistence")
+    sp = sub.add_parser("run:orchestrator", help="Run orchestrator loop for ArbiDiem with persistence and backoff")
     sp.add_argument("--dry-run", action="store_true", default=True)
-    sp.add_argument("--max-cycles", default="1")
-    sp.add_argument("--sleep", default="1.0")
+    sp.add_argument("--max-cycles", default="0")
+    sp.add_argument("--interval", default="5.0", help="Loop interval seconds")
+    sp.add_argument("--backoff", default="1.0", help="Initial backoff seconds on error")
+    sp.add_argument("--max-backoff", default="60.0", help="Max backoff seconds")
     sp.set_defaults(func=cmd_run_orchestrator)
 
     # Broker revoke tenant key (admin)

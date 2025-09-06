@@ -62,35 +62,71 @@ class ArbiDiem:
         except Exception:
             return 0.0
 
-    def evaluate_and_maybe_mint(self, market_price: float, mint_rate: float = 1.0, desired_units: int | None = None) -> bool:
+    def evaluate_and_maybe_mint(
+        self,
+        market_price: float,
+        mint_rate: float = 1.0,
+        desired_units: int | None = None,
+        current_inventory_usd: float | None = None,
+        corr_id: str | None = None,
+    ) -> bool:
         # Import lazily so tests can monkeypatch libs.pricing.diem
         fair_value_per_diem = import_module("libs.pricing.diem").fair_value_per_diem  # type: ignore[attr-defined]
         fair = fair_value_per_diem(self.discount_rate_apy) * mint_rate / 365.0
         logger.info(f"Market px={market_price:.4f}, fair/day={fair:.4f}")
-        if market_price > fair * 1.05:  # 5% threshold
+        threshold_mult = 1.05
+        # Initialize rationale holder
+        rationale = {
+            "market_price": float(market_price),
+            "fair_per_day": float(fair),
+            "threshold_mult": float(threshold_mult),
+            "premium": (float(market_price / fair) if fair > 0 else None),
+            "desired_units": None,
+            "suggested_units": None,
+            "exec_price_preview": None,
+            "slippage_bps": None,
+            "slippage_ok": None,
+            "decision": "hold",
+            "reason": None,
+        }
+        if market_price > fair * threshold_mult:  # premium over threshold
             # Risk-gated sizing
             want = int(desired_units) if desired_units is not None else self._desired_units()
-            suggested = self.risk.suggest_trade_units(want, market_price)
+            suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
+            rationale.update({"desired_units": int(want), "suggested_units": int(suggested)})
             if suggested <= 0:
                 logger.info("Risk rejected mint/trade (suggested=0)")
+                rationale.update({"decision": "hold", "reason": "risk_rejected"})
+                setattr(self, "_last_rationale", rationale)
                 return False
             # Slippage gate using aggregator preview
             exec_px = self._preview_exec_price(suggested)
+            rationale["exec_price_preview"] = float(exec_px) if exec_px else None
             if exec_px > 0:
                 slip = self.risk.check_slippage(exec_px, market_price)
+                rationale.update({
+                    "slippage_bps": float(slip.get("slippage_bps", 0.0)),
+                    "slippage_ok": bool(slip.get("ok", False)),
+                })
                 if not bool(slip.get("ok", False)):
                     logger.info(
                         f"Rejected due to slippage_bps={slip.get('slippage_bps'):.2f} cap={self.risk.slippage_bps_cap}"
                     )
+                    rationale.update({"decision": "hold", "reason": "slippage_exceeded"})
+                    setattr(self, "_last_rationale", rationale)
                     return False
             else:
                 logger.info("No quotes available for preview; proceeding without slippage gate")
             logger.info(f"Signal: Mint and sell DIEM (units={suggested}, want={want})")
+            rationale.update({"decision": "mint_sell"})
             _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": "mint_sell"})
-            self.diem.mint(suggested)
-            self.diem.trade("sell", suggested)
+            self.diem.mint(suggested, corr_id=corr_id)
+            self.diem.trade("sell", suggested, corr_id=corr_id)
+            setattr(self, "_last_rationale", rationale)
             return True
         logger.info("No-op: market not favorable")
         _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": "hold"})
+        rationale.update({"decision": "hold", "reason": "market_not_favorable"})
+        setattr(self, "_last_rationale", rationale)
         return False
 

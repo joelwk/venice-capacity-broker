@@ -1,4 +1,4 @@
-# Base DEX Router Addresses
+﻿# Base DEX Router Addresses
 
 ## Verified Router Addresses for Base Mainnet (Chain ID: 8453)
 
@@ -38,7 +38,7 @@ DEX_BRIDGE_TOKEN_ADDRESS=0x4200000000000000000000000000000000000006  # WETH
 # DEX routers
 DEX_PROVIDERS=uniswap_v2,aerodrome
 UNISWAP_V2_ROUTER_ADDRESS=0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24
-AERODROME_ROUTER_ADDRESS=0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43  # ← CORRECT ADDRESS
+AERODROME_ROUTER_ADDRESS=0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43  # (CORRECT ADDRESS)
 AERODROME_STABLE=false  # Most pairs are volatile; code tries both
 
 # Token addresses for tracking
@@ -58,8 +58,19 @@ TRADE_PATH=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024,0x833589fCD6eDb6E08f4c7C32
 ## Troubleshooting DIEM Pricing
 
 DIEM has liquidity primarily in the VVV/DIEM pool on Aerodrome. The pricing path is:
-1. DIEM → VVV (via Aerodrome VVV/DIEM pool)
-2. VVV → WETH (via Uniswap V2 or Aerodrome)
-3. WETH → USDC (via multiple pools)
+1. DIEM -> VVV (via Aerodrome VVV/DIEM pool)
+2. VVV -> WETH (via Uniswap V2 or Aerodrome)
+3. WETH -> USDC (via multiple pools)
 
 With the corrected Aerodrome router address and multi-hop support enabled, DIEM should price correctly through this path.
+
+
+## Router Capabilities
+
+- Uniswap V2: Supports exact-in (`getAmountsOut` + `swapExactTokensForTokens`) and exact-out (`getAmountsIn` + `swapTokensForExactTokens`). Includes fee-on-transfer fallback via `swapExactTokensForTokensSupportingFeeOnTransferTokens`.
+- Aerodrome: Supports exact-in via `getAmountsOut` and `swapExactTokensForTokensSimple` with `stable`/`volatile` flag. Exact-out is not supported by the ABI bundled in this repo (no `getAmountsIn`). The aggregator skips Aerodrome for buy-path exact-out.
+
+## Trading Behavior Notes
+
+- Fee-on-transfer (FOT): Uniswap V2 provider automatically falls back to `swapExactTokensForTokensSupportingFeeOnTransferTokens` when standard swaps revert due to FOT behavior.
+- Buy path (exact-out): Use Uniswap V2 for exact-out. Configure slippage via `SLIPPAGE_BPS`.
