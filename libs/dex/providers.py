@@ -131,9 +131,12 @@ class UniswapV2DexProvider(DexProvider):
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         # Ensure allowance for input token to router
         token_in = path[0]
-        # Resolve recipient lazily
-        from web3 import Web3 as _Web3  # type: ignore
-        recipient = self.recipient or _Web3.to_checksum_address(get_address())
+        # Resolve recipient lazily; avoid importing web3 if already set (test-friendly)
+        if self.recipient:
+            recipient = self.recipient
+        else:
+            from web3 import Web3 as _Web3  # type: ignore
+            recipient = _Web3.to_checksum_address(get_address())
         approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, amount_in) or ""
 
         deadline = int(time.time()) + 20 * 60
@@ -197,8 +200,11 @@ class UniswapV2DexProvider(DexProvider):
         Approves up to max_amount_in for safety and enforces slippage by contract arg.
         """
         token_in = path[0]
-        from web3 import Web3 as _Web3  # type: ignore
-        recipient = self.recipient or _Web3.to_checksum_address(get_address())
+        if self.recipient:
+            recipient = self.recipient
+        else:
+            from web3 import Web3 as _Web3  # type: ignore
+            recipient = _Web3.to_checksum_address(get_address())
         approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, max_amount_in) or ""
 
         deadline = int(time.time()) + 20 * 60
