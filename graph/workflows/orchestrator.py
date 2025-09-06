@@ -25,32 +25,41 @@ class Orchestrator:
     arbi: Any
 
     def run_once(self, mint_rate: float = 1.0, dry_run: bool = True) -> Dict[str, Any]:
-        prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
-        px = float(prices.get("DIEM", 1.0))
+        # In dry-run, avoid importing web3/DEX providers to prevent heavy deps or platform issues.
+        if dry_run:
+            try:
+                px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
+            except Exception:
+                px = 1.0
+            prices: Dict[str, float] = {"DIEM": px}
+        else:
+            prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
+            px = float(prices.get("DIEM", 1.0))
         # Optional portfolio cap wiring (env-gated)
         current_inventory_usd = None
-        try:
-            import os
+        if not dry_run:
+            try:
+                import os as _os
 
-            if (os.getenv("RISK_ENABLE_PORTFOLIO_CAP") or "false").strip().lower() in {"1", "true", "yes", "on"}:
-                # Read inventory units from env (token base units)
-                def _i(name: str) -> int:
-                    v = os.getenv(name)
-                    try:
-                        return int(v) if v is not None and str(v).strip() != "" else 0
-                    except Exception:
-                        return 0
+                if (_os.getenv("RISK_ENABLE_PORTFOLIO_CAP") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+                    # Read inventory units from env (token base units)
+                    def _i(name: str) -> int:
+                        v = _os.getenv(name)
+                        try:
+                            return int(v) if v is not None and str(v).strip() != "" else 0
+                        except Exception:
+                            return 0
 
-                diem_u = _i("DIEM_INVENTORY_UNITS")
-                vvv_u = _i("VVV_INVENTORY_UNITS")
-                usdc_u = _i("USDC_INVENTORY_UNITS")
-                # Use arbi.risk exposure calculation
-                total_usd, _ = self.arbi.risk.exposure_usd(
-                    diem_units=diem_u, vvv_units=vvv_u, usdc_units=usdc_u, prices_usd=prices
-                )
-                current_inventory_usd = float(total_usd)
-        except Exception:
-            current_inventory_usd = None
+                    diem_u = _i("DIEM_INVENTORY_UNITS")
+                    vvv_u = _i("VVV_INVENTORY_UNITS")
+                    usdc_u = _i("USDC_INVENTORY_UNITS")
+                    # Use arbi.risk exposure calculation
+                    total_usd, _ = self.arbi.risk.exposure_usd(
+                        diem_units=diem_u, vvv_units=vvv_u, usdc_units=usdc_u, prices_usd=prices
+                    )
+                    current_inventory_usd = float(total_usd)
+            except Exception:
+                current_inventory_usd = None
 
         corr = str(uuid.uuid4())
         if (os.getenv("AGENTS_PAUSED") or "false").strip().lower() in {"1", "true", "yes", "on"}:

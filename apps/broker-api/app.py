@@ -375,6 +375,25 @@ try:
         # Metrics backend label
         metrics_kind = "off" if METRICS_BACKEND == "off" else ("starlette" if _using_starlette_exporter else "builtin")
 
+        # Gather recent signal events (best-effort)
+        recent_signals: list[dict] = []
+        try:
+            from libs.telemetry.events import recent as _recent
+
+            ev = _recent(limit=50)
+            sig = [e for e in ev if str(e.get("kind", "")).startswith("signal.market.")]
+            # Keep only last 5 for readability
+            recent_signals = sig[-5:]
+        except Exception:
+            recent_signals = []
+
+        # Orchestrator dry-run fake price (if provided in environment)
+        try:
+            dr_fp_env = __os.getenv("DIEM_FAKE_PRICE") or __os.getenv("TEST_DIEM_PRICE")
+            dr_fake_price = float(dr_fp_env) if dr_fp_env and str(dr_fp_env).strip() != "" else None
+        except Exception:
+            dr_fake_price = None
+
         return {
             "version": "0.1.0",
             "admin": {
@@ -420,6 +439,12 @@ try:
             "features": {
                 "quotes": (_os.getenv("QUOTES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
                 "purchases": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+            },
+            "orchestrator": {
+                "dryRunFakePrice": dr_fake_price,
+            },
+            "signals": {
+                "recent": recent_signals,
             },
         }
 

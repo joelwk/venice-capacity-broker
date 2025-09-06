@@ -20,6 +20,8 @@ Features (MVP)
 - Health/Env
   - Health: `GET /health`
   - Env snapshot: `GET /v1/env`
+    - Includes `orchestrator.dryRunFakePrice` when set (used by offline dry-runs)
+    - Includes `signals.recent` with the last few `signal.market.*` events for operator visibility
 - Chat Probe
   - Admin act-as tenant: `POST /v1/chat` with `X-Tenant-Id: <id>`
   - Model: request `model` or global `BROKER_DEFAULT_MODEL`

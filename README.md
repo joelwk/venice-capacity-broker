@@ -120,6 +120,9 @@ Orchestrator loop:
 python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 10
 ```
 
+Dry-run notes:
+- Dry-run mode avoids initializing Web3/DEX and uses `DIEM_FAKE_PRICE` (or default 1.0) for decisions. Set `DIEM_FAKE_PRICE=1.5` to simulate premium conditions without RPC.
+
 Broker API (requires FastAPI + Uvicorn):
 
 Run with uv (recommended):

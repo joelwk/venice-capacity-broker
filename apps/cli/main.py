@@ -457,7 +457,8 @@ def cmd_run_orchestrator(args: argparse.Namespace) -> None:
     from graph.workflows.orchestrator import Orchestrator
 
     market = MarketDataProvider()
-    diem = DIEMService(build_aggregator_from_env())
+    # Avoid initializing DEX/web3 in dry-run to prevent platform-specific crashes
+    diem = DIEMService(build_aggregator_from_env() if not args.dry_run else None)
     arbi = ArbiDiem(diem)
     orch = Orchestrator(market=market, arbi=arbi)
 
