@@ -157,12 +157,11 @@
       const v = (env && env.venice) || {};
       const base = v.baseUrl || '(unset)';
       const vvv = v.vvvPath || '/vvv';
-      const diem = v.diemPath || '/diem';
       const off = !!v.offlineSignals;
       const sig = (env && env.signals) || {};
       const sigOffline = !!sig.offline;
       const ready = (typeof v.ready === 'boolean') ? v.ready : null;
-      let msg = `Base: ${base} | VVV: ${vvv} | DIEM: ${diem}`;
+      let msg = `Base: ${base} | VVV: ${vvv}`;
       if (!base || base === '(unset)') {
         msg += ' — Missing VENICE_API_BASE_URL';
         st.classList.add('error');

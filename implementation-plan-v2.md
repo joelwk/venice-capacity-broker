@@ -8,16 +8,16 @@ This document reflects the system’s current implementation, defines the “sto
 - Staking: `StakingService` for approve/stake/claim/unstake; `status()` performs safe, ABI-light on-chain reads. Files: `services/staking/client.py`, `libs/agentkit_ext/actions.py`, `abi/staking.json`.
 - DIEM service: On-chain `mint`/`burn` via AgentKit plus DEX trading through an aggregator (Uniswap V2, Aerodrome). Emits `diem.*` events with optional `correlationId`. Files: `services/diem/client.py`, `libs/agentkit_ext/actions.py`, `libs/dex/providers.py`, `abi/*.json`.
 - DEX trading + telemetry: Exact-out buy via Uniswap V2 (`getAmountsIn` + `swapTokensForExactTokens`); exact-in sell with FOT fallback (`swapExactTokensForTokensSupportingFeeOnTransferTokens`). Aggregator/provider metrics (quotes/trades, selections/errors) and latency buckets at `/metrics`. Per-provider circuit breaker (open/skip/reset) via env thresholds; Aerodrome is skipped for exact-out by design. Files: `libs/dex/providers.py`.
-- Market data: Best-price quoting via aggregator; DIEM/VVV signals with caching/retry; unified signals. Files: `services/marketdata/provider.py`, `libs/pricing/diem.py`.
+- Market data: Best-price quoting via aggregator; VVV metrics (circulating supply, utilization, staking_yield) with caching/retry; DIEM balances/quotas from rate-limits; unified signals. Files: `services/marketdata/provider.py`, `libs/pricing/diem.py`.
 - Token watcher: Periodic snapshots for price (via DEX), supply, holders, 24h transfers; persists to SQL. Files: `services/marketdata/token_watcher.py`, `db/models.py`.
-- Venice SDK + Keys: Configurable paths, chat/models/signals; KeyManager supports challenge-based root key and scoped subkeys; revoke and list helpers. Files: `libs/venice_sdk/client.py`, `services/venice_keys/manager.py`.
+- Venice SDK + Keys: Configurable paths; chat/models and explicit VVV metrics helpers; DIEM balances via rate-limits; KeyManager supports challenge-based root key and scoped subkeys; revoke and list helpers. Files: `libs/venice_sdk/client.py`, `services/venice_keys/manager.py`.
 - Broker API: FastAPI with tenants, chat proxying, per-tenant limits, idempotency middleware, optional KV rate limiting, `/v1/debug/counters`, `/v1/env`, metrics, and static admin UI at `/admin`. Files: `apps/broker-api/app.py`, `apps/broker-api/tenant_store*.py`, `apps/control-plane/*`.
 - Orchestrator: Single-agent loop with backoff; persists decision records (SQL when available); decision metrics and `correlationId`. Decision `details` include limits and `why` (premium/threshold, slippage, desired/suggested units). Files: `graph/workflows/orchestrator.py`, `apps/cli/main.py`.
 - CLI + Operator tools: Idempotency purge, KV/SQL compaction, counters view, env status, rotate/probe, Venice OpenAPI probe. Files: `apps/cli/main.py`, `scripts/*`, `Makefile`.
 - Agents: StakeMaster (claim in live mode), ArbiDiem (risk-gated mint/sell with slippage gate), CapacityBroker (key issuance wrapper), AI Treasurer (initial rebalance heuristic). Files: `agents/*`.
 - Tests: Risk policy sizing and conversions; ArbiDiem risk integration; DIEM buy path and FOT fallback; Broker idempotency + purge CLI; rate limits; orchestrator portfolio-cap wiring. Files: `tests/*.py`.
 - Docs + config: README/DEPLOYMENT/ADMIN updated with DEX modes/metrics and flags; Base router addresses; `.env.example` includes `BROKER_REQUIRE_ADMIN_TOKEN`, `AGENTS_PAUSED`, pricing flags. Files: `README.md`, `docs/*.md`, `.env.example`.
- - Venice readiness + ops UX: `/v1/env` exposes `venice.ready` with per-check `readyReason` (models/vvv/diem), `signals.offline`, and a `venice` snapshot; Admin UI card shows config, recent signals, inline path probe, banner when NOT READY; dev-only offline signals supported via `VENICE_OFFLINE_SIGNALS`.
+ - Venice readiness + ops UX: `/v1/env` exposes `venice.ready` with per-check `readyReason` (models/vvv), `signals.offline`, and a `venice` snapshot; Admin UI card shows config, recent signals, inline path probe, banner when NOT READY; dev-only offline signals supported via `VENICE_OFFLINE_SIGNALS`.
  - Admin receipts UI: Purchases table lists `purchaseId`, `quoteId`, `asset`, `amountPaid`, `status`, `expiresAt`; JSON views remain for details.
  - Quotes preview CLI: `quotes:preview` exercises liquidity-aware metrics without trading; uses aggregator preview + risk policy and logs adjusted units and slippage.
 
@@ -35,7 +35,11 @@ This document reflects the system’s current implementation, defines the “sto
 - Centralize signal ingestion; unify eventing across agents; refine decision store schema (limits/why) as it stabilizes.
   - Implemented: centralized `signal.market.prices` and `signal.market.signals` events emitted from MarketDataProvider; decisions already persisted with `why` context.
 
-4) CapacityBroker agent
+4) Venice API alignment (signals → metrics)
+- Completed: Removed fictional `/diem` signals. Added explicit VVV metrics endpoints in client and provider; DIEM balances fetched via `/api_keys/rate_limits`. Updated CLI/Broker readiness and docs/config.
+- Pending: Monitor deployments that expose legacy `/vvv` aggregate; keep compatibility. Consider adding CLI examples/output snapshots for VVV metrics.
+
+5) CapacityBroker agent
 - Evolve from issuance wrapper to dynamic pricing/allocation tied to utilization and market pricing; integrate quote → purchase verify → subkey issuance loop.
 
 5) AI Treasurer
@@ -106,13 +110,14 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Wire minimal consumers of `signal.*` events (e.g., orchestrator-driven cache). Admin UI now surfaces recent signals; keep.
 - Enforce prod defaults (admin token, CORS) in deployment profiles and add a CI check.
 - Add buyer lifecycle E2E (quote → purchase verify → subkey issuance) and orchestrator branch tests.
-- Add Venice alignment note: ensure `VENICE_API_BASE_URL` includes `/api/v1`, override `VENICE_VVV_PATH`/`VENICE_DIEM_PATH` when deployments differ; use `venice:probe-openapi`.
+- Add Venice alignment note: ensure `VENICE_API_BASE_URL` includes `/api/v1`. For VVV metrics, prefer explicit paths and override when deployments differ: `VENICE_VVV_CIRC_PATH`, `VENICE_VVV_UTIL_PATH`, `VENICE_VVV_YIELD_PATH` (legacy aggregate: `VENICE_VVV_PATH`). DIEM balances come from `GET /api_keys/rate_limits` (no DIEM signals endpoint). Use `venice:probe-openapi`.
 - Cut a v1 tag with STATUS updated and core agents enabled.
  - Gate production deploys on readiness: `venice.ready`, admin token, and CORS allowlist; add a smoke `quotes:preview` step to ensure aggregator is functional.
 
 ---
 
 Changelog
+- 2025-09-06: Venice API alignment: removed non-existent `/diem` signals; added explicit VVV metrics endpoints (circulatingsupply/utilization/staking_yield); DIEM balances via `/api_keys/rate_limits`; updated CLI `venice:signals`, Broker readiness, and docs/config; improved 404 error hints.
 - 2025‑09‑06: Admin UI card for Venice config + recent signals; `/v1/env` exposes `venice` snapshot; optional `VENICE_OFFLINE_SIGNALS` fallback for local dev.
  - 2025‑09‑06: Added Venice readiness with `readyReason`; Admin receipts table; CLI `quotes:preview`; improved error hints for Venice client; server-side path probe.
 - 2025‑09‑06: Added liquidity-aware sizing with metrics; emitted centralized market signals; attached purchase receipts and events; updated docs and migration 0005.

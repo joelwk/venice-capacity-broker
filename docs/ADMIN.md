@@ -22,8 +22,8 @@ Features (MVP)
   - Env snapshot: `GET /v1/env`
     - Includes `orchestrator.dryRunFakePrice` when set (used by offline dry-runs)
     - Includes `signals.recent` with the last few `signal.market.*` events for operator visibility
-    - Includes `venice` config snapshot (baseUrl, vvvPath, diemPath, offlineSignals) without secrets
-    - Includes Venice readiness fields: `ready`, `modelsOk`, `vvvSignalsOk`, `diemSignalsOk`
+    - Includes `venice` config snapshot (baseUrl, vvvPath, offlineSignals) without secrets
+    - Includes Venice readiness fields: `ready`, `modelsOk`, `vvvSignalsOk`
   - Venice probe: `GET /v1/admin/venice/probe?base=https://api.venice.ai` (admin) fetches OpenAPI and suggests env exports (base URL and paths)
   - Admin UI card: “Venice Config & Signals” shows config snapshot, recent signals, and inline Path Probe (enter base URL and click “Probe Paths”)
     - Shows a banner-style status; highlights “Venice: NOT READY” when readiness checks fail

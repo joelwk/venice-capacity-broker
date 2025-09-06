@@ -24,7 +24,9 @@ venice:
     models: ${VENICE_MODELS_PATH:/models}
     chat_completions: ${VENICE_CHAT_COMPLETIONS_PATH:/chat/completions}
     vvv: ${VENICE_VVV_PATH:/vvv}
-    diem: ${VENICE_DIEM_PATH:/diem}
+    vvv_circulatingsupply: ${VENICE_VVV_CIRC_PATH:/vvv/circulatingsupply}
+    vvv_utilization: ${VENICE_VVV_UTIL_PATH:/vvv/utilization}
+    vvv_staking_yield: ${VENICE_VVV_YIELD_PATH:/vvv/staking_yield}
 
 contracts:
   vvv_token: ${VVV_TOKEN_ADDRESS:}

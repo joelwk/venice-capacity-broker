@@ -336,14 +336,22 @@ def cmd_venice_models(args: argparse.Namespace) -> None:
 def cmd_venice_signals(args: argparse.Namespace) -> None:
     client = VeniceClient()
     out: Dict[str, Any] = {}
+    # VVV metrics
     try:
-        out["vvv"] = client.get_vvv_signals()
+        out["vvv"] = client.get_vvv_metrics()
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Failed to fetch VVV signals: {e}")
+        logger.warning(f"Failed to fetch VVV metrics: {e}")
+    # DIEM via rate-limits balances/quotas
     try:
-        out["diem"] = client.get_diem_signals()
+        limits = client.get_rate_limits()
+        balances = (limits or {}).get("balances") or {}
+        out["diem"] = {
+            "balances": balances,
+            "diem": balances.get("DIEM") or balances.get("diem"),
+            "raw": limits,
+        }
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"Failed to fetch DIEM signals: {e}")
+        logger.warning(f"Failed to fetch DIEM balance/quota: {e}")
     logger.info(f"signals: {out}")
 
 
@@ -377,15 +385,11 @@ def cmd_venice_validate_addresses(args: argparse.Namespace) -> None:
     }
     found: set[str] = set()
     try:
+        # Try legacy /vvv aggregate if available to extract addresses
         vvv = client.get_vvv_signals()
         found |= _extract_addresses(vvv)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Could not fetch /v1/vvv: {e}")
-    try:
-        diem = client.get_diem_signals()
-        found |= _extract_addresses(diem)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Could not fetch /v1/diem: {e}")
 
     logger.info(f"discovered_addresses={sorted(found)}")
     for k, v in env_addrs.items():
@@ -731,8 +735,8 @@ def cmd_market_diem(args: argparse.Namespace) -> None:
     from services.marketdata.provider import MarketDataProvider
 
     md = MarketDataProvider()
-    res = md.diem_signals()
-    logger.info(f"diem_signals: {res}")
+    res = md.diem_balance()
+    logger.info(f"diem_balance: {res}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -752,7 +756,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("venice:models", help="List available Venice models")
     sp.set_defaults(func=cmd_venice_models)
 
-    sp = sub.add_parser("venice:signals", help="Fetch Venice VVV/DIEM tokenomic signals")
+    sp = sub.add_parser("venice:signals", help="Fetch Venice VVV metrics and DIEM balance/quota")
     sp.set_defaults(func=cmd_venice_signals)
 
     # Friendly alias for the OpenAPI probe
@@ -786,13 +790,18 @@ def build_parser() -> argparse.ArgumentParser:
             sub_path = _first(["/api_keys","/v1/keys/sub","/v1/keys/subkey"]) or "/api_keys"
             root_path = _first(["/api_keys/generate_web3_key","/v1/keys/generate_web3_key"]) or "/api_keys/generate_web3_key"
             vvv_path = "/vvv" if "/vvv" in paths else ("/signals/vvv" if "/signals/vvv" in paths else "/vvv")
-            diem_path = "/diem" if "/diem" in paths else ("/signals/diem" if "/signals/diem" in paths else "/diem")
             print("# Recommended environment exports:")
             print(f"export VENICE_API_BASE_URL={rec_base}")
             print(f"export VENICE_CREATE_SUBKEY_PATH={sub_path}")
             print(f"export VENICE_CREATE_ROOT_PATH={root_path}")
             print(f"export VENICE_VVV_PATH={vvv_path}")
-            print(f"export VENICE_DIEM_PATH={diem_path}")
+            # Explicit VVV metrics endpoints (if your deployment supports them)
+            if "/vvv/circulatingsupply" in paths:
+                print("export VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply")
+            if "/vvv/utilization" in paths:
+                print("export VENICE_VVV_UTIL_PATH=/vvv/utilization")
+            if "/vvv/staking_yield" in paths:
+                print("export VENICE_VVV_YIELD_PATH=/vvv/staking_yield")
         except Exception as e:  # noqa: BLE001
             logger.error(f"probe failed: {e}")
 

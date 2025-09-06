@@ -22,8 +22,12 @@ class VeniceConfig:
     quota_path: str = "/api_keys/rate_limits"  # fallback alias
     models_path: str = "/models"
     chat_completions_path: str = "/chat/completions"
+    # Legacy aggregate signals (some deployments expose /vvv)
     vvv_path: str = "/vvv"
-    diem_path: str = "/diem"
+    # Explicit VVV metrics endpoints (preferred)
+    vvv_circ_path: str = "/vvv/circulatingsupply"
+    vvv_util_path: str = "/vvv/utilization"
+    vvv_yield_path: str = "/vvv/staking_yield"
 
 
 class VeniceClient:
@@ -46,7 +50,9 @@ class VeniceClient:
             models_path=os.getenv("VENICE_MODELS_PATH", "/models"),
             chat_completions_path=os.getenv("VENICE_CHAT_COMPLETIONS_PATH", "/chat/completions"),
             vvv_path=os.getenv("VENICE_VVV_PATH", "/vvv"),
-            diem_path=os.getenv("VENICE_DIEM_PATH", "/diem"),
+            vvv_circ_path=os.getenv("VENICE_VVV_CIRC_PATH", "/vvv/circulatingsupply"),
+            vvv_util_path=os.getenv("VENICE_VVV_UTIL_PATH", "/vvv/utilization"),
+            vvv_yield_path=os.getenv("VENICE_VVV_YIELD_PATH", "/vvv/staking_yield"),
         )
 
     def _headers(self) -> Dict[str, str]:
@@ -62,8 +68,8 @@ class VeniceClient:
         base = self.config.base_url
         if status == 404:
             return (
-                f"Venice error 404: {body}. Hint: ensure VENICE_API_BASE_URL includes '/api/v1'"
-                f" (got '{base}'), or override VENICE_VVV_PATH / VENICE_DIEM_PATH and key paths as needed."
+                f"Endpoint not available (404): {body}. Hint: ensure VENICE_API_BASE_URL includes '/api/v1'"
+                f" (got '{base}'). Check Postman docs for valid paths and override VENICE_VVV_*_PATH or key paths as needed."
             )
         if status in (401, 403):
             return f"Venice auth error {status}: {body}. Hint: set a valid VENICE_API_KEY."
@@ -203,8 +209,48 @@ class VeniceClient:
         payload.update(extra)
         return self._post(self.config.chat_completions_path, json=payload)
 
+    # --- Signals / metrics ---
     def get_vvv_signals(self) -> Dict[str, Any]:
+        """Legacy aggregate VVV signals if available (e.g., /vvv)."""
         return self._get(self.config.vvv_path)
 
-    def get_diem_signals(self) -> Dict[str, Any]:
-        return self._get(self.config.diem_path)
+    def get_vvv_circulating_supply(self) -> Dict[str, Any]:
+        return self._get(self.config.vvv_circ_path)
+
+    def get_vvv_utilization(self) -> Dict[str, Any]:
+        return self._get(self.config.vvv_util_path)
+
+    def get_vvv_staking_yield(self) -> Dict[str, Any]:
+        return self._get(self.config.vvv_yield_path)
+
+    def get_vvv_metrics(self) -> Dict[str, Any]:
+        """Fetch all VVV metrics and return a merged dict.
+
+        Returns keys: circulating_supply, utilization, staking_yield
+        """
+        try:
+            circ = self.get_vvv_circulating_supply()
+        except Exception:
+            circ = {}
+        try:
+            util = self.get_vvv_utilization()
+        except Exception:
+            util = {}
+        try:
+            apy = self.get_vvv_staking_yield()
+        except Exception:
+            apy = {}
+        out: Dict[str, Any] = {}
+        if isinstance(circ, dict):
+            out["circulating_supply"] = circ.get("circulatingSupply") or circ.get("circulating_supply") or circ
+        else:
+            out["circulating_supply"] = circ
+        if isinstance(util, dict):
+            out["utilization"] = util.get("utilization") or util
+        else:
+            out["utilization"] = util
+        if isinstance(apy, dict):
+            out["staking_yield"] = apy.get("stakingYield") or apy.get("staking_yield") or apy
+        else:
+            out["staking_yield"] = apy
+        return out

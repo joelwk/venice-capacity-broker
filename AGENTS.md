@@ -14,7 +14,8 @@ This document describes the production v1 agents, their responsibilities, depend
   - `VENICE_API_BASE_URL=https://api.venice.ai/api/v1` (must include `/api/v1`)
   - `VENICE_API_KEY` (inference key for models/signals)
   - Optional overrides when your deployment differs (see `.cursor/rules/venice-api-config.mdc`):
-    - `VENICE_VVV_PATH=/vvv`, `VENICE_DIEM_PATH=/diem`
+    - Legacy aggregate: `VENICE_VVV_PATH=/vvv`
+    - Preferred metrics: `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`, `VENICE_VVV_UTIL_PATH=/vvv/utilization`, `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
     - Key endpoints: `VENICE_CREATE_SUBKEY_PATH`, `VENICE_CREATE_ROOT_PATH`, `VENICE_CHALLENGE_PATH`, `VENICE_REVOKE_KEY_PATH`
 - Base / on-chain
   - `BASE_RPC_URL`, `BASE_CHAIN_ID`
@@ -83,9 +84,12 @@ Notes:
 - Models and chat
   - `GET ${VENICE_API_BASE_URL}/models`
   - `POST ${VENICE_API_BASE_URL}/chat/completions`
-- Signals
-  - Defaults: `GET ${VENICE_API_BASE_URL}/vvv`, `GET ${VENICE_API_BASE_URL}/diem`
-  - Override `VENICE_VVV_PATH`, `VENICE_DIEM_PATH` if deployment uses alternate paths (e.g., `/signals/*`).
+- VVV metrics
+  - `GET ${VENICE_API_BASE_URL}/vvv/circulatingsupply`
+  - `GET ${VENICE_API_BASE_URL}/vvv/utilization`
+  - `GET ${VENICE_API_BASE_URL}/vvv/staking_yield`
+- DIEM balances/usage
+  - `GET ${VENICE_API_BASE_URL}/api_keys/rate_limits`
 - Keys (for CapacityBroker and admin tooling)
   - `POST ${VENICE_API_BASE_URL}/api_keys` (scoped sub-keys, parent key as bearer)
   - `POST|GET ${VENICE_API_BASE_URL}/api_keys/generate_web3_key` (challenge + root key exchange)

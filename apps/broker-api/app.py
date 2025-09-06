@@ -417,7 +417,9 @@ try:
         ven_paths = {
             "models": (_os.getenv("VENICE_MODELS_PATH") or "/models"),
             "vvv": (_os.getenv("VENICE_VVV_PATH") or "/vvv"),
-            "diem": (_os.getenv("VENICE_DIEM_PATH") or "/diem"),
+            "vvv_circ": (_os.getenv("VENICE_VVV_CIRC_PATH") or "/vvv/circulatingsupply"),
+            "vvv_util": (_os.getenv("VENICE_VVV_UTIL_PATH") or "/vvv/utilization"),
+            "vvv_yield": (_os.getenv("VENICE_VVV_YIELD_PATH") or "/vvv/staking_yield"),
         }
         ven_key = (_os.getenv("VENICE_API_KEY") or "").strip()
         ven_headers = {"Content-Type": "application/json"}
@@ -425,10 +427,11 @@ try:
             ven_headers["Authorization"] = f"Bearer {ven_key}"
         models_ok = False
         vvv_ok = False
-        diem_ok = False
         models_code: int | None = None
         vvv_code: int | None = None
-        diem_code: int | None = None
+        vvv_circ_code: int | None = None
+        vvv_util_code: int | None = None
+        vvv_yield_code: int | None = None
         if ven_base:
             try:
                 import requests as _rq
@@ -450,23 +453,39 @@ try:
                 vvv_code = int(r2.status_code)
             except _rq2.exceptions.Timeout:
                 vvv_code = 0
-                vvv_ok = False
+                vvv_ok = vvv_ok or False
             except Exception:
                 vvv_code = None
-                vvv_ok = False
+                vvv_ok = vvv_ok or False
+            # Explicit VVV metrics (any one success implies metrics availability)
             try:
-                import requests as _rq3
-
-                r3 = _rq3.get(ven_base.rstrip("/") + ven_paths["diem"], headers=ven_headers, timeout=3)
-                diem_ok = bool(r3.ok)
-                diem_code = int(r3.status_code)
-            except _rq3.exceptions.Timeout:
-                diem_code = 0
-                diem_ok = False
+                import requests as _rq4
+                r4 = _rq4.get(ven_base.rstrip("/") + ven_paths["vvv_circ"], headers=ven_headers, timeout=3)
+                vvv_circ_code = int(r4.status_code)
+                vvv_ok = vvv_ok or bool(r4.ok)
+            except _rq4.exceptions.Timeout:
+                vvv_circ_code = 0
             except Exception:
-                diem_code = None
-                diem_ok = False
-        ven_ready = bool(models_ok and (vvv_ok or diem_ok))
+                vvv_circ_code = None
+            try:
+                import requests as _rq5
+                r5 = _rq5.get(ven_base.rstrip("/") + ven_paths["vvv_util"], headers=ven_headers, timeout=3)
+                vvv_util_code = int(r5.status_code)
+                vvv_ok = vvv_ok or bool(r5.ok)
+            except _rq5.exceptions.Timeout:
+                vvv_util_code = 0
+            except Exception:
+                vvv_util_code = None
+            try:
+                import requests as _rq6
+                r6 = _rq6.get(ven_base.rstrip("/") + ven_paths["vvv_yield"], headers=ven_headers, timeout=3)
+                vvv_yield_code = int(r6.status_code)
+                vvv_ok = vvv_ok or bool(r6.ok)
+            except _rq6.exceptions.Timeout:
+                vvv_yield_code = 0
+            except Exception:
+                vvv_yield_code = None
+        ven_ready = bool(models_ok and vvv_ok)
         # Build ready reasons per check
         def _reason(ok: bool, code: int | None) -> str:
             if ok:
@@ -485,16 +504,13 @@ try:
         venice_cfg = {
             "baseUrl": ven_base or None,
             "vvvPath": ven_paths["vvv"],
-            "diemPath": ven_paths["diem"],
             "offlineSignals": ((_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}),
             "ready": bool(ven_ready),
             "modelsOk": bool(models_ok),
             "vvvSignalsOk": bool(vvv_ok),
-            "diemSignalsOk": bool(diem_ok),
             "readyReason": {
                 "models": _reason(models_ok, models_code),
-                "vvv": _reason(vvv_ok, vvv_code),
-                "diem": _reason(diem_ok, diem_code),
+                "vvv": _reason(vvv_ok, vvv_code if vvv_ok else (vvv_circ_code or vvv_util_code or vvv_yield_code)),
             },
         }
 
@@ -605,9 +621,11 @@ try:
 
         subkey_path = _first_present(["/api_keys", "/v1/keys/sub", "/v1/keys/subkey"]) or "/api_keys"
         root_path = _first_present(["/api_keys/generate_web3_key", "/v1/keys/generate_web3_key"]) or "/api_keys/generate_web3_key"
-        # Signals endpoints vary; default to /vvv and /diem
+        # Signals endpoints vary; prefer explicit VVV metrics
         vvv_path = "/vvv" if "/vvv" in paths else ("/signals/vvv" if "/signals/vvv" in paths else "/vvv")
-        diem_path = "/diem" if "/diem" in paths else ("/signals/diem" if "/signals/diem" in paths else "/diem")
+        vvv_circ = "/vvv/circulatingsupply" if "/vvv/circulatingsupply" in paths else None
+        vvv_util = "/vvv/utilization" if "/vvv/utilization" in paths else None
+        vvv_yield = "/vvv/staking_yield" if "/vvv/staking_yield" in paths else None
 
         return {
             "inputBase": base_url,
@@ -617,7 +635,9 @@ try:
                 "VENICE_CREATE_SUBKEY_PATH": subkey_path,
                 "VENICE_CREATE_ROOT_PATH": root_path,
                 "VENICE_VVV_PATH": vvv_path,
-                "VENICE_DIEM_PATH": diem_path,
+                **({"VENICE_VVV_CIRC_PATH": vvv_circ} if vvv_circ else {}),
+                **({"VENICE_VVV_UTIL_PATH": vvv_util} if vvv_util else {}),
+                **({"VENICE_VVV_YIELD_PATH": vvv_yield} if vvv_yield else {}),
             },
         }
 
@@ -1901,7 +1921,7 @@ try:
 except Exception as e:  # noqa: BLE001
     app = None  # type: ignore
     logger.warning(
-        "FastAPI not available. Install 'fastapi pydantic uvicorn' to run Broker API.")
+        "FastAPI not available. Install 'fastapi pydantic uvicorn' to run Broker API. (%s)", e)
 
     def main() -> None:  # noqa: D401
         """Run info for environments without FastAPI installed."""

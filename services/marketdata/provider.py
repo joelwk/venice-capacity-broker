@@ -5,11 +5,12 @@ from typing import Any, Dict, List, Optional
 
 
 class MarketDataProvider:
-    """Market data via on-chain DEX aggregator + Venice DIEM signals.
+    """Market data via DEX aggregator + Venice endpoints.
 
     - Quotes/prices: uses configured DEX providers (UniswapV2, Aerodrome)
       via `libs.dex.providers` with decimals-aware conversions.
-    - DIEM signals: fetched from Venice API (`/v1/diem`).
+    - VVV metrics: fetched via explicit endpoints (circulating supply, utilization, staking_yield).
+    - DIEM balance/quotas: fetched via rate-limits endpoint (`/api_keys/rate_limits`).
     """
 
     def _erc20_decimals(self, address: str) -> int:
@@ -118,75 +119,91 @@ class MarketDataProvider:
             pass
         return out
 
-    _diem_cache: Optional[Dict[str, Any]] = None
-    _diem_cache_t: float = 0.0
-    _vvv_cache: Optional[Dict[str, Any]] = None
-    _vvv_cache_t: float = 0.0
+    _vvv_metrics_cache: Optional[Dict[str, Any]] = None
+    _vvv_metrics_cache_t: float = 0.0
+    _diem_balance_cache: Optional[Dict[str, Any]] = None
+    _diem_balance_cache_t: float = 0.0
 
-    def diem_signals(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
-        """Fetch DIEM signals from Venice API with simple cache and retry."""
+    def vvv_metrics(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
+        """Fetch VVV metrics (circulating supply, utilization, staking_yield) with cache and retry."""
         now = time.time()
-        if self._diem_cache and (now - self._diem_cache_t) < ttl_s:
-            return self._diem_cache
+        if self._vvv_metrics_cache and (now - self._vvv_metrics_cache_t) < ttl_s:
+            return self._vvv_metrics_cache
         from libs.venice_sdk.client import VeniceClient
 
         client = VeniceClient()
         last_err: Optional[Exception] = None
         for i in range(retries + 1):
             try:
-                res = client.get_diem_signals()
-                self._diem_cache, self._diem_cache_t = res, time.time()
+                res = client.get_vvv_metrics()
+                self._vvv_metrics_cache, self._vvv_metrics_cache_t = res, time.time()
                 return res
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 if i < retries:
                     time.sleep(backoff_s * (2**i))
-        # If all retries fail, optionally return offline stub
+        # Offline stub support
         try:
             import os as _os
             if (_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
-                stub = {"offline": True, "source": "stub", "kind": "diem", "ts": int(time.time())}
-                self._diem_cache, self._diem_cache_t = stub, time.time()
+                stub = {
+                    "offline": True,
+                    "source": "stub",
+                    "kind": "vvv_metrics",
+                    "ts": int(time.time()),
+                    "circulating_supply": None,
+                    "utilization": None,
+                    "staking_yield": None,
+                }
+                self._vvv_metrics_cache, self._vvv_metrics_cache_t = stub, time.time()
                 return stub
         except Exception:
             pass
-        # Otherwise rethrow the last error
-        raise RuntimeError(f"Failed to fetch DIEM signals: {last_err}")
+        raise RuntimeError(f"Failed to fetch VVV metrics: {last_err}")
 
-    def vvv_signals(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
-        """Fetch VVV signals from Venice API with simple cache and retry."""
+    def diem_balance(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
+        """Fetch DIEM balance/quotas from rate-limits endpoint with cache and retry.
+
+        Returns a dict with at least balances and remaining/limits if present.
+        """
         now = time.time()
-        if self._vvv_cache and (now - self._vvv_cache_t) < ttl_s:
-            return self._vvv_cache
+        if self._diem_balance_cache and (now - self._diem_balance_cache_t) < ttl_s:
+            return self._diem_balance_cache
         from libs.venice_sdk.client import VeniceClient
 
         client = VeniceClient()
         last_err: Optional[Exception] = None
         for i in range(retries + 1):
             try:
-                res = client.get_vvv_signals()
-                self._vvv_cache, self._vvv_cache_t = res, time.time()
-                return res
+                limits = client.get_rate_limits()
+                # Normalize a compact shape for consumers
+                balances = (limits or {}).get("balances") or {}
+                diem_bal = balances.get("DIEM") or balances.get("diem")
+                summary = {
+                    "balances": balances,
+                    "diem": diem_bal,
+                    "raw": limits,
+                }
+                self._diem_balance_cache, self._diem_balance_cache_t = summary, time.time()
+                return summary
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 if i < retries:
                     time.sleep(backoff_s * (2**i))
+        # Offline stub support
         try:
             import os as _os
             if (_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
-                stub = {"offline": True, "source": "stub", "kind": "vvv", "ts": int(time.time())}
-                self._vvv_cache, self._vvv_cache_t = stub, time.time()
+                stub = {"offline": True, "source": "stub", "kind": "diem_balance", "ts": int(time.time())}
+                self._diem_balance_cache, self._diem_balance_cache_t = stub, time.time()
                 return stub
         except Exception:
             pass
-        raise RuntimeError(f"Failed to fetch VVV signals: {last_err}")
+        raise RuntimeError(f"Failed to fetch DIEM balance: {last_err}")
 
     def unified_signals(self, ttl_s: int = 30) -> Dict[str, Any]:
-        """Return a merged signals struct with both VVV and DIEM.
-
-        Uses individual caches; errors for either side are surfaced.
-        """
-        data = {"vvv": self.vvv_signals(ttl_s=ttl_s), "diem": self.diem_signals(ttl_s=ttl_s)}
+        """Return a merged struct with VVV metrics and DIEM balance."""
+        data = {"vvv": self.vvv_metrics(ttl_s=ttl_s), "diem": self.diem_balance(ttl_s=ttl_s)}
         # Emit centralized signal event (best-effort)
         try:
             from libs.telemetry.events import emit as _emit
