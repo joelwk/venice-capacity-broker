@@ -95,7 +95,9 @@ ci-gate:
 
 .PHONY: smoke-quotes-preview
 smoke-quotes-preview:
-	@$(RUNPY) apps/cli/main.py quotes:preview || true
+	@# Load .env for recipe environment (mirrors watch-* targets); ignore if missing
+	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
+	$(RUNPY) apps/cli/main.py quotes:preview || true
 
 db-migrate:
 	@$(RUNPY) -m alembic upgrade head
