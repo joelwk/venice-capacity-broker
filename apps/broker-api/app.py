@@ -207,6 +207,101 @@ try:
     else:
         logger.warning("security: BROKER_ADMIN_TOKEN not set; admin endpoints allowed for development only")
 
+    # --- Public, non-secret environment snapshot (for logs and /v1/env) ---
+    def _env_snapshot_public() -> dict:
+        try:
+            # Web3/RPC
+            rpc = (_os.getenv("RPC_URL") or _os.getenv("BASE_RPC_URL") or "").strip()
+            chain_id = (_os.getenv("BASE_CHAIN_ID") or "").strip()
+
+            # DEX providers and router addresses
+            dex_providers = [p.strip().lower() for p in (_os.getenv("DEX_PROVIDERS") or "uniswap_v2,aerodrome").split(",") if p.strip()]
+            uni_router = (_os.getenv("UNISWAP_V2_ROUTER_ADDRESS") or _os.getenv("ROUTER_ADDRESS") or "").strip()
+            aero_router = (_os.getenv("AERODROME_ROUTER_ADDRESS") or "").strip()
+            aero_stable_raw = (_os.getenv("AERODROME_STABLE") or "true").strip().lower()
+            aero_stable = aero_stable_raw in {"1", "true", "yes", "on"}
+
+            # Pricing config
+            quote_token = (_os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip()
+            diem_token = (_os.getenv("DIEM_TOKEN_ADDRESS") or "").strip()
+            vvv_token = (_os.getenv("VVV_TOKEN_ADDRESS") or "").strip()
+            trade_path = (_os.getenv("TRADE_PATH") or "").strip()
+
+            # ABI presence
+            try:
+                from pathlib import Path as _P
+
+                repo_root = _P(__file__).resolve().parents[2]
+                abi_dir = repo_root / "abi"
+                def _has(name: str) -> bool:
+                    try:
+                        return (abi_dir / name).exists()
+                    except Exception:
+                        return False
+                abi = {
+                    "erc20": _has("erc20.json"),
+                    "uniswap_v2_router": _has("uniswap_v2_router.json"),
+                    "aerodrome_router": _has("aerodrome_router.json"),
+                    "diem": _has("diem.json"),
+                }
+            except Exception:
+                abi = {"erc20": False, "uniswap_v2_router": False, "aerodrome_router": False, "diem": False}
+
+            return {
+                "web3": {"rpc_configured": bool(rpc), "chain_id_set": bool(chain_id)},
+                "dex": {
+                    "providers": dex_providers,
+                    "uniswap_v2": {"configured": bool(uni_router), "router": (uni_router or None)},
+                    "aerodrome": {"configured": bool(aero_router), "router": (aero_router or None), "stable": bool(aero_stable)},
+                },
+                "pricing": {
+                    "quote_token": (quote_token or None),
+                    "diem_token": (diem_token or None),
+                    "vvv_token": (vvv_token or None),
+                    "trade_path": (trade_path or None),
+                },
+                "abi": abi,
+            }
+        except Exception:
+            return {
+                "web3": {"rpc_configured": False, "chain_id_set": False},
+                "dex": {"providers": []},
+                "pricing": {},
+                "abi": {},
+            }
+
+    # Log a concise snapshot at startup to reduce env confusion (no secrets)
+    _snap = _env_snapshot_public()
+    try:
+        logger.info(
+            "env.web3 rpc_configured=%s chain_id_set=%s",
+            _snap.get("web3", {}).get("rpc_configured"),
+            _snap.get("web3", {}).get("chain_id_set"),
+        )
+        logger.info(
+            "env.dex providers=%s uniswap.router=%s aerodrome.router=%s stable=%s",
+            ",".join(_snap.get("dex", {}).get("providers", []) or []),
+            (_snap.get("dex", {}).get("uniswap_v2", {}) or {}).get("router"),
+            (_snap.get("dex", {}).get("aerodrome", {}) or {}).get("router"),
+            (_snap.get("dex", {}).get("aerodrome", {}) or {}).get("stable"),
+        )
+        logger.info(
+            "env.pricing quote_token=%s diem_token=%s vvv_token=%s trade_path=%s",
+            (_snap.get("pricing", {}) or {}).get("quote_token"),
+            (_snap.get("pricing", {}) or {}).get("diem_token"),
+            (_snap.get("pricing", {}) or {}).get("vvv_token"),
+            (_snap.get("pricing", {}) or {}).get("trade_path"),
+        )
+        logger.info(
+            "env.abi erc20=%s uniswap_v2_router=%s aerodrome_router=%s diem=%s",
+            (_snap.get("abi", {}) or {}).get("erc20"),
+            (_snap.get("abi", {}) or {}).get("uniswap_v2_router"),
+            (_snap.get("abi", {}) or {}).get("aerodrome_router"),
+            (_snap.get("abi", {}) or {}).get("diem"),
+        )
+    except Exception:
+        pass
+
     def _compute_expires_at(now_s: float | None = None) -> str | None:
         if DEFAULT_EXPIRY_DAYS <= 0:
             return None
@@ -522,6 +617,9 @@ try:
             },
         }
 
+        # Public env snapshot (web3/dex/pricing/abi)
+        snap = _env_snapshot_public()
+
         return {
             "version": "0.1.0",
             "admin": {
@@ -576,6 +674,10 @@ try:
                 "offline": bool(signals_offline),
             },
             "venice": venice_cfg,
+            "web3": snap.get("web3", {}),
+            "dex": snap.get("dex", {}),
+            "pricing": snap.get("pricing", {}),
+            "abi": snap.get("abi", {}),
         }
 
     # --- Admin: Venice OpenAPI probe (server-side) ---

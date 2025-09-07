@@ -1,4 +1,4 @@
-run = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+run = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
 language = "python3"
 entrypoint = "apps/broker-api/app.py"
 modules = ["python-3.10"]
@@ -32,7 +32,7 @@ mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
 
 [[workflows.workflow]]
 name = "Project"
@@ -49,7 +49,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "/home/runner/workspace/.local/bin/uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; /home/runner/workspace/.local/bin/uv sync --extra broker && /home/runner/workspace/.local/bin/uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
 waitForPort = 5000
 
 [workflows.workflow.metadata]
