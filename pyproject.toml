@@ -24,6 +24,8 @@ dependencies = [
   "pydantic>=2.6",
   "fastapi",
   "uvicorn",
+  # Load environment variables from .env when present
+  "python-dotenv>=1.0",
   # Web3 is required for DEX providers used in tests and runtime
   "web3>=6.15",
   "eth-account>=0.10",
