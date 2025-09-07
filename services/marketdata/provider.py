@@ -37,6 +37,28 @@ class MarketDataProvider:
             raise EnvironmentError("QUOTE_TOKEN_ADDRESS must be set for convenience symbol pricing (e.g., USDC address)")
         return qt.strip()
 
+    def _bridge_token_address(self) -> Optional[str]:
+        """Return a fallback bridge token address for multi-hop quotes.
+
+        Priority:
+        - BRIDGE_TOKEN_ADDRESS env if provided
+        - BASE/WETH by known chain id (Base mainnet default)
+        """
+        import os
+
+        env_bt = (os.getenv("BRIDGE_TOKEN_ADDRESS") or os.getenv("WETH_ADDRESS") or "").strip()
+        if env_bt:
+            return env_bt
+        # Default mapping for common networks (extend as needed)
+        try:
+            chain_id = int(os.getenv("BASE_CHAIN_ID") or os.getenv("CHAIN_ID") or 8453)
+        except Exception:
+            chain_id = 8453
+        if chain_id == 8453:
+            # Base mainnet WETH
+            return "0x4200000000000000000000000000000000000006"
+        return None
+
     def _address_for_symbol(self, symbol: str) -> Optional[str]:
         import os
 
@@ -71,6 +93,17 @@ class MarketDataProvider:
 
         agg = build_aggregator_from_env()
         q = agg.best_quote(amount_in_units, path)
+        # Fallback: if no direct quotes and path is a simple pair, try bridge token (e.g., WETH)
+        if q is None and len(path) == 2:
+            bt = self._bridge_token_address()
+            if bt and bt.lower() not in {path[0].lower(), path[-1].lower()}:
+                alt_path = [path[0], bt, path[-1]]
+                try:
+                    q = agg.best_quote(amount_in_units, alt_path)
+                    if q is not None:
+                        path = alt_path  # report the path actually used
+                except Exception:
+                    q = None
         if q is None:
             raise RuntimeError("No quotes available for provided path")
         price = (q.amount_out / (10 ** dec_out)) / (q.amount_in / (10 ** dec_in))
