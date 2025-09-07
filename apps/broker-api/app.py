@@ -4,6 +4,14 @@ from apps._path import add_repo_root_to_sys_path
 
 add_repo_root_to_sys_path()
 
+# Ensure local .env is loaded for Replit/shell runs
+try:
+    from libs.env import load_dotenv_if_present  # type: ignore
+
+    load_dotenv_if_present()
+except Exception:
+    pass
+
 from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
 from libs.venice_sdk.client import VeniceClient

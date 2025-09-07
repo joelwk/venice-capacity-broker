@@ -83,7 +83,8 @@ limits-set:
 
 # --- Convenience targets ---
 run-broker:
-	@if command -v uv >/dev/null 2>&1; then \
+	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
+	if command -v uv >/dev/null 2>&1; then \
 	  uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
 	else \
 	  python -m uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
@@ -98,6 +99,7 @@ smoke-quotes-preview:
 	@# Load .env for recipe environment (mirrors watch-* targets); ignore if missing
 	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
 	$(RUNPY) apps/cli/main.py quotes:preview || true
+
 
 db-migrate:
 	@$(RUNPY) -m alembic upgrade head
