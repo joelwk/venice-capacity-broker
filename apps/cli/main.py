@@ -17,10 +17,14 @@ add_repo_root_to_sys_path()
 # Load .env early so CLI subcommands see expected environment
 try:
     from libs.env import load_dotenv_if_present  # type: ignore
-
     load_dotenv_if_present()
 except Exception:
-    pass
+    # Fallback: try direct dotenv loading
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
 
 from libs.telemetry.logger import get_logger
 from libs.venice_sdk.client import VeniceClient

@@ -13,6 +13,27 @@ except Exception:  # noqa: BLE001
     def _metrics_inc(name: str, value: int = 1, labels: dict | None = None) -> None:  # type: ignore
         return
 
+def _bucket_latency(operation: str, provider: str, latency_seconds: float) -> None:
+    """Helper to record latency metrics by bucket."""
+    try:
+        if latency_seconds < 0.05:
+            bucket = "lt_50ms"
+        elif latency_seconds < 0.1:
+            bucket = "lt_100ms"
+        elif latency_seconds < 0.2:
+            bucket = "lt_200ms"
+        elif latency_seconds < 0.5:
+            bucket = "lt_500ms"
+        elif latency_seconds < 1.0:
+            bucket = "lt_1s"
+        elif latency_seconds < 2.0:
+            bucket = "lt_2s"
+        else:
+            bucket = "ge_2s"
+        _metrics_inc(f"dex_{operation}_latency_bucket_total", labels={"provider": provider, "bucket": bucket})
+    except Exception:
+        pass
+
 
 Address = str
 
@@ -78,9 +99,12 @@ class UniswapV2DexProvider(DexProvider):
         return "ge_2s"
 
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
+        from web3 import Web3 as _Web3  # type: ignore
         t0 = time.perf_counter()
         try:
-            amounts = self.router.functions.getAmountsOut(amount_in, path).call()
+            # Convert path to checksum addresses for Web3 compatibility
+            checksum_path = [_Web3.to_checksum_address(addr) for addr in path]
+            amounts = self.router.functions.getAmountsOut(amount_in, checksum_path).call()
             q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
@@ -102,8 +126,11 @@ class UniswapV2DexProvider(DexProvider):
             return None
 
     def quote_exact_out(self, amount_out: int, path: List[Address]) -> Optional[Quote]:
+        from web3 import Web3 as _Web3  # type: ignore
         try:
-            amounts = self.router.functions.getAmountsIn(amount_out, path).call()
+            # Convert path to checksum addresses for Web3 compatibility
+            checksum_path = [_Web3.to_checksum_address(addr) for addr in path]
+            amounts = self.router.functions.getAmountsIn(amount_out, checksum_path).call()
             q = Quote(provider=self.name, amount_in=int(amounts[0]), amount_out=amount_out, path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
@@ -246,6 +273,18 @@ class AerodromeDexProvider(DexProvider):
         self.router = get_contract(self.w3, self.router_addr, "aerodrome_router.json")
         self.recipient: Optional[str] = None
         self.stable = stable
+    
+    def _ensure_allowance(self, token: Address, owner: Address, spender: Address, required: int) -> Optional[str]:
+        """Ensure ERC20 allowance and return approval tx hash if needed."""
+        erc20 = get_contract(self.w3, token, "erc20.json")
+        try:
+            current = int(erc20.functions.allowance(owner, spender).call())
+        except Exception:
+            current = 0
+        if current >= required:
+            return None
+        approve_data = erc20.encode_abi(fn_name="approve", args=[spender, required])
+        return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def _routes(self, path: List[Address], stable: Optional[bool] = None) -> List[Tuple[Address, Address, bool]]:
         # Build multi-hop routes for Aerodrome: [(tokenIn, tokenOut, stable), ...]
@@ -354,16 +393,7 @@ class AerodromeDexProvider(DexProvider):
         # Ensure allowance for input token to router
         from web3 import Web3 as _Web3  # type: ignore
         erc20_owner = self.recipient or _Web3.to_checksum_address(get_address())
-        erc20_spender = self.router_addr
-        try:
-            erc20 = get_contract(self.w3, token_in, "erc20.json")
-            current = int(erc20.functions.allowance(erc20_owner, erc20_spender).call())
-        except Exception:
-            current = 0
-        approve_hash = ""
-        if current < amount_in:
-            approve_data = erc20.encode_abi(fn_name="approve", args=[self.router_addr, amount_in])
-            approve_hash = send_tx(token_in, bytes.fromhex(approve_data[2:]))
+        approve_hash = self._ensure_allowance(token_in, erc20_owner, self.router_addr, amount_in) or ""
 
         deadline = int(time.time()) + 20 * 60
         t0 = time.perf_counter()
@@ -417,7 +447,7 @@ class DexAggregator:
         if not st:
             return False
         ou = float(st.get("open_until", 0.0))
-        return ou and time.time() < ou
+        return bool(ou and time.time() < ou)
 
     def _circ_on_success(self, provider: str) -> None:
         st = self._circ.get(provider)
