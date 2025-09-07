@@ -26,9 +26,6 @@ dependencies = [
   "uvicorn",
   # Load environment variables from .env when present
   "python-dotenv>=1.0",
-  # Web3 is required for DEX providers used in tests and runtime
-  "web3>=6.15",
-  "eth-account>=0.10",
 ]
 
 [project.urls]
@@ -36,6 +33,11 @@ Homepage = "private"
 Source = "private"
 
 [project.optional-dependencies]
+# Convenience set for running the Broker API in SQL-backed mode
+broker = [
+  "sqlmodel>=0.0.14",
+  "psycopg2-binary>=2.9",
+]
 db = [
   "sqlmodel>=0.0.14",
   "psycopg2-binary>=2.9",
