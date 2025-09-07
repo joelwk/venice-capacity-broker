@@ -228,29 +228,51 @@ class VeniceClient:
 
         Returns keys: circulating_supply, utilization, staking_yield
         """
+        def _to_float(v: Any) -> Optional[float]:  # noqa: ANN401
+            try:
+                if isinstance(v, (int, float)):
+                    return float(v)
+                if isinstance(v, dict):
+                    for k in (
+                        "result",
+                        "value",
+                        "circulatingSupply",
+                        "circulating_supply",
+                        "utilization",
+                        "percentage",
+                        "stakingYield",
+                        "staking_yield",
+                    ):
+                        if k in v:
+                            return _to_float(v.get(k))
+                    return None
+                if isinstance(v, str):
+                    s = v.strip()
+                    if s == "":
+                        return None
+                    return float(s)
+            except Exception:
+                return None
+            return None
+
         try:
-            circ = self.get_vvv_circulating_supply()
+            circ_raw = self.get_vvv_circulating_supply()
         except Exception:
-            circ = {}
+            circ_raw = {}
         try:
-            util = self.get_vvv_utilization()
+            util_raw = self.get_vvv_utilization()
         except Exception:
-            util = {}
+            util_raw = {}
         try:
-            apy = self.get_vvv_staking_yield()
+            apy_raw = self.get_vvv_staking_yield()
         except Exception:
-            apy = {}
-        out: Dict[str, Any] = {}
-        if isinstance(circ, dict):
-            out["circulating_supply"] = circ.get("circulatingSupply") or circ.get("circulating_supply") or circ
-        else:
-            out["circulating_supply"] = circ
-        if isinstance(util, dict):
-            out["utilization"] = util.get("utilization") or util
-        else:
-            out["utilization"] = util
-        if isinstance(apy, dict):
-            out["staking_yield"] = apy.get("stakingYield") or apy.get("staking_yield") or apy
-        else:
-            out["staking_yield"] = apy
-        return out
+            apy_raw = {}
+
+        circ = _to_float(circ_raw)
+        util = _to_float(util_raw)
+        apy = _to_float(apy_raw)
+        return {
+            "circulating_supply": circ,
+            "utilization": util,
+            "staking_yield": apy,
+        }

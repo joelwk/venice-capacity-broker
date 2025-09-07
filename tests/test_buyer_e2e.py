@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import importlib.util
+from types import ModuleType
+import pytest
+
+# Skip when SQLModel is unavailable (features require DB models)
+pytest.importorskip("sqlmodel")
+
+
+def _load_broker_app_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("broker_app_test", "apps/broker-api/app.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+    return mod
+
+
+def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
+    # Enable features and static pricing for ETH
+    monkeypatch.setenv("QUOTES_ENABLED", "true")
+    monkeypatch.setenv("PURCHASES_ENABLED", "true")
+    monkeypatch.setenv("PRICE_UNIT_ETH_WEI", str(10**15))  # 0.001 ETH per unit
+    monkeypatch.setenv("PRICE_QUOTE_TTL_SECONDS", "120")
+    # Minimal chain/payment config
+    monkeypatch.setenv("BASE_RPC_URL", "http://localhost:8545")
+    monkeypatch.setenv("TREASURY_ADDRESS", "0xabc0000000000000000000000000000000000001")
+
+    mod = _load_broker_app_module()
+
+    # Stub RPC calls to confirm ETH payment
+    def _fake_rpc(url: str, method: str, params: list):  # noqa: ANN001
+        if method == "eth_getTransactionReceipt":
+            return {"status": hex(1), "blockNumber": hex(12345), "logs": []}
+        if method == "eth_getTransactionByHash":
+            # Return a tx to the configured treasury with sufficient value
+            return {
+                "to": "0xabc0000000000000000000000000000000000001",
+                "from": "0xdef0000000000000000000000000000000000002",
+                "value": hex(5 * 10**15),  # 0.005 ETH
+            }
+        raise AssertionError(f"unexpected rpc call: {method}")
+
+    monkeypatch.setattr(mod, "_rpc_call", _fake_rpc, raising=True)
+
+    # Stub subkey issuance to avoid Venice network
+    def _fake_issue(parent_key: str, label: str, consumption_limit: int, expires_at: str | None = None):  # noqa: ANN001
+        return {"apiKey": "sk-test-123", "id": "kid-1"}
+
+    monkeypatch.setattr(mod.keys, "issue_scoped_key", _fake_issue, raising=True)
+
+    # Use FastAPI TestClient
+    from fastapi.testclient import TestClient
+
+    client = TestClient(mod.app)
+    # Get a quote for ETH
+    q = client.get("/v1/quotes", params={"units": 5, "asset": "ETH"})
+    assert q.status_code == 200, q.text
+    data = q.json()
+    assert int(data["units"]) == 5 and data["asset"] == "ETH"
+    # Verify purchase with a fake tx hash
+    v = client.post(
+        "/v1/purchases/verify",
+        json={
+            "quoteId": data["quoteId"],
+            "txHash": "0xdeadbeef",
+            "buyerAddress": "0xBEEf000000000000000000000000000000000003",
+        },
+    )
+    assert v.status_code == 200, v.text
+    out = v.json()
+    assert out["status"] in {"confirmed", "fulfilled"}
+    # If fulfilled, subkey must be present
+    if out["status"] == "fulfilled":
+        assert out["subkey"] == "sk-test-123"

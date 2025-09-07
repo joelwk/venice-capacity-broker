@@ -739,6 +739,73 @@ def cmd_market_diem(args: argparse.Namespace) -> None:
     logger.info(f"diem_balance: {res}")
 
 
+def cmd_ci_gate(args: argparse.Namespace) -> None:
+    """CI/Health gate: validates readiness and prod defaults.
+
+    - If BROKER_BASE_URL is set, queries /v1/env and enforces:
+      venice.ready=true, signals.offline=false, admin.token_present=true,
+      admin.required_at_startup=true.
+    - Otherwise, performs local env checks: admin token requirement, Venice base URL,
+      offline signals disabled, and basic CORS allowlist when enabled.
+    Exits non-zero on violations.
+    """
+    import json
+    import sys as _sys
+    import requests as _rq
+
+    violations: list[str] = []
+    base = os.getenv("BROKER_BASE_URL")
+    if base:
+        url = base.rstrip("/") + "/v1/env"
+        try:
+            r = _rq.get(url, timeout=5)
+            if not r.ok:
+                violations.append(f"server /v1/env returned {r.status_code}")
+            else:
+                env = r.json()
+                ven = env.get("venice") or {}
+                adm = env.get("admin") or {}
+                sig = env.get("signals") or {}
+                if not bool(ven.get("ready")):
+                    violations.append("venice.ready=false")
+                if bool(sig.get("offline")):
+                    violations.append("signals.offline=true")
+                if not bool(adm.get("token_present")):
+                    violations.append("admin.token_present=false")
+                if not bool(adm.get("required_at_startup")):
+                    violations.append("admin.required_at_startup=false")
+        except Exception as e:  # noqa: BLE001
+            violations.append(f"server unreachable: {e}")
+    else:
+        # Local checks only
+        def _flag(name: str, default: bool = False) -> bool:
+            v = os.getenv(name)
+            if v is None:
+                return default
+            return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+        if not _flag("BROKER_REQUIRE_ADMIN_TOKEN", default=False):
+            violations.append("BROKER_REQUIRE_ADMIN_TOKEN=false")
+        if _flag("BROKER_REQUIRE_ADMIN_TOKEN", default=False) and not os.getenv("BROKER_ADMIN_TOKEN"):
+            violations.append("BROKER_ADMIN_TOKEN missing while required")
+        if _flag("VENICE_OFFLINE_SIGNALS", default=False):
+            violations.append("VENICE_OFFLINE_SIGNALS=true")
+        ven_base = os.getenv("VENICE_API_BASE_URL") or ""
+        if "/api/v1" not in ven_base:
+            violations.append("VENICE_API_BASE_URL must include /api/v1")
+        if _flag("CORS_ENABLED", default=False):
+            origins = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS") or "").split(",") if o.strip()]
+            if not origins or any(o == "*" for o in origins):
+                violations.append("CORS_ALLOW_ORIGINS must be set without wildcard when CORS_ENABLED=true")
+
+    if violations:
+        print("ci:gate failed:", file=_sys.stderr)
+        for v in violations:
+            print(f" - {v}", file=_sys.stderr)
+        _sys.exit(2)
+    print("ci:gate ok")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vvv-agents", description="VVV Agents CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -974,6 +1041,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("env:status", help="Print environment status (server /v1/env if available plus local snapshot)")
     sp.set_defaults(func=cmd_env_status)
+
+    # CI/health gate
+    sp = sub.add_parser("ci:gate", help="Fail build if readiness/security checks fail (server /v1/env or local env)")
+    sp.set_defaults(func=cmd_ci_gate)
 
     # Broker admin commands
     sp = sub.add_parser("broker:tenants:list", help="List all tenants (admin)")

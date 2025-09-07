@@ -151,3 +151,18 @@ Buyer Flow (flag-gated)
  - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`
  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
  - `GET /v1/purchases/{purchaseId}`
+
+Venice alignment (runbook)
+- Ensure `VENICE_API_BASE_URL` includes `/api/v1` (example: `https://api.venice.ai/api/v1`).
+- Prefer explicit VVV metrics endpoints; override paths if your deployment differs:
+  - `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`, `VENICE_VVV_UTIL_PATH=/vvv/utilization`, `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
+  - Legacy aggregate if needed: `VENICE_VVV_PATH=/vvv`
+- Probe and print recommended env via CLI:
+  - `uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai`
+- DIEM balances/usage come from `GET /api_keys/rate_limits` (no DIEM signals endpoint).
+
+CI/Health gate
+- Use `make ci-gate` (or `uv run python apps/cli/main.py ci:gate`) to fail builds when:
+  - Server mode: `/v1/env` reports `venice.ready=false`, `signals.offline=true`, admin token missing, or not required at startup.
+  - Local mode: `BROKER_REQUIRE_ADMIN_TOKEN=false`, missing `BROKER_ADMIN_TOKEN` when required, `VENICE_OFFLINE_SIGNALS=true`, `VENICE_API_BASE_URL` missing `/api/v1`, or CORS wildcard when enabled.
+- Optional smoke: `make smoke-quotes-preview` exercises aggregator preview without trades.

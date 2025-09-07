@@ -1,4 +1,4 @@
-.PHONY: help health create-tenant chat-admin rotate-probe limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e enable-buyer
+.PHONY: help health create-tenant chat-admin rotate-probe limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e enable-buyer ci-gate smoke-quotes-preview
  .PHONY: db-setup-and-migrate
 
 # Broker base URL; can be overridden via environment or CLI
@@ -22,7 +22,7 @@ setup-cli:
 env-status:
 	@$(RUNPY) apps/cli/main.py env:status
 
-	help:
+help:
 	@echo "Targets:"
 	@echo "  make health                          - GET /health"
 	@echo "  make create-tenant TENANT=t1 LABEL=TeamA [QUOTA=0 EXPIRES=...]"
@@ -38,6 +38,8 @@ env-status:
 	@echo "  make db-counters TENANT=t1 [LIMIT=20] - show recent counters from SQL"
 	@echo "  make demo-e2e TENANT=t1 [LABEL=TeamA MESSAGE=Hello LIMIT=20 MODEL=<m>] - seed+probe+compact+show"
 	@echo "  make enable-buyer                    - append Buyer feature flags to .env and print restart tips"
+	@echo "  make ci-gate                         - run CI readiness/security gate"
+	@echo "  make smoke-quotes-preview            - run quotes:preview smoke (no trades)"
 	@echo "  make watch-tokens                    - run BaseScan token watcher (requires BASESCAN_API_KEY)"
 
 health:
@@ -86,6 +88,14 @@ run-broker:
 	else \
 	  python -m uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
 	fi
+
+.PHONY: ci-gate
+ci-gate:
+	@$(RUNPY) apps/cli/main.py ci:gate
+
+.PHONY: smoke-quotes-preview
+smoke-quotes-preview:
+	@$(RUNPY) apps/cli/main.py quotes:preview || true
 
 db-migrate:
 	@$(RUNPY) -m alembic upgrade head

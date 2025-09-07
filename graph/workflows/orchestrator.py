@@ -33,6 +33,12 @@ class Orchestrator:
                 px = 1.0
             prices: Dict[str, float] = {"DIEM": px}
         else:
+            # Warm minimal market signals and caches (best-effort)
+            try:
+                # Emits signal.market.signals and populates internal caches
+                self.market.unified_signals(ttl_s=30)
+            except Exception:
+                pass
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
         # Optional portfolio cap wiring (env-gated)
