@@ -264,10 +264,27 @@ class AerodromeDexProvider(DexProvider):
             )
         return hops
 
+    def _routes_with_mask(self, path: List[Address], mask: List[bool]) -> List[Tuple[Address, Address, bool]]:
+        # Same as _routes but allow per-hop stable flags
+        from web3 import Web3 as _Web3  # type: ignore
+        if len(path) < 2 or len(mask) != len(path) - 1:
+            raise ValueError("mask length must be len(path)-1")
+        hops: List[Tuple[Address, Address, bool]] = []
+        for i in range(len(path) - 1):
+            hops.append(
+                (
+                    _Web3.to_checksum_address(path[i]),
+                    _Web3.to_checksum_address(path[i + 1]),
+                    bool(mask[i]),
+                )
+            )
+        return hops
+
     def quote(self, amount_in: int, path: List[Address]) -> Optional[Quote]:
         # Try with configured stable flag first; if it fails, try toggled stable flag.
-        # This helps when env stable setting doesn't match the actual pool type.
+        # If still failing and path is multi-hop, try per-hop stable masks (TT, TF, FT, FF for 2 hops).
         t0 = time.perf_counter()
+        # 1) Env-configured stable for all hops
         try:
             routes = self._routes(path, stable=self.stable)
             amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
@@ -283,6 +300,7 @@ class AerodromeDexProvider(DexProvider):
             return q
         except Exception:
             pass
+        # 2) Toggle stable for all hops
         try:
             routes = self._routes(path, stable=not bool(self.stable))
             amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
@@ -297,11 +315,39 @@ class AerodromeDexProvider(DexProvider):
                 pass
             return q
         except Exception:
-            try:
-                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
-            except Exception:
-                pass
-            return None
+            pass
+        # 3) Per-hop stable masks for short paths (attempt all combinations)
+        try:
+            hops = len(path) - 1
+            if hops >= 2 and hops <= 3:  # limit combinatorics
+                total = 1 << hops
+                for bits in range(total):
+                    # Skip the two masks already tried (all True / all False)
+                    if bits == 0 or bits == (total - 1):
+                        continue
+                    mask = [bool((bits >> i) & 1) for i in range(hops)]
+                    try:
+                        routes = self._routes_with_mask(path, mask)
+                        amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
+                        q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+                        try:
+                            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
+                        except Exception:
+                            pass
+                        try:
+                            _bucket_latency("quote", self.name, time.perf_counter() - t0)
+                        except Exception:
+                            pass
+                        return q
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
+        except Exception:
+            pass
+        return None
 
     def trade(self, amount_in: int, min_amount_out: int, path: List[Address]) -> Dict[str, str]:
         token_in = path[0]

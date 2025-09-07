@@ -12,14 +12,18 @@ This document reflects the system’s current implementation, defines the “sto
 - Token watcher: Periodic snapshots for price (via DEX), supply, holders, 24h transfers; persists to SQL. Files: `services/marketdata/token_watcher.py`, `db/models.py`.
 - Venice SDK + Keys: Configurable paths; chat/models and explicit VVV metrics helpers; DIEM balances via rate-limits; KeyManager supports challenge-based root key and scoped subkeys; revoke and list helpers. Files: `libs/venice_sdk/client.py`, `services/venice_keys/manager.py`.
 - Broker API: FastAPI with tenants, chat proxying, per-tenant limits, idempotency middleware, optional KV rate limiting, `/v1/debug/counters`, `/v1/env`, metrics, and static admin UI at `/admin`. Files: `apps/broker-api/app.py`, `apps/broker-api/tenant_store*.py`, `apps/control-plane/*`.
+- Broker ops UX: `/v1/env` now includes a non‑secret environment snapshot for Web3/DEX/pricing/ABI and emits concise startup logs showing RPC/chainId, DEX routers, pricing path, and ABI presence. Useful to quickly diagnose quote/DEX issues without secrets.
 - Orchestrator: Single-agent loop with backoff; persists decision records (SQL when available); decision metrics and `correlationId`. Decision `details` include limits and `why` (premium/threshold, slippage, desired/suggested units). Files: `graph/workflows/orchestrator.py`, `apps/cli/main.py`.
 - CLI + Operator tools: Idempotency purge, KV/SQL compaction, counters view, env status, rotate/probe, Venice OpenAPI probe. Files: `apps/cli/main.py`, `scripts/*`, `Makefile`.
 - Agents: StakeMaster (claim in live mode), ArbiDiem (risk-gated mint/sell with slippage gate), CapacityBroker (key issuance wrapper), AI Treasurer (initial rebalance heuristic). Files: `agents/*`.
 - Tests: Risk policy sizing and conversions; ArbiDiem risk integration; DIEM buy path and FOT fallback; Broker idempotency + purge CLI; rate limits; orchestrator portfolio-cap wiring. Files: `tests/*.py`.
 - Docs + config: README/DEPLOYMENT/ADMIN updated with DEX modes/metrics and flags; Base router addresses; `.env.example` includes `BROKER_REQUIRE_ADMIN_TOKEN`, `AGENTS_PAUSED`, pricing flags. Files: `README.md`, `docs/*.md`, `.env.example`.
+ - Env loading: `.env` is auto‑loaded by CLI and Broker via a thin wrapper around `python-dotenv` with a safe fallback parser. `python-dotenv` added to base deps for consistency.
+ - Replit defaults: `.replit` runs `uv sync --extra broker` by default (can extend with `UV_EXTRAS`), removing ambiguity between workflows.
  - Venice readiness + ops UX: `/v1/env` exposes `venice.ready` with per-check `readyReason` (models/vvv), `signals.offline`, and a `venice` snapshot; Admin UI card shows config, recent signals, inline path probe, banner when NOT READY; dev-only offline signals supported via `VENICE_OFFLINE_SIGNALS`.
  - Admin receipts UI: Purchases table lists `purchaseId`, `quoteId`, `asset`, `amountPaid`, `status`, `expiresAt`; JSON views remain for details.
  - Quotes preview CLI: `quotes:preview` exercises liquidity-aware metrics without trading; uses aggregator preview + risk policy and logs adjusted units and slippage.
+ - Price quoting resilience: MarketDataProvider automatically retries pricing with a Base WETH bridge (DIEM→WETH→USDC) when a direct pair lacks liquidity, improving `quotes:preview` usefulness without trading.
 
 ## Gaps and Pending (Prioritized)
 
@@ -81,7 +85,7 @@ Remaining for v1 (short list to finish):
 - Minimal consumers of `signal.*` events (e.g., cache warmers) now that centralized emission exists.
 - Harden Broker API defaults (prod-safe CORS, admin token required) and finalize receipts UX/admin listings.
 - Venice config alignment runbook: add `venice:probe-openapi` guidance to ADMIN and DEPLOYMENT; ensure base includes `/api/v1` and override paths when needed.
- - Add CI/health gate: fail builds or warn loudly when `venice.ready=false` in target env; disallow `VENICE_OFFLINE_SIGNALS=true` beyond dev.
+ - CI/health gate: Implemented as `ci:gate` in CLI. Keep in the release checklist and wire into CI where applicable.
 
 Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Quorum multi-agent orchestration and advanced agendas.
@@ -89,6 +93,13 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Dynamic pricing/allocation for CapacityBroker; DIEM rentals.
 - Full tracing across agents and graph.
 - Market hedges and stop-loss automations.
+ - Aerodrome multi‑hop trade path support (quotes already support multi‑hop via routes; trade currently uses `swapExactTokensForTokensSimple` single‑hop).
+
+## Known Gaps Discovered During Validation
+
+- DEX path discovery can fail when a direct pair lacks a pool. Addressed for price preview by adding a WETH bridge fallback (Base), but trading on Aerodrome remains single‑hop; multi‑hop trade support is deferred beyond v1.
+- Developer experience in hosted environments (Replit): default extras were ambiguous; `.replit` now ensures `--extra broker` is installed. Document extending with `UV_EXTRAS` for web3/agentkit/graph when needed.
+- Operational clarity: added public env snapshot in `/v1/env` and startup logs to show effective RPC/routers/path/ABI. Keep this as a standard ops check.
 
 ## Alignment with `implementation-plan.md`
 
@@ -114,10 +125,15 @@ Explicitly out-of-scope for v1 (post‑v1 backlog):
 - Cut a v1 tag with STATUS updated and core agents enabled.
  - Gate production deploys on readiness: `venice.ready`, admin token, and CORS allowlist; add a smoke `quotes:preview` step to ensure aggregator is functional.
 
+Nice‑to‑have (post‑v1 hardening, if time remains):
+- Document a DEX setup checklist (RPC/routers/path/ABI) and add a `make setup-broker` target shortcut.
+- Add a small unit test for MarketDataProvider’s bridge fallback path.
+
 ---
 
 Changelog
 - 2025-09-06: Venice API alignment: removed non-existent `/diem` signals; added explicit VVV metrics endpoints (circulatingsupply/utilization/staking_yield); DIEM balances via `/api_keys/rate_limits`; updated CLI `venice:signals`, Broker readiness, and docs/config; improved 404 error hints.
+- 2025-09-07: Ops UX & DX: `/v1/env` extended with web3/dex/pricing/abi; startup logs show effective config; `.replit` defaults to `--extra broker`; `.env` loading standardized via `python-dotenv`; MarketDataProvider adds WETH bridge fallback for preview quotes.
 - 2025‑09‑06: Admin UI card for Venice config + recent signals; `/v1/env` exposes `venice` snapshot; optional `VENICE_OFFLINE_SIGNALS` fallback for local dev.
  - 2025‑09‑06: Added Venice readiness with `readyReason`; Admin receipts table; CLI `quotes:preview`; improved error hints for Venice client; server-side path probe.
 - 2025‑09‑06: Added liquidity-aware sizing with metrics; emitted centralized market signals; attached purchase receipts and events; updated docs and migration 0005.
