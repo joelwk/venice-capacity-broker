@@ -142,6 +142,24 @@ uv run pytest -q
 - Centralized events emitted by market data and decisions
 - Optional tracing toggles via env (`LANGCHAIN_TRACING_V2`, etc.)
 
+## Operational Notes
+
+- DEX behaviors
+  - UniswapV2 supports exact-out (buy) and exact-in (sell). Aerodrome exact-out stays disabled by design.
+  - Fee-on-transfer fallback is enabled for UniswapV2 exact-in trades.
+- Liquidity & quotes
+  - Use `uv run python apps/cli/main.py startup:probe` to warm caches and print pair/reserves for the current `TRADE_PATH`.
+  - Preview sizing and slippage without trading:
+    - `uv run python apps/cli/main.py quotes:preview [--units N] [--price PX]`
+      - Shows reserve-cap, adjusted units, and slippage_bps.
+      - If router preview fails, an approximate constant-product estimate is used and marked `approx=true`.
+  - Scan for best price over smaller inputs (guards thin pools):
+    - `uv run python apps/cli/main.py market:best-price:scan --start 1.0 --min 1e-12 --factor 10`
+  - Default DIEM pricing path on Base should be multi-hop: `DIEM -> WETH -> USDC`.
+- Risk & sizing defaults
+  - Cap input against first-hop reserves with `RISK_MAX_POOL_TAKE_BPS` (e.g., 25 = 0.25%).
+  - Slippage cap defaults to 150 bps; adjust via `RISK_MAX_SLIPPAGE_BPS`.
+
 ## Known ambiguities and follow-ups
 
 - Quorum vs. single-loop orchestrator

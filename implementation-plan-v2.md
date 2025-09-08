@@ -8,9 +8,9 @@
 2. **Core Services**
 
    * **Staking service**: provides `approve`, `stake`, `claim`, `unstake` and status queries; uses AgentKit to interact with the VVV staking contract.
-   * **Market data service**: fetches VVV metrics via explicit endpoints (`/vvv/circulatingsupply`, `/vvv/utilization`, `/vvv/staking_yield`) and DIEM balances/rate limits via `GET /api_keys/rate_limits` (no `/diem` signals). Prices/quotes come from the DEX aggregator.
+   * **Market data service**: fetches VVV metrics via explicit endpoints (`/vvv/circulatingsupply`, `/vvv/utilization`, `/vvv/staking_yield`) and DIEM balances/rate limits via `GET /api_keys/rate_limits` (no `/diem` signals). Prices/quotes come from the DEX aggregator (with reserve‑cap sizing and price fallbacks when pools are thin).
    * **Venice SDK & Key manager**: supports model listing, rate-limit queries, API key and subkey creation/revocation; paths are env‑overridable.
-   * **DEX aggregator**: UniswapV2 supports exact‑in and exact‑out; Aerodrome exact‑out is intentionally disabled. FOT fallback and slippage guards enforced.
+   * **DEX aggregator**: UniswapV2 supports exact‑in and exact‑out; Aerodrome exact‑out is intentionally disabled. FOT fallback and slippage guards enforced. Circuit breaker prevents thrashing on repeated errors.
    * **DIEM service**: on‑chain mint/burn wired via AgentKit actions, with optional sVVV capacity gate; emits telemetry; integrates with risk sizing.
 
 3. **Broker API & CLI**
@@ -20,60 +20,59 @@
 
 4. **Agents & Orchestrator**
 
-   * **StakeMaster**: keeps staker active by making periodic dummy API calls and claims rewards.
-   * **ArbiDiem (v1)**: monitors DIEM premium and logs decisions (mint/sell calls are stubbed until DIEM mint is complete).
-   * **CapacityBroker (v1)**: issues scoped API keys with fixed quotas; no dynamic pricing yet.
-   * **AITreasurer (v1)**: maintains a simple DIEM buffer target.
-   * **Orchestrator**: wires wallet check, staking status, DIEM premium decision and broker routing.
+   * **StakeMaster**: keeps staker active and claims rewards (live gated), heartbeat wired.
+   * **ArbiDiem (v1)**: monitors DIEM premium and sizes with risk (utilization multiplier, volatility cap, and pool reserve‑cap). Liquidity‑aware preview adjusts units; logs rationale.
+   * **CapacityBroker (v1)**: issues scoped API keys with fixed quotas; idempotency + metrics; no dynamic pricing yet.
+   * **AITreasurer (v1)**: simple buffer target (heuristic), post‑v1 for expansion.
+   * **Orchestrator**: single‑loop; persists decisions; optional portfolio cap; backoff on errors. Dry‑run avoids web3.
 
 5. **Risk Module (initial)**
 
-   * Basic functions for volatility and utilization multipliers and risk-based sizing are implemented and fed into ArbiDiem.
+   * USD/unit limits, utilization multiplier, realized volatility cap, reserve‑cap sizing (based on first‑hop reserves), slippage guard.
 
 6. **Testing & Observability**
 
-   * Unit tests cover staking, market data fetching, DIEM premium logic, idempotency, and rate-limit enforcement.
-   * Prometheus metrics and SQL counters are wired in; CLI includes counter compaction.
+   * Tests cover: DEX exact‑out (UniswapV2) / exact‑in with FOT fallback, DIEM mint/burn dry‑run + capacity gate, risk integration, orchestrator portfolio cap, Etherscan discovery.
+   * Metrics and events: DEX latency buckets, circuit events, agent decisions, signals; SQL counters + KV compaction.
+
+7. **Liquidity & Docs (recent)**
+
+   * Added constant‑product “approx out” fallback (UniswapV2 curve with fee) in MarketDataProvider to estimate execution when router previews fail; `quotes:preview` surfaces approximate slippage when used.
+   * DIEM price fallback implemented: derives via mid‑price DIEM→WETH × WETH→QUOTE when direct quotes are unavailable.
+   * CLI probes refreshed: `startup:probe` warms cache and prints pairs/reserves; `quotes:preview` prints reserve‑cap, adjusted units, slippage (flags approx and price fallback); `market:best-price:scan` searches smaller inputs.
+   * Broker `/v1/env` surfaces effective TRADE_PATH and recent signal summaries.
 
 ---
 
 ## 🛠 Next (Tasks to Complete MVP)
 
-1. **Finalize DIEM Mint/Burn**
+1. **Liquidity‑Aware Execution Fallback — COMPLETED**
 
-   * Implement on-chain mint and burn in `services/diem/client.py` to lock sVVV, calculate the mint rate, handle unlock periods, and return transaction receipts.
-   * Integrate with CLI commands and enable ArbiDiem to execute mint and sell actions.
+   * Implemented AMM fallback + slippage surfacing in CLI preview.
 
-2. **Complete Risk Engine**
+2. **Docs & Runbooks — COMPLETED**
 
-   * Expand `services/risk` to provide exposure sizing, volatility analysis and utilization‑based caps.
-   * Add methods such as `suggest_trade_units` and `max_stake` and inject them into ArbiDiem and AITreasurer for risk‑aware decisioning.
+   * README/AGENTS updated: Venice path rules (no `/diem`), Base Etherscan v2 setup, DEX constraints, multi‑hop TRADE_PATH, reserve‑cap sizing, Replit extras, CLI probes, DIEM price fallback.
 
-3. **Agent Upgrades & Quorum Coordinator**
+3. **ArbiDiem polish (v1)**
 
-   * **ArbiDiem v2**: size trades using the new risk engine and live pool liquidity; call mint/sell once DIEM service is ready.
-   * **CapacityBroker v2**: introduce dynamic pricing and quotas for unused DIEM credits; implement resale/rental logic.
-   * **AITreasurer v2**: actively stake/unstake VVV, mint/burn DIEM and rebalance buffers based on usage forecasts and risk.
-   * **Quorum agent**: aggregate signals from all agents (StakeMaster, ArbiDiem, CapacityBroker, AITreasurer), coordinate actions and adjust listen intervals.
+   * Ensure rationale logs always include reserve‑cap, utilization, vol_bps, and if fallback pricing was used. Keep execution dry when market not favorable or liquidity too thin.
 
 4. **Pool & Liquidity Discovery**
 
-   * Implemented via Etherscan v2 (`chainid=8453`) helper using `proxy/eth_call` for `getPair`/`getReserves`; local cache populated for DIEM↔WETH and WETH↔USDC.
-   * CLI `startup:probe` warms the cache and prints a compact report; `quotes:preview` shows reserve‑cap and slippage reasoning.
+   * Consider Aerodrome reserves as a secondary source for mid‑price fallback (once stable) while keeping exact‑out disabled.
 
 5. **On-chain Event Watchers**
 
    * Add listeners for large stake/unstake, DIEM mint/burn and high‑volume trades to trigger risk/treasury adjustments and agent actions.
 
-6. **Broker API Enhancements**
+6. **Broker API Enhancements — COMPLETED**
 
-   * Ensure `.replit` installs required extras (`--extra broker --extra web3 --extra agentkit`) so DEX/web3 stay installed across restarts.
-   * Implement dynamic quotas and DIEM‑denominated pricing; support tenant self‑service adjustments; add key rotation and expiry notifications.
+   * `/v1/env` reflects effective TRADE_PATH and recent signal summaries. Dynamic quotas/DIEM‑denominated pricing remain post‑v1.
 
 7. **Additional Tests & Documentation**
 
-   * Extend test suite for: UniswapV2 exact‑out, Aerodrome exact‑in fallback, DIEM mint/burn sVVV gate, reserve‑cap sizing and risk integration, orchestrator persistence.
-   * Update README/AGENTS.md with: Venice path rules (no `/diem`), Base Etherscan v2 setup, DEX constraints (Aerodrome exact‑out disabled), Replit runbook, and recommended `RISK_MAX_POOL_TAKE_BPS` defaults.
+   * Extend test suite for constant‑product fallback, price derivation path (mid DIEM→WETH × WETH→USDC), and quote scan CLI. Ensure CI gate enforces Venice readiness + sane defaults.
 
 ---
 
@@ -91,4 +90,23 @@
 - CLI probes:
   - `venice:signals` → VVV metrics + DIEM balances via `rate_limits`.
   - `startup:probe` → warms liquidity cache (Etherscan v2) and prints pairs/reserves.
-  - `quotes:preview` → prints reserve‑cap and slippage reasoning; Aerodrome exact‑out skip noted.
+  - `quotes:preview` → prints reserve‑cap and slippage reasoning; Aerodrome exact‑out skip noted; falls back to derived DIEM price when router quotes are unavailable.
+  - `market:best-price:scan` → progressively tries smaller inputs to find a viable quote for thin pools.
+
+---
+
+## ✅ V1 Acceptance Checklist
+
+- Venice API alignment:
+  - `venice:models` and `venice:signals` succeed (VVV metrics via explicit endpoints; DIEM via `rate_limits`).
+- DEX / Etherscan v2:
+  - `startup:probe` prints DIEM→WETH and WETH→USDC pairs/reserves on Base (chainid=8453); cache is warmed.
+  - UniswapV2 exact‑out usable; Aerodrome exact‑out skipped with clear log/metric.
+- Quotes / Risk:
+  - `quotes:preview` returns non‑zero price (fallback ok), shows reserve‑cap and slippage labels; flags approximate/slippage when AMM fallback is used; scan CLI finds a viable size or warns at floor.
+- Broker / Ops:
+  - `/v1/env` shows `venice.ready=true`, key paths, DEX providers, multiline TRADE_PATH, and metrics path.
+- Tests:
+  - DEX exact‑out/fallback, DIEM mint/burn dry‑run + sVVV gate, risk sizing (util/vol/reserve‑cap), broker limits/idempotency, orchestrator portfolio cap are green.
+
+Current status: 40 passed, 2 skipped (local run).

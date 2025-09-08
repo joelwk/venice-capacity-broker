@@ -987,7 +987,8 @@ def build_parser() -> argparse.ArgumentParser:
 
         path = _require_trade_path()
         risk = RiskPolicy.from_env()
-        # Determine market price
+        # Determine market price (record if fallback was used)
+        used_price_fallback = False
         if args.price is not None:
             px = float(args.price)
         else:
@@ -998,6 +999,7 @@ def build_parser() -> argparse.ArgumentParser:
             except Exception:
                 # Fallback: derive DIEM price using mid-price × WETH->QUOTE when available
                 px = float(md.diem_price_with_fallback() or 0.0)
+                used_price_fallback = True
         if px <= 0:
             logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
             return
@@ -1023,12 +1025,26 @@ def build_parser() -> argparse.ArgumentParser:
             logger.info(f"reserve-cap: take_bps={cap_bps} units_cap={cap_units}")
             units = min(units, cap_units)
         adjusted, last_bps = arbi._adjust_for_liquidity(units, px)  # noqa: SLF001
+        # If we could not preview via router/aggregator, estimate slippage using AMM fallback
+        approx_used = False
+        if last_bps is None and adjusted > 0:
+            try:
+                md3 = MarketDataProvider()
+                exec_px_approx = md3.approx_exec_price(adjusted, path)
+                if exec_px_approx and exec_px_approx > 0:
+                    slip = risk.check_slippage(exec_px_approx, px)
+                    last_bps = float(slip.get('slippage_bps', 0.0)) if isinstance(slip, dict) else None
+                    approx_used = True
+            except Exception:
+                pass
         logger.info(
-            "preview: price=%.6f desired_units=%d adjusted_units=%d slippage_bps=%s note='Aerodrome exact-out disabled'",
+            "preview: price=%.6f desired_units=%d adjusted_units=%d slippage_bps=%s approx=%s price_fallback=%s note='Aerodrome exact-out disabled'",
             px,
             units,
             adjusted,
             last_bps,
+            approx_used,
+            used_price_fallback,
         )
 
     sp = sub.add_parser(

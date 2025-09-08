@@ -265,6 +265,20 @@ If a hop shows “no pair” across venues, set a viable multi‑hop `TRADE_PATH
 
 Tip: Keep Base WETH address `0x4200000000000000000000000000000000000006` handy for bridging.
 
+## Liquidity-Aware Preview & Scan
+
+Inspect expected execution and slippage without sending trades. The preview uses router quotes when available and falls back to a constant‑product (UniswapV2) approximation for thin pools; the log marks `approx=true` when the fallback is used.
+
+- Preview slippage and sizing at your current `TRADE_PATH`:
+  - `uv run python apps/cli/main.py quotes:preview [--units <base-units>] [--price <usd>]`
+  - Prints reserve-cap, adjusted units, and `slippage_bps`. If price discovery fails, it derives DIEM price via `DIEM->WETH` mid × `WETH->QUOTE`.
+- Scan smaller inputs to find a viable quote when pools are thin:
+  - `uv run python apps/cli/main.py market:best-price:scan --start 1.0 --min 1e-12 --factor 10`
+
+Environment tips:
+- Prefer multi-hop `TRADE_PATH` on Base for DIEM pricing: `DIEM -> WETH -> USDC`.
+- Cap input vs first-hop reserves with `RISK_MAX_POOL_TAKE_BPS` (e.g., 25 = 0.25%).
+
 ## Venice Alignment Runbook
 
 Ensure Venice API is aligned and ready in your environment:

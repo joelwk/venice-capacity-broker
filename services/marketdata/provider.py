@@ -123,6 +123,96 @@ class MarketDataProvider:
             "path": path,
         }
 
+    # --- Constant-product AMM fallback (UniswapV2-style) ---
+    def _uni_v2_out(self, amount_in: int, reserve_in: int, reserve_out: int, fee_bps: int = 30) -> int:
+        try:
+            if amount_in <= 0 or reserve_in <= 0 or reserve_out <= 0:
+                return 0
+            fee_n = 10_000 - int(fee_bps)
+            amount_in_with_fee = int(amount_in) * fee_n // 10_000
+            num = int(reserve_out) * int(amount_in_with_fee)
+            den = int(reserve_in) + int(amount_in_with_fee)
+            if den <= 0:
+                return 0
+            return int(num // den)
+        except Exception:
+            return 0
+
+    def approx_quote_exact_in(self, amount_in: int, path: List[str], fee_bps_per_hop: int = 30) -> Optional[int]:
+        """Approximate multi-hop exact-in output using UniswapV2 constant-product math.
+
+        Uses Etherscan v2 discovery/cache for UniswapV2 reserves and token mapping.
+        Returns None when reserves are unavailable for any hop.
+        """
+        try:
+            if not isinstance(path, list) or len(path) < 2 or amount_in <= 0:
+                return None
+            try:
+                from services.marketdata.etherscan_verify import (
+                    get_cached_pair_info_for_tokens,
+                    verify_trade_path,
+                )
+            except Exception:
+                return None
+            amt = int(amount_in)
+            for i in range(len(path) - 1):
+                a = str(path[i])
+                b = str(path[i + 1])
+                info = get_cached_pair_info_for_tokens(a, b)
+                if not info:
+                    # Try to warm cache for this hop
+                    try:
+                        _ = verify_trade_path([a, b])
+                        info = get_cached_pair_info_for_tokens(a, b)
+                    except Exception:
+                        info = None
+                if not info:
+                    return None
+                reserves = info.get("reserves") if isinstance(info, dict) else None
+                t0 = (info.get("token0") or "") if isinstance(info, dict) else ""
+                t1 = (info.get("token1") or "") if isinstance(info, dict) else ""
+                if not isinstance(reserves, tuple) or len(reserves) < 2 or not t0 or not t1:
+                    return None
+                def _n(x: str) -> str:
+                    return ("0x" + str(x).lower().removeprefix("0x"))
+                t0n, t1n = _n(t0), _n(t1)
+                ain, aout = _n(a), _n(b)
+                # Map reserves in path direction
+                if ain == t0n and aout == t1n:
+                    rin, rout = int(reserves[0]), int(reserves[1])
+                elif ain == t1n and aout == t0n:
+                    rin, rout = int(reserves[1]), int(reserves[0])
+                else:
+                    return None
+                out_i = self._uni_v2_out(amt, rin, rout, fee_bps=int(fee_bps_per_hop))
+                if out_i <= 0:
+                    return None
+                amt = int(out_i)
+            return int(amt)
+        except Exception:
+            return None
+
+    def approx_exec_price(self, amount_in: int, path: List[str], fee_bps_per_hop: int = 30) -> Optional[float]:
+        """Return approximate execution price (out/in) using AMM fallback for given input units.
+
+        Price is normalized to token decimals along the path ends (path[0] -> path[-1]).
+        """
+        try:
+            if len(path) < 2 or amount_in <= 0:
+                return None
+            out_units = self.approx_quote_exact_in(amount_in, path, fee_bps_per_hop=fee_bps_per_hop)
+            if out_units is None or out_units <= 0:
+                return None
+            dec_in = self._erc20_decimals(path[0])
+            dec_out = self._erc20_decimals(path[-1])
+            amt_in = float(amount_in) / float(10 ** int(dec_in))
+            amt_out = float(out_units) / float(10 ** int(dec_out))
+            if amt_in <= 0:
+                return None
+            return float(amt_out / amt_in)
+        except Exception:
+            return None
+
     def _mid_price_from_reserves(self, token_in: str, token_out: str) -> Optional[float]:
         """Compute infinitesimal mid price token_in->token_out from cached or fetched reserves.
 
@@ -240,12 +330,17 @@ class MarketDataProvider:
         for sym in symbols:
             SU = sym.upper()
             if SU == "DIEM":
+                # Try direct best price; if unavailable, use derived fallback (DIEM->WETH mid × WETH->QUOTE)
                 try:
                     path = self._path_from_env()
                     bp = self.best_price(path, amount_in_decimal=1.0)
                     out[sym] = float(bp["price"])  # DIEM per USDC (or vice-versa based on path)
                 except Exception:
-                    out[sym] = 1.0
+                    try:
+                        px_fb = self.diem_price_with_fallback()
+                        out[sym] = float(px_fb) if px_fb else 1.0
+                    except Exception:
+                        out[sym] = 1.0
             elif SU == "VVV":
                 try:
                     token = self._address_for_symbol("VVV")
