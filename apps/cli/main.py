@@ -992,8 +992,12 @@ def build_parser() -> argparse.ArgumentParser:
             px = float(args.price)
         else:
             md = MarketDataProvider()
-            bp = md.best_price(path, amount_in_decimal=1.0)
-            px = float(bp.get('price') or 0.0)
+            try:
+                bp = md.best_price(path, amount_in_decimal=1.0)
+                px = float(bp.get('price') or 0.0)
+            except Exception:
+                # Fallback: derive DIEM price using mid-price × WETH->QUOTE when available
+                px = float(md.diem_price_with_fallback() or 0.0)
         if px <= 0:
             logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
             return
@@ -1034,6 +1038,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--units", type=int, required=False, help="Desired DIEM units (base units). Defaults to risk-based max.")
     sp.add_argument("--price", type=float, required=False, help="Override market price (USD per DIEM)")
     sp.set_defaults(func=cmd_quotes_preview)
+
+    # Market scan: progressively smaller input until a quote is found
+    def cmd_market_best_price_scan(args: argparse.Namespace) -> None:
+        from services.marketdata.provider import MarketDataProvider
+        path = _require_trade_path()
+        md = MarketDataProvider()
+        amt = float(args.start)
+        floor = float(args.min)
+        factor = float(args.factor)
+        if factor <= 1.0:
+            factor = 10.0
+        while amt >= floor:
+            try:
+                res = md.best_price(path, amount_in_decimal=amt)
+                logger.info(f"scan_best_price: amount={amt} provider={res['provider']} price={res['price']:.8f} path={res['path']}")
+                return
+            except Exception:
+                amt = amt / factor
+        logger.warning(f"No quotes available down to min amount {floor}. Consider using --price fallback or verifying pool reserves.")
+
+    sp = sub.add_parser("market:best-price:scan", help="Scan smaller inputs until a quote is found (guards thin pools)")
+    sp.add_argument("--start", default=1.0, type=float, help="Starting decimal input amount (default 1.0)")
+    sp.add_argument("--min", default=1e-12, type=float, help="Minimum decimal input amount to try (default 1e-12)")
+    sp.add_argument("--factor", default=10.0, type=float, help="Division factor per step (default 10)")
+    sp.set_defaults(func=cmd_market_best_price_scan)
 
     # Data compaction (KV -> SQL)
     sp = sub.add_parser("data:compact-counters", help="Compact KV sliding-window counters into SQL (env-gated)")

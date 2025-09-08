@@ -59,6 +59,13 @@ class MarketDataProvider:
             return "0x4200000000000000000000000000000000000006"
         return None
 
+    def _weth_address(self) -> str:
+        bt = self._bridge_token_address()
+        if not bt:
+            # Fallback to canonical Base WETH
+            return "0x4200000000000000000000000000000000000006"
+        return bt
+
     def _address_for_symbol(self, symbol: str) -> Optional[str]:
         import os
 
@@ -115,6 +122,114 @@ class MarketDataProvider:
             "price": price,
             "path": path,
         }
+
+    def _mid_price_from_reserves(self, token_in: str, token_out: str) -> Optional[float]:
+        """Compute infinitesimal mid price token_in->token_out from cached or fetched reserves.
+
+        Returns price in token_out per token_in, decimals-aware.
+        """
+        try:
+            from services.marketdata.etherscan_verify import (
+                get_cached_pair_info_for_tokens,
+                verify_trade_path,
+            )
+        except Exception:
+            return None
+        # Try cache first
+        info = None
+        try:
+            info = get_cached_pair_info_for_tokens(token_in, token_out)
+        except Exception:
+            info = None
+        if not info:
+            try:
+                rep = verify_trade_path([token_in, token_out])
+                hops = rep.get("hops") or []
+                if hops:
+                    uv2 = (hops[0] or {}).get("uniswap_v2") or {}
+                    if uv2.get("pair"):
+                        info = {
+                            "pair": uv2.get("pair"),
+                            "reserves": uv2.get("reserves"),
+                            "token0": uv2.get("token0"),
+                            "token1": uv2.get("token1"),
+                        }
+            except Exception:
+                info = None
+        if not info:
+            return None
+        reserves = info.get("reserves")
+        if not isinstance(reserves, tuple) or len(reserves) < 2:
+            return None
+        t0 = str(info.get("token0") or "")
+        t1 = str(info.get("token1") or "")
+        if not t0 or not t1:
+            # If token mapping is unknown, we cannot compute directionally
+            return None
+        # Normalize addresses
+        def _n(x: str) -> str:
+            return ("0x" + str(x).lower().removeprefix("0x"))
+
+        t0n, t1n = _n(t0), _n(t1)
+        ain, aout = _n(token_in), _n(token_out)
+        try:
+            d0 = self._erc20_decimals(t0n)
+            d1 = self._erc20_decimals(t1n)
+        except Exception:
+            return None
+        r0 = float(reserves[0]) / float(10 ** d0)
+        r1 = float(reserves[1]) / float(10 ** d1)
+        if ain == t0n and aout == t1n:
+            return r1 / r0 if r0 > 0 else None
+        if ain == t1n and aout == t0n:
+            return r0 / r1 if r1 > 0 else None
+        return None
+
+    def diem_price_with_fallback(self) -> Optional[float]:
+        """Return DIEM price in QUOTE token using aggregator, then mid-price fallbacks.
+
+        Strategy:
+        1) Try aggregator best price for TRADE_PATH
+        2) If unavailable and path is DIEM->WETH->QUOTE, compute
+           price = mid(DIEM->WETH) * bestPrice(WETH->QUOTE) or mid(WETH->QUOTE)
+        """
+        try:
+            path = self._path_from_env()
+        except Exception:
+            path = []
+        if len(path) >= 2:
+            try:
+                bp = self.best_price(path, amount_in_decimal=1.0)
+                return float(bp.get("price") or 0.0)
+            except Exception:
+                pass
+        # Fallback only meaningful for 3-hop DIEM->WETH->QUOTE
+        try:
+            if len(path) == 3:
+                diem = path[0]
+                weth = path[1]
+                quote = path[2]
+            else:
+                diem = (self._address_for_symbol("DIEM") or "").strip()
+                weth = self._weth_address()
+                quote = self._quote_token_address()
+            if not diem or not weth or not quote:
+                return None
+            px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
+            if px_dw <= 0:
+                return None
+            # Try aggregator for WETH->QUOTE
+            px_wq = 0.0
+            try:
+                b2 = self.best_price([weth, quote], amount_in_decimal=1.0)
+                px_wq = float(b2.get("price") or 0.0)
+            except Exception:
+                px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
+            if px_wq <= 0:
+                return None
+            return float(px_dw * px_wq)
+        except Exception:
+            return None
 
     def prices(self, symbols: List[str]) -> Dict[str, float]:
         """Return prices for requested symbols.
