@@ -144,6 +144,8 @@ class ArbiDiem:
         mint_rate: float = 1.0,
         desired_units: int | None = None,
         current_inventory_usd: float | None = None,
+        utilization_ratio: float | None = None,
+        vol_bps: float | None = None,
         corr_id: str | None = None,
         simulate: bool = False,
     ) -> bool:
@@ -167,9 +169,18 @@ class ArbiDiem:
             "reason": None,
         }
         if market_price > fair * threshold_mult:  # premium over threshold
-            # Risk-gated sizing
+            # Risk-gated sizing (utilization/vol-aware if available)
             want = int(desired_units) if desired_units is not None else self._desired_units()
-            suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
+            try:
+                suggested = self.risk.size_with_risk(
+                    want,
+                    market_price,
+                    current_inventory_usd=current_inventory_usd,
+                    utilization_ratio=utilization_ratio,
+                    vol_bps=vol_bps,
+                )
+            except Exception:
+                suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
             rationale.update({"desired_units": int(want), "suggested_units": int(suggested)})
             if suggested <= 0:
                 logger.info("Risk rejected mint/trade (suggested=0)")

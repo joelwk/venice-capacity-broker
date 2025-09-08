@@ -105,7 +105,14 @@ class UniswapV2DexProvider(DexProvider):
             # Convert path to checksum addresses for Web3 compatibility
             checksum_path = [_Web3.to_checksum_address(addr) for addr in path]
             amounts = self.router.functions.getAmountsOut(amount_in, checksum_path).call()
-            q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+            out_amt = int(amounts[-1]) if amounts else 0
+            if out_amt <= 0:
+                try:
+                    _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+                except Exception:
+                    pass
+                return None
+            q = Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
             except Exception:
@@ -131,7 +138,14 @@ class UniswapV2DexProvider(DexProvider):
             # Convert path to checksum addresses for Web3 compatibility
             checksum_path = [_Web3.to_checksum_address(addr) for addr in path]
             amounts = self.router.functions.getAmountsIn(amount_out, checksum_path).call()
-            q = Quote(provider=self.name, amount_in=int(amounts[0]), amount_out=amount_out, path=path)
+            in_amt = int(amounts[0]) if amounts else 0
+            if in_amt <= 0:
+                try:
+                    _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+                except Exception:
+                    pass
+                return None
+            q = Quote(provider=self.name, amount_in=in_amt, amount_out=amount_out, path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
             except Exception:
@@ -327,7 +341,10 @@ class AerodromeDexProvider(DexProvider):
         try:
             routes = self._routes(path, stable=self.stable)
             amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
-            q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+            out_amt = int(amounts[-1]) if amounts else 0
+            if out_amt <= 0:
+                return None
+            q = Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
             except Exception:
@@ -343,7 +360,10 @@ class AerodromeDexProvider(DexProvider):
         try:
             routes = self._routes(path, stable=not bool(self.stable))
             amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
-            q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+            out_amt = int(amounts[-1]) if amounts else 0
+            if out_amt <= 0:
+                return None
+            q = Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, path=path)
             try:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
             except Exception:
@@ -368,7 +388,10 @@ class AerodromeDexProvider(DexProvider):
                     try:
                         routes = self._routes_with_mask(path, mask)
                         amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
-                        q = Quote(provider=self.name, amount_in=amount_in, amount_out=int(amounts[-1]), path=path)
+                        out_amt = int(amounts[-1]) if amounts else 0
+                        if out_amt <= 0:
+                            continue
+                        q = Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, path=path)
                         try:
                             _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
                         except Exception:

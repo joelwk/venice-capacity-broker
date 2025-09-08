@@ -166,3 +166,15 @@ class Decision(SQLModel, table=True):  # type: ignore[call-arg]
     correlation_id: Optional[str] = None
     details: Optional[str] = None  # JSON string with context
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+
+
+class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
+    """Lightweight price tick storage for optional volatility analytics.
+
+    Enabled via env `RISK_VOL_PERSIST`. SQLite/Postgres supported via SQLModel.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    symbol: str = Field(default="DIEM")
+    ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
+    price_usd: float

@@ -84,6 +84,13 @@ limits-set:
 # --- Convenience targets ---
 run-broker:
 	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
+	# Optional: one-screen DEX startup probe (skips silently if no key/path)
+	@if command -v uv >/dev/null 2>&1; then \
+	  ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" uv run python apps/cli/main.py startup:probe || true; \
+	else \
+	  ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" python apps/cli/main.py startup:probe || true; \
+	fi; \
+	# Start the Broker API
 	if command -v uv >/dev/null 2>&1; then \
 	  uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
 	else \

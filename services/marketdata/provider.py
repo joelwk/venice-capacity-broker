@@ -245,3 +245,72 @@ class MarketDataProvider:
         except Exception:
             pass
         return data
+
+    # --- Etherscan v2 discovery helpers ---
+    def discover_trade_path(self, path: List[str]) -> Dict[str, Any]:
+        """Return discovery report for the path using Etherscan v2 helpers.
+
+        Wraps services.marketdata.etherscan_verify.verify_trade_path.
+        """
+        from services.marketdata.etherscan_verify import verify_trade_path  # lazy import
+
+        return verify_trade_path(path)
+
+    def reserve_cap_units(self, path: List[str], take_bps: Optional[int] = None) -> Optional[int]:
+        """Estimate a conservative max input units based on pool reserves.
+
+        - Only applies for direct 2-token path (path[0] -> path[1]) on UniswapV2-like pools.
+        - Caps input to a fraction of the input-side reserve: take_bps/10_000.
+        - Env override RISK_MAX_POOL_TAKE_BPS if take_bps not provided (default 100 = 1%).
+        Returns None when discovery or reserves unavailable.
+        """
+        if len(path) < 2:
+            return None
+        try:
+            from services.marketdata.etherscan_verify import verify_trade_path, get_reserves, get_token0, get_token1
+            from web3 import Web3  # type: ignore
+        except Exception:
+            return None
+        tbps = take_bps
+        if tbps is None:
+            try:
+                tbps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+            except Exception:
+                tbps = 100
+        tbps = int(tbps)
+        if tbps <= 0:
+            return None
+        disc = verify_trade_path(path)
+        if not disc or not isinstance(disc, dict):
+            return None
+        hops = disc.get("hops") or []
+        if not hops:
+            return None
+        hop0 = hops[0] or {}
+        uv2 = hop0.get("uniswap_v2") or {}
+        pair = uv2.get("pair")
+        if not pair:
+            return None
+        # Fetch reserves and token0/1 to map to the input token
+        try:
+            rez = uv2.get("reserves") or get_reserves(pair)
+            if not isinstance(rez, tuple) or len(rez) < 2:
+                return None
+            t0 = uv2.get("token0") or get_token0(pair)
+            t1 = uv2.get("token1") or get_token1(pair)
+            if not t0 or not t1:
+                return None
+            t0 = Web3.to_checksum_address(str(t0))
+            t1 = Web3.to_checksum_address(str(t1))
+            inp = Web3.to_checksum_address(path[0])
+            if inp == t0:
+                reserve_in = int(rez[0])
+            elif inp == t1:
+                reserve_in = int(rez[1])
+            else:
+                # If input is neither token0 nor token1, cannot map reliably
+                return None
+            cap = (reserve_in * tbps) // 10_000
+            return int(cap)
+        except Exception:
+            return None

@@ -25,6 +25,17 @@ This document describes the production v1 agents, their responsibilities, depend
   - Router addresses: `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, `AERODROME_STABLE`
   - Pricing: `QUOTE_TOKEN_ADDRESS`, optional `TRADE_PATH` for DIEM pricing
 
+### DIEM & Risk configuration (new)
+- DIEM mint/burn capacity gate (optional):
+  - `DIEM_ENABLE_SVVV_GATE` (bool): enable sVVV capacity pre-check before mint
+  - `DIEM_MINT_RATE_SVVV_PER_DIEM` (int): sVVV base units per 1 DIEM base unit
+  - `DIEM_MINT_RATE` (float): sVVV tokens per 1 DIEM token (decimals-aware)
+  - `DIEM_SVVV_AVAILABLE_UNITS` (int): override available sVVV units for locking
+  - `DIEM_DECIMALS`, `SVVV_DECIMALS` (or `VVV_DECIMALS`) defaults 18
+- Risk sizing modifiers (optional):
+  - `RISK_UTIL_ALPHA` (float, default 0.5): multiplier = `1 + alpha * utilization`
+  - `RISK_MAX_VOLATILITY_BPS` (float, default disabled): caps units when realized vol exceeds cap
+
 ### Libraries and services
 - Venice SDK client: `libs/venice_sdk/client.py`
 - Key manager: `services/venice_keys/manager.py`
@@ -118,7 +129,7 @@ uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venic
   - DIEM service paths: `tests/test_diem_service.py`, `tests/test_diem_buy_path.py`, `tests/test_diem_mint_burn_dryrun.py`
   - Risk policy sizing: `tests/test_risk_policy.py`, `tests/test_arbi_diem_risk_integration.py`
   - Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`
-  - Orchestrator wiring: `tests/test_orchestrator_portfolio_cap.py`
+- Orchestrator wiring: `tests/test_orchestrator_portfolio_cap.py`
 
 Run examples:
 ```bash

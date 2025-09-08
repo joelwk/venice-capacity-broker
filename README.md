@@ -102,6 +102,17 @@ Risk policy:
     - `RISK_ENABLE_PORTFOLIO_CAP=true`
     - Inventory (base units): `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`
 
+DIEM mint/burn gate (optional):
+- `DIEM_ENABLE_SVVV_GATE`: enable sVVV capacity pre-check before mint
+- `DIEM_MINT_RATE_SVVV_PER_DIEM`: integer sVVV base units required per 1 DIEM base unit
+- `DIEM_MINT_RATE`: float sVVV tokens per 1 DIEM token (decimals-aware)
+- `DIEM_SVVV_AVAILABLE_UNITS`: override available sVVV (base units)
+- `DIEM_DECIMALS`, `SVVV_DECIMALS` (or `VVV_DECIMALS`): defaults 18
+
+Risk utilization/volatility (optional):
+- `RISK_UTIL_ALPHA`: multiplier = `1 + alpha * utilization` (default 0.5)
+- `RISK_MAX_VOLATILITY_BPS`: when >0, caps units proportionally when realized vol exceeds cap
+
 Run the CLI help:
 
 ```
@@ -220,6 +231,67 @@ docker compose down -v
 Notes:
 - The application still runs fine without Docker: tests fall back to SQLite; Redis-dependent tests skip if `REDIS_URL` is unset.
   
+
+## DEX Startup Probe (Etherscan v2)
+
+Before relying on DEX quotes, validate your `TRADE_PATH` pairs exist on Base using the built‑in startup probe. It calls Etherscan v2 `proxy/eth_call` (`chainid=8453`) against Uniswap V2 and Aerodrome factories to find pairs and reserves for each hop.
+
+- Env required:
+  - `ETHERSCAN_API_KEY`
+  - `TRADE_PATH` (addresses in order, e.g., `DIEM,USDC` or `DIEM,WETH,USDC`)
+- Run on demand:
+  - `uv run python apps/cli/main.py startup:probe`
+- Auto‑run on broker start (best‑effort):
+  - `make run-broker` prints a one‑screen report before launching the API
+
+Example output (abridged):
+
+```
+DEX verify (chain 8453)
+Path: 0xf4d97f2...a024 -> 0x42000000...0006 -> 0x833589fC...2913
+
+Hop 1: DIEM -> WETH
+ - UniswapV2: (no pair)
+ - Aerodrome Volatile: pair=0x... reserves=12345,67890 ts=1725660000
+ - Aerodrome Stable: (no pair)
+
+Hop 2: WETH -> USDC
+ - UniswapV2: pair=0x... reserves=...
+ - Aerodrome Volatile: pair=0x... reserves=...
+ - Aerodrome Stable: (no pair)
+```
+
+If a hop shows “no pair” across venues, set a viable multi‑hop `TRADE_PATH` (e.g., via WETH) that the probe confirms, then re‑run quotes.
+
+Tip: Keep Base WETH address `0x4200000000000000000000000000000000000006` handy for bridging.
+
+## Venice Alignment Runbook
+
+Ensure Venice API is aligned and ready in your environment:
+
+- Base URL must include `/api/v1` (e.g., `VENICE_API_BASE_URL=https://api.venice.ai/api/v1`).
+- Prefer explicit VVV metrics endpoints and override when deployments differ:
+  - `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`
+  - `VENICE_VVV_UTIL_PATH=/vvv/utilization`
+  - `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
+- DIEM balances/usage come from `GET /api_keys/rate_limits` (no DIEM signals endpoint).
+- Probe OpenAPI and get recommended exports:
+  - `uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai`
+- Readiness checks:
+  - `make env-status` → `server.venice.ready=true` and models/vvv `readyReason=ok`.
+
+## CI Gate (prod sanity)
+
+Gate deploys on sane prod defaults and Venice readiness:
+
+- Add a CI step:
+  - `uv run python apps/cli/main.py ci:gate`
+- Fails when:
+  - `venice.ready=false` (server `/v1/env`)
+  - `signals.offline=true`
+  - `BROKER_REQUIRE_ADMIN_TOKEN=false` or admin token missing when required
+  - CORS enabled with wildcard origins
+
 
 Idempotency TTL
 - Canonical env is `IDEMPOTENCY_TTL_SECONDS` (default 300). For compatibility, the app also reads `IDEM_TTL_SECONDS`.

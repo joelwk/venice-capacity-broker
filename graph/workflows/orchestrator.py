@@ -26,6 +26,16 @@ class Orchestrator:
 
     def run_once(self, mint_rate: float = 1.0, dry_run: bool = True) -> Dict[str, Any]:
         # In dry-run, avoid importing web3/DEX providers to prevent heavy deps or platform issues.
+        # Maintain simple price history for realized volatility (non-persistent)
+        try:
+            if not hasattr(self, "_px_hist"):
+                setattr(self, "_px_hist", [])
+        except Exception:
+            pass
+
+        utilization_ratio: float | None = None
+        vol_bps: float | None = None
+
         if dry_run:
             try:
                 px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
@@ -36,11 +46,47 @@ class Orchestrator:
             # Warm minimal market signals and caches (best-effort)
             try:
                 # Emits signal.market.signals and populates internal caches
-                self.market.unified_signals(ttl_s=30)
+                sig = self.market.unified_signals(ttl_s=30)
+                # utilization from VVV metrics if available
+                try:
+                    vvv = sig.get("vvv") if isinstance(sig, dict) else None
+                    if isinstance(vvv, dict):
+                        ur = vvv.get("utilization")
+                        if ur is not None:
+                            utilization_ratio = float(ur)
+                except Exception:
+                    utilization_ratio = None
             except Exception:
                 pass
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
+            # Append to history and compute simple realized volatility
+            try:
+                hist = getattr(self, "_px_hist", [])
+                hist.append(float(px))
+                if len(hist) > 16:
+                    del hist[: len(hist) - 16]
+                setattr(self, "_px_hist", hist)
+                vol_bps = float(self.arbi.risk.volatility_bps(hist)) if hasattr(self.arbi, "risk") else None
+                # Optional: persist price ticks for analytics if DB configured
+                import os as _os
+                if (_os.getenv("RISK_VOL_PERSIST") or "false").strip().lower() in {"1", "true", "yes", "on"}:
+                    try:
+                        from db.session import create_db_and_tables
+                        from sqlmodel import Session
+                        from db.session import get_engine
+                        from db.models import PriceTick
+                        from datetime import datetime as _dt
+
+                        create_db_and_tables()
+                        eng = get_engine()
+                        with Session(eng) as _s:  # type: ignore[call-arg]
+                            _s.add(PriceTick(symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()))
+                            _s.commit()
+                    except Exception:
+                        pass
+            except Exception:
+                vol_bps = None
         # Optional portfolio cap wiring (env-gated)
         current_inventory_usd = None
         if not dry_run:
@@ -84,14 +130,27 @@ class Orchestrator:
                         current_inventory_usd=None,
                         corr_id=corr,
                         simulate=True,
+                        utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
+                        vol_bps=vol_bps if "vol_bps" in params else None,
                     )
                 elif "simulate" in params:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
-                        px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=None, simulate=True
+                        px,
+                        mint_rate=mint_rate,
+                        desired_units=None,
+                        current_inventory_usd=None,
+                        simulate=True,
+                        utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
+                        vol_bps=vol_bps if "vol_bps" in params else None,
                     )
                 else:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
-                        px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=None
+                        px,
+                        mint_rate=mint_rate,
+                        desired_units=None,
+                        current_inventory_usd=None,
+                        utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
+                        vol_bps=vol_bps if "vol_bps" in params else None,
                     )
             except Exception:
                 decision = px > 0
@@ -108,10 +167,17 @@ class Orchestrator:
                         desired_units=None,
                         current_inventory_usd=current_inventory_usd,
                         corr_id=corr,
+                        utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
+                        vol_bps=vol_bps if "vol_bps" in params else None,
                     )
                 else:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
-                        px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=current_inventory_usd
+                        px,
+                        mint_rate=mint_rate,
+                        desired_units=None,
+                        current_inventory_usd=current_inventory_usd,
+                        utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
+                        vol_bps=vol_bps if "vol_bps" in params else None,
                     )
             except Exception:
                 decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
@@ -130,6 +196,7 @@ class Orchestrator:
                 "max_inventory_usd": getattr(self.arbi.risk, "max_inventory_usd", None),
                 "max_trade_units": getattr(self.arbi.risk, "max_trade_units", None),
             },
+            "signals": {"utilization_ratio": utilization_ratio, "vol_bps": vol_bps},
             "outcome": bool(decision),
             "why": getattr(self.arbi, "_last_rationale", None),
         }

@@ -1058,6 +1058,34 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("ci:gate", help="Fail build if readiness/security checks fail (server /v1/env or local env)")
     sp.set_defaults(func=cmd_ci_gate)
 
+    # --- Startup DEX probe (Etherscan v2) ---
+    def cmd_startup_probe(args: argparse.Namespace) -> None:
+        """Validate DEX pairs along TRADE_PATH using Etherscan v2 proxy.
+
+        Prints a one-screen report with discovered pairs and reserves
+        for Uniswap V2 and Aerodrome (stable/volatile).
+        """
+        es_key = os.getenv("ETHERSCAN_API_KEY")
+        if not es_key:
+            logger.warning("ETHERSCAN_API_KEY is not set; skipping DEX startup probe.")
+            return
+        tp = os.getenv("TRADE_PATH")
+        if not tp:
+            logger.warning("TRADE_PATH is not set; skipping DEX startup probe.")
+            return
+        path = [p.strip() for p in tp.split(",") if p.strip()]
+        try:
+            from services.marketdata.etherscan_verify import verify_trade_path, format_report  # type: ignore
+
+            res = verify_trade_path(path)
+            report = format_report(res)
+            print(report)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"startup probe failed: {e}")
+
+    sp = sub.add_parser("startup:probe", help="Validate DEX pairs via Etherscan for current TRADE_PATH and print a compact report")
+    sp.set_defaults(func=cmd_startup_probe)
+
     # Broker admin commands
     sp = sub.add_parser("broker:tenants:list", help="List all tenants (admin)")
     sp.set_defaults(func=cmd_broker_tenants_list)

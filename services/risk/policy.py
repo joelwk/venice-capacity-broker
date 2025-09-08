@@ -173,3 +173,84 @@ class RiskPolicy:
         except Exception:
             slip = float("inf")
         return {"ok": slip <= float(self.slippage_bps_cap), "slippage_bps": float(slip)}
+
+    # --- utilization/volatility hooks (optional) ---
+    def utilization_multiplier(self, utilization_ratio: Optional[float]) -> float:
+        """Return sizing multiplier based on utilization in [0,1].
+
+        Uses env RISK_UTIL_ALPHA (default 0.5) so that multiplier = 1 + alpha * util.
+        If utilization is None or invalid, returns 1.0.
+        """
+        try:
+            if utilization_ratio is None:
+                return 1.0
+            u = max(0.0, min(1.0, float(utilization_ratio)))
+            alpha = float(os.getenv("RISK_UTIL_ALPHA", "0.5") or 0.5)
+            return max(0.0, 1.0 + alpha * u)
+        except Exception:
+            return 1.0
+
+    def volatility_bps(self, prices: list[float]) -> float:
+        """Compute simple realized volatility (bps) of log returns over the sample.
+
+        Returns 0.0 on invalid input. Not annualized; intended as a relative signal.
+        """
+        try:
+            import math
+
+            xs = [float(p) for p in prices if float(p) > 0]
+            if len(xs) < 2:
+                return 0.0
+            rets = [math.log(xs[i] / xs[i - 1]) for i in range(1, len(xs))]
+            mu = sum(rets) / float(len(rets))
+            var = sum((r - mu) ** 2 for r in rets) / float(max(1, len(rets) - 1))
+            vol = (max(0.0, var)) ** 0.5
+            return float(vol * 10_000.0)
+        except Exception:
+            return 0.0
+
+    def cap_by_volatility(self, units: int, vol_bps: Optional[float]) -> int:
+        """Optionally reduce units when volatility exceeds a cap.
+
+        Env RISK_MAX_VOLATILITY_BPS (default: disabled if <=0). If vol_bps is None, no change.
+        Scales units by (cap / vol) when vol > cap.
+        """
+        try:
+            cap = float(os.getenv("RISK_MAX_VOLATILITY_BPS", "0") or 0.0)
+            if vol_bps is None or cap <= 0:
+                return int(units)
+            v = float(vol_bps)
+            if v <= 0:
+                return int(units)
+            if v <= cap:
+                return int(units)
+            scale = max(0.0, min(1.0, cap / v))
+            return int(int(units) * scale)
+        except Exception:
+            return int(units)
+
+    def size_with_risk(
+        self,
+        desired_units: int,
+        price_usd_per_diem: float,
+        *,
+        current_inventory_usd: Optional[float] = None,
+        utilization_ratio: Optional[float] = None,
+        vol_bps: Optional[float] = None,
+    ) -> int:
+        """Combined sizing: base gate -> utilization multiplier -> volatility cap.
+
+        Returns non-negative int units.
+        """
+        base = self.suggest_trade_units(desired_units, price_usd_per_diem, current_inventory_usd)
+        if base <= 0:
+            return 0
+        # Utilization multiplier
+        mult = self.utilization_multiplier(utilization_ratio)
+        try:
+            sized = int(max(0, int(base) * mult))
+        except Exception:
+            sized = int(base)
+        # Volatility cap
+        sized2 = self.cap_by_volatility(sized, vol_bps)
+        return max(0, int(sized2))
