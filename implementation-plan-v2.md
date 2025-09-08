@@ -1,64 +1,38 @@
+Implementation Plan v2 (concise)
 
----
+Reflects actual repository state against implementation-plan.md and locks a clear v1 stop line. Keep v1 stable; push multi-agent/quorum features post‑v1.
 
-## ✅ Done
+## v1 Stop Line
+- Single-agent loop orchestrator coordinating MarketData -> ArbiDiem decisions (persisted, backoff, dry-run friendly).
+- Agents in scope: StakeMaster (heartbeat/claims), ArbiDiem (risk-gated mint/sell), CapacityBroker (minimal sub-key issuance). Minimal Treasurer heuristic allowed.
+- DEX aggregator: UniswapV2 (exact-in/out) and Aerodrome (exact-in, exact-out intentionally not selected by aggregator). Slippage guard enforced.
+- DIEM service: on-chain mint/burn via AgentKit actions; optional sVVV capacity gate and lock/unlock flows via env; CLI verbs for mint/burn/quotes.
+- Risk policy: USD caps, units cap, slippage cap, utilization multiplier, volatility capping; liquidity-aware sizing via quote preview; max_stake helpers for staking caps.
+- Signals: Venice VVV metrics and DIEM balances with caching/retry and offline stub; Etherscan v2 path discovery and reserve helpers.
+- Broker API: minimal multi-tenant proxy with scoped sub-keys, limiter, idempotency, metrics; admin CLI helpers.
+- Tests and observability: selected unit/integration tests; metrics/events; optional tracing knobs.
 
-**Configuration & Infrastructure**
+## Done
+- Environment & config: Base addresses/routers, TRADE_PATH, slippage; `.env.example` populated; CLI OpenAPI probe suggests correct VENICE_* paths.
+- Staking & wallet: approve/stake/claim/unstake; ETH account and Smart Wallet ready via AgentKit wrappers.
+- Market data: VVV metrics and DIEM balances via Venice; best-price across DEX with bridge fallbacks; symbol pricing helpers.
+- Venice SDK & keys: models/chat, rate-limits, root/sub-key flows; CLI and Broker integration; cleanup helper.
+- DEX aggregator: quotes and trades (exact-in + exact-out on UniswapV2; FOT fallback; circuit breaker; latency buckets).
+- DIEM service: mint/burn implemented via ABI-backed actions; optional sVVV capacity pre-check and mint-rate conversions; optional lock/unlock (pre-mint/post-burn) with cooldown metadata and telemetry; CLI verbs and quotes preview.
+- Orchestrator & agents: single-loop orchestrator with price history/volatility, portfolio cap wiring (env-gated); ArbiDiem uses risk sizing + liquidity preview; StakeMaster CLI runner.
+- Etherscan discovery: v2 proxy helpers for getPair/getReserves, startup probe, pool-reserve based sizing cap helper.
+- Tests & metrics: coverage for DEX exact-out, FOT fallback, DIEM service, capacity gate, risk sizing, orchestrator util/vol; centralized events and Prometheus metrics.
+  - New tests: DIEM lock/unlock sequencing and RiskPolicy max_stake helpers.
 
-* `.env.example` and `config/default.yml` define Base-chain addresses (VVV token, staking contract, DIEM token, USDC, WETH), DEX routers (Uniswap V2, Aerodrome), and trade paths; environment parsing and validation are implemented.
-* Etherscan v2 usage documented (single endpoint with `chainid=8453`).
+## Next (v1)
+1) Liquidity fallback: when preview is unavailable, cap input by pool reserves using MarketData.reserve_cap_units; expose small metric for path taken (preview|reserve|none); integrate into ArbiDiem sizing.
+2) Docs polish: tighten AGENTS.md/README snippets to reference `run:orchestrator` vs `run:quorum` for v1; clearly note Aerodrome exact-out is disabled by design; document DIEM lock/unlock toggles.
+3) Config hygiene: add brief notes in `.env.example` for DIEM_* gate vars and RISK_* knobs already supported, plus lock/unlock toggles (DIEM_LOCK_ON_MINT, DIEM_UNLOCK_AFTER_BURN, DIEM_UNLOCK_COOLDOWN_SECONDS; DIEM_LOCK_FN/DIEM_UNLOCK_FN; VVV_LOCK_FN/VVV_UNLOCK_FN); ensure defaults are safe for dry runs.
 
-**Core Services**
+## Post‑v1 Backlog
+- Quorum multi-agent orchestration and richer Treasurer policies.
+- Broker dynamic pricing/allocation and DIEM rentals.
+- Event watchers driving adaptive listen intervals and inventory.
+- Expanded UI/analytics for tenants, usage, and costs.
 
-* **Staking service**: provides approve, stake, claim, unstake and on-chain status queries.
-* **Market data provider**: fetches VVV metrics (circulating supply, utilisation, staking yield) and DIEM balances via Venice API; quotes token prices via Uniswap V2 and Aerodrome with fallback paths.
-* **Venice SDK & Key manager**: wraps API endpoints for model queries, rate limits, subkey generation and revocation.
-* **DEX aggregator**: performs price discovery and trades across Uniswap V2 and Aerodrome, honouring slippage settings.
-* **Broker API**: multi-tenant FastAPI service exposing `/v1/tenants`, `/v1/chat`, per-tenant rate limits, scoped key issuance and debug counters; idempotency middleware protects against duplicate requests.
-* **CLI tools**: commands for staking actions, DIEM mint/trade proxies (stubbed), key management, price quoting, usage & limits, run orchestrator flows, admin utilities (rate-limit settings, idempotency purge).
-* **Orchestrator & Graph**: simple workflow wires wallet verification, staking status, DIEM premium decision and broker routing.
-* **Initial agents**:
-
-  * **StakeMaster**: keeps staker active; claims rewards periodically.
-  * **ArbiDiem**: monitors DIEM premium and would mint/sell when mint/burn is implemented.
-  * **CapacityBroker**: issues scoped subkeys for tenants with static pricing/quotas.
-  * **AITreasurer**: provides rudimentary buffer management for DIEM vs. expected usage.
-* **Testing & Observability**: unit tests for staking, market data, idempotency, rate limits and DIEM premium logic; Prometheus metrics exposed; SQL compaction & rate-limit tests.
-
-**Overall**: the repository provides a working scaffold capable of staking VVV, accessing Venice API, pricing tokens, issuing subkeys and serving chat requests under per-tenant quotas.  The basic agent workflows run, but advanced functionality is stubbed.
-
-## 🛠 Next (Remaining to reach the original vision)
-
-1. **Complete the DIEM service**
-   Implement on-chain `mint` and `burn` in `services/diem/client.py`, locking sVVV via the staking contract and unlocking via burns; handle mint-rate calculation, unlock periods and error propagation.  Integrate these functions into the CLI and ArbiDiem agent.
-
-2. **Implement a full risk module**
-   Create `services/risk` with a policy engine that evaluates portfolio exposure (VVV vs. DIEM vs. USD), volatility, utilisation and stop‑loss thresholds.  Provide an API for agents to fetch recommended trade sizes, staking amounts and mint/burn limits.  Hook the risk module into ArbiDiem, AITreasurer and Quorum decisions.
-
-3. **Upgrade agents**
-
-   * **ArbiDiem v2**: size trades based on risk outputs and real-time liquidity; use Etherscan v2 to discover pool reserves (via `getPair` and `getReserves` on Uniswap V2 and Aerodrome) and incorporate slippage/risk.
-   * **CapacityBroker v2**: introduce dynamic pricing and quotas for unused Diem credits; allow renting/selling surplus compute with configurable terms; optionally integrate DIEM lending/escrow on-chain.
-   * **AITreasurer v2**: manage treasury actively—stake/unstake VVV, mint/sell DIEM, rebalance buffers based on forecasted usage and risk.
-   * **Quorum coordinator**: implement a multi-agent voting layer to reconcile signals from StakeMaster, ArbiDiem, CapacityBroker and AI Treasurer, and to adjust the “listen interval” based on volatility.
-
-4. **Add market and pool discovery**
-   Use Etherscan v2 (with `chainid=8453`) to query Uniswap and Aerodrome factories (`getPair` or event logs) to discover token pair addresses and fetch reserves via `getReserves`.  Populate a cache of pool liquidity for DIEM/USDC, VVV/DIEM and other relevant pairs.  Integrate liquidity data into pricing and risk calculations.
-
-5. **Introduce event watchers**
-   Implement on‑chain watchers for large stake/unstake events, DIEM mints/burns and high‑volume trades.  Use these events to trigger risk adjustments, treasury rebalancing or alerts.
-
-6. **Enhance broker and subkey management**
-   Add tenant self-service with adjustable quotas and expiry; implement DIEM-denominated pricing; secure subkey rotation and auto-expiry warnings.  Provide a UI or API for monitoring tenant usage and costs.
-
-7. **Expand tests and documentation**
-
-   * Test new flows for DIEM mint/burn, risk-driven trade sizing, dynamic pricing and quorum decisions.
-   * Update documentation (README, AGENTS.md) to reflect tokenomics, environment variables and new agent behaviours.
-   * Provide runbooks for setting up Etherscan keys, running pool-discovery scripts, and starting the full multi-agent system.
-
-8. **Optionally extend**
-
-   * Add DeFi integrations (use DIEM as collateral).
-   * Support multi-model routing and AI cost hedging via DIEM futures.
-   * Build UI dashboards for treasury and capacity rental.m.
+This keeps v1 lean, testable, and non-redundant while preserving a clean path to the multi‑agent roadmap.

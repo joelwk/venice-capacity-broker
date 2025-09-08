@@ -119,13 +119,13 @@ Run the CLI help:
 python apps/cli/main.py --help
 ```
 
-Run the sample workflow (dry run):
+Run the sample workflow (dry run) — minimal single-agent path:
 
 ```
 python apps/cli/main.py run:quorum --dry-run
 ```
 
-Orchestrator loop:
+Primary v1 loop (orchestrator):
 
 ```
 python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 10

@@ -28,6 +28,8 @@ class DIEMService:
         self._last_mint: Optional[Dict[str, Any]] = None
         self._last_burn: Optional[Dict[str, Any]] = None
         self._totals = {"minted": 0, "burned": 0}
+        # local lock schedule (best-effort metadata only; on-chain source of truth prevails)
+        self._lock_log: List[Dict[str, Any]] = []
 
     def _get_actions(self):  # lazy, to avoid web3 dependency during tests
         if self._actions is None:
@@ -131,6 +133,56 @@ class DIEMService:
             "mint_rate_svvv_per_diem": int(rate),
         }
 
+    def _maybe_lock_before_mint(self, amount: int, gate: Dict[str, Any], corr_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Attempt to lock sVVV before mint if enabled via env.
+
+        Env:
+          - DIEM_LOCK_ON_MINT=true|1
+          - DIEM_UNLOCK_COOLDOWN_SECONDS (optional; metadata only)
+        """
+        if not self._env_flag("DIEM_LOCK_ON_MINT", default=False):
+            return None
+        try:
+            required = gate.get("required_svvv")
+            if required is None:
+                rate = self._mint_rate_svvv_per_diem_units()
+                if rate is None:
+                    return None
+                required = int(rate) * int(amount)
+            act = self._get_actions()
+            if not hasattr(act, "lock_svvv"):
+                return None
+            res = act.lock_svvv(int(required))  # type: ignore[attr-defined]
+            # annotate with cooldown metadata if present
+            try:
+                cd = int(os.getenv("DIEM_UNLOCK_COOLDOWN_SECONDS") or 0)
+            except Exception:
+                cd = 0
+            payload = {"amount_svvv": int(required), **dict(res)}
+            if cd > 0:
+                import time as _t
+
+                payload["unlock_cooldown_s"] = cd
+                payload["unlock_earliest_at"] = int(_t.time()) + cd
+            if corr_id:
+                payload["correlationId"] = str(corr_id)
+            try:
+                _emit_event("diem.lock", dict(payload))
+            except Exception:
+                pass
+            self._lock_log.append(payload)
+            return payload
+        except Exception as e:  # noqa: BLE001
+            err = {"status": "error", "action": "lock_svvv", "error": str(e)}
+            try:
+                payload = {"amount_svvv": None, **dict(err)}
+                if corr_id:
+                    payload["correlationId"] = str(corr_id)
+                _emit_event("diem.lock.error", payload)
+            except Exception:
+                pass
+            return err
+
     def mint(
         self,
         amount: int,
@@ -166,6 +218,12 @@ class DIEMService:
                 pass
             self._last_mint = dict(out)
             return out
+        # Optional lock step
+        lock_info: Optional[Dict[str, Any]] = None
+        try:
+            lock_info = self._maybe_lock_before_mint(amount, gate, corr_id)
+        except Exception:
+            pass
         try:
             res = self._get_actions().mint(amount)
         except Exception as e:  # noqa: BLE001
@@ -185,6 +243,8 @@ class DIEMService:
                 payload["correlationId"] = str(corr_id)
             if gate.get("enabled"):
                 payload["capacity_gate"] = dict(gate)
+            if lock_info is not None:
+                payload["lock"] = dict(lock_info)
             _emit_event("diem.mint", payload)
         except Exception:
             pass
@@ -228,10 +288,38 @@ class DIEMService:
                 pass
             self._last_burn = dict(err)
             return err
+        # Optional unlock step post-burn
+        unlock_payload: Optional[Dict[str, Any]] = None
+        try:
+            if self._env_flag("DIEM_UNLOCK_AFTER_BURN", default=False):
+                rate = self._mint_rate_svvv_per_diem_units()
+                if rate is not None and hasattr(self._get_actions(), "unlock_svvv"):
+                    required = int(rate) * int(amount)
+                    try:
+                        unlock_payload = self._get_actions().unlock_svvv(int(required))  # type: ignore[attr-defined]
+                        try:
+                            out2 = {"amount_svvv": int(required), **dict(unlock_payload)}
+                            if corr_id:
+                                out2["correlationId"] = str(corr_id)
+                            _emit_event("diem.unlock", out2)
+                        except Exception:
+                            pass
+                    except Exception as e:  # noqa: BLE001
+                        try:
+                            out2 = {"status": "error", "action": "unlock_svvv", "error": str(e), "amount_svvv": int(required)}
+                            if corr_id:
+                                out2["correlationId"] = str(corr_id)
+                            _emit_event("diem.unlock.error", out2)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
         try:
             payload = {"amount": int(amount), **dict(res)}
             if corr_id:
                 payload["correlationId"] = str(corr_id)
+            if unlock_payload is not None:
+                payload["unlock"] = dict(unlock_payload)
             _emit_event("diem.burn", payload)
         except Exception:
             pass

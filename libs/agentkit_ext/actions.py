@@ -114,6 +114,63 @@ class DIEMACTIONS:
         tx_hash = send_tx(self.diem_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "burn", "tx_hash": tx_hash}
 
+    def lock_svvv(self, amount: int) -> Dict[str, Any]:
+        """Optionally lock sVVV prior to minting DIEM.
+
+        Tries DIEM contract first using env DIEM_LOCK_FN (default: lock_svvv).
+        Falls back to staking contract if VVV_LOCK_FN is set.
+        """
+        fn = os.getenv("DIEM_LOCK_FN", "lock_svvv")
+        target_addr = self.diem_addr
+        target = self.diem
+        # Optional fallback to staking contract
+        if (not target) or os.getenv("VVV_LOCK_FN"):
+            try:
+                from .web3_utils import get_contract
+                from web3 import Web3  # type: ignore
+
+                staking_addr = os.getenv("VVV_STAKING_ADDRESS")
+                if staking_addr and os.getenv("VVV_LOCK_FN"):
+                    staking = get_contract(self.w3, Web3.to_checksum_address(staking_addr), "staking.json")
+                    target = staking
+                    target_addr = staking_addr
+                    fn = os.getenv("VVV_LOCK_FN") or fn
+            except Exception:
+                pass
+        if not target:
+            raise FileNotFoundError("No contract available for lock_svvv (diem or staking)")
+        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        tx_hash = send_tx(target_addr, bytes.fromhex(data[2:]))
+        return {"status": "sent", "action": "lock_svvv", "tx_hash": tx_hash}
+
+    def unlock_svvv(self, amount: int) -> Dict[str, Any]:
+        """Optionally unlock sVVV after burning DIEM.
+
+        Tries DIEM contract using env DIEM_UNLOCK_FN (default: unlock_svvv),
+        with optional fallback to staking contract VVV_UNLOCK_FN.
+        """
+        fn = os.getenv("DIEM_UNLOCK_FN", "unlock_svvv")
+        target_addr = self.diem_addr
+        target = self.diem
+        if (not target) or os.getenv("VVV_UNLOCK_FN"):
+            try:
+                from .web3_utils import get_contract
+                from web3 import Web3  # type: ignore
+
+                staking_addr = os.getenv("VVV_STAKING_ADDRESS")
+                if staking_addr and os.getenv("VVV_UNLOCK_FN"):
+                    staking = get_contract(self.w3, Web3.to_checksum_address(staking_addr), "staking.json")
+                    target = staking
+                    target_addr = staking_addr
+                    fn = os.getenv("VVV_UNLOCK_FN") or fn
+            except Exception:
+                pass
+        if not target:
+            raise FileNotFoundError("No contract available for unlock_svvv (diem or staking)")
+        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        tx_hash = send_tx(target_addr, bytes.fromhex(data[2:]))
+        return {"status": "sent", "action": "unlock_svvv", "tx_hash": tx_hash}
+
     def trade(self, side: str, amount: int) -> Dict[str, Any]:
         if not self.router:
             raise EnvironmentError("ROUTER_ADDRESS must be set to trade")

@@ -21,6 +21,7 @@ class RiskPolicy:
     max_trade_units: int = 0
     slippage_bps_cap: int = 150  # 1.5% default cap
     _diem_decimals_cache: Optional[int] = None
+    max_stake_usd: Optional[float] = None
 
     @classmethod
     def from_env(cls) -> "RiskPolicy":
@@ -47,6 +48,7 @@ class RiskPolicy:
             max_inventory_usd=_f("RISK_MAX_DIEM_INVENTORY_USD", 100_000.0),
             max_trade_units=_i("RISK_MAX_DIEM_TRADE_UNITS", 0),
             slippage_bps_cap=_i("RISK_MAX_SLIPPAGE_BPS", 150),
+            max_stake_usd=_f("RISK_MAX_STAKE_USD", 0.0) or None,
         )
 
     # --- helpers ---
@@ -158,6 +160,41 @@ class RiskPolicy:
         usdc_usd = (float(usdc_units) / u_dec) * usdc_px
         total = diem_usd + vvv_usd + usdc_usd
         return total, {"DIEM": diem_usd, "VVV": vvv_usd, "USDC": usdc_usd}
+
+    # --- staking caps ---
+    def max_stake(
+        self,
+        vvv_price_usd: float,
+        *,
+        current_staked_usd: Optional[float] = None,
+        vvv_decimals: int = 18,
+    ) -> int:
+        """Return max additional VVV units (base) allowed to stake by USD cap.
+
+        Uses env RISK_MAX_STAKE_USD when provided; otherwise falls back to max_inventory_usd.
+        """
+        if vvv_price_usd <= 0:
+            return 0
+        cap_usd = float(self.max_stake_usd) if (self.max_stake_usd is not None) else float(self.max_inventory_usd)
+        remaining = cap_usd
+        if current_staked_usd is not None:
+            remaining = max(0.0, cap_usd - float(current_staked_usd))
+        tokens = remaining / float(vvv_price_usd)
+        return int(tokens * (10 ** int(vvv_decimals)))
+
+    def max_stake_from_prices(
+        self,
+        prices_usd: Dict[str, float],
+        *,
+        current_staked_units: int = 0,
+        vvv_decimals: int = 18,
+    ) -> int:
+        """Convenience wrapper to compute max stake from price map and current units."""
+        vvv_px = float(prices_usd.get("VVV", 0.0) or 0.0)
+        if vvv_px <= 0:
+            return 0
+        cur_usd = (float(current_staked_units) / float(10 ** int(vvv_decimals))) * vvv_px
+        return self.max_stake(vvv_px, current_staked_usd=cur_usd, vvv_decimals=vvv_decimals)
 
     # --- slippage ---
     def check_slippage(self, exec_price: float, ref_price: float) -> Dict[str, float | bool]:

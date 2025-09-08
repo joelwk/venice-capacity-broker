@@ -267,8 +267,12 @@ class MarketDataProvider:
         if len(path) < 2:
             return None
         try:
-            from services.marketdata.etherscan_verify import verify_trade_path, get_reserves, get_token0, get_token1
-            from web3 import Web3  # type: ignore
+            from services.marketdata.etherscan_verify import (
+                verify_trade_path,
+                get_reserves,
+                get_token0,
+                get_token1,
+            )
         except Exception:
             return None
         tbps = take_bps
@@ -300,12 +304,17 @@ class MarketDataProvider:
             t1 = uv2.get("token1") or get_token1(pair)
             if not t0 or not t1:
                 return None
-            t0 = Web3.to_checksum_address(str(t0))
-            t1 = Web3.to_checksum_address(str(t1))
-            inp = Web3.to_checksum_address(path[0])
-            if inp == t0:
+            # Normalize addresses without requiring web3 dependency
+            def _norm(a: str) -> str:
+                a = str(a).strip()
+                return ("0x" + a.lower().removeprefix("0x")) if a else ""
+
+            t0_n = _norm(str(t0))
+            t1_n = _norm(str(t1))
+            inp_n = _norm(path[0])
+            if inp_n == t0_n:
                 reserve_in = int(rez[0])
-            elif inp == t1:
+            elif inp_n == t1_n:
                 reserve_in = int(rez[1])
             else:
                 # If input is neither token0 nor token1, cannot map reliably
