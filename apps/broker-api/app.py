@@ -4,11 +4,13 @@ from apps._path import add_repo_root_to_sys_path
 
 add_repo_root_to_sys_path()
 
-# Ensure local .env is loaded for Replit/shell runs
+# Ensure local .env is loaded for Replit/shell runs (without overriding Replit secrets)
 try:
     from libs.env import load_dotenv_if_present  # type: ignore
+    from pathlib import Path as _PathRoot
 
-    load_dotenv_if_present()
+    _repo_root = _PathRoot(__file__).resolve().parents[2]
+    load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
 except Exception:
     pass
 

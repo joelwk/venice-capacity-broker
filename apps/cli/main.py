@@ -15,14 +15,15 @@ from apps._path import add_repo_root_to_sys_path
 add_repo_root_to_sys_path()
 
 # Load .env early so CLI subcommands see expected environment
+# Use repo root .env explicitly so CWD does not matter
 try:
     from libs.env import load_dotenv_if_present  # type: ignore
-    load_dotenv_if_present()
+    load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
 except Exception:
-    # Fallback: try direct dotenv loading
+    # Fallback: try direct dotenv loading at repo root
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(dotenv_path=str(_repo_root / ".env"), override=False)
     except Exception:
         pass
 
