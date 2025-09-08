@@ -357,12 +357,13 @@ def cmd_venice_signals(args: argparse.Namespace) -> None:
     # DIEM via rate-limits balances/quotas
     try:
         limits = client.get_rate_limits()
-        balances = (limits or {}).get("balances") or {}
-        out["diem"] = {
-            "balances": balances,
-            "diem": balances.get("DIEM") or balances.get("diem"),
-            "raw": limits,
-        }
+        obj = limits or {}
+        data = obj.get("data") if isinstance(obj, dict) else None
+        if isinstance(data, dict):
+            balances = data.get("balances") or {}
+        else:
+            balances = obj.get("balances") or {}
+        out["diem"] = {"balances": balances, "diem": balances.get("DIEM") or balances.get("diem"), "raw": limits}
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to fetch DIEM balance/quota: {e}")
     logger.info(f"signals: {out}")

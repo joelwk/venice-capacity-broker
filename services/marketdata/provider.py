@@ -209,14 +209,15 @@ class MarketDataProvider:
         for i in range(retries + 1):
             try:
                 limits = client.get_rate_limits()
-                # Normalize a compact shape for consumers
-                balances = (limits or {}).get("balances") or {}
+                # Normalize a compact shape for consumers; handle top-level or {data:{balances}}
+                obj = limits or {}
+                data = obj.get("data") if isinstance(obj, dict) else None
+                if isinstance(data, dict):
+                    balances = data.get("balances") or {}
+                else:
+                    balances = obj.get("balances") or {}
                 diem_bal = balances.get("DIEM") or balances.get("diem")
-                summary = {
-                    "balances": balances,
-                    "diem": diem_bal,
-                    "raw": limits,
-                }
+                summary = {"balances": balances, "diem": diem_bal, "raw": limits}
                 self._diem_balance_cache, self._diem_balance_cache_t = summary, time.time()
                 return summary
             except Exception as e:  # noqa: BLE001
