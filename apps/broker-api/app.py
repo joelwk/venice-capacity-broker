@@ -526,6 +526,14 @@ try:
             "vvv_util": (_os.getenv("VENICE_VVV_UTIL_PATH") or "/vvv/utilization"),
             "vvv_yield": (_os.getenv("VENICE_VVV_YIELD_PATH") or "/vvv/staking_yield"),
         }
+        ven_key_paths = {
+            "create_subkey": (_os.getenv("VENICE_CREATE_SUBKEY_PATH") or "/api_keys"),
+            "create_root": (_os.getenv("VENICE_CREATE_ROOT_PATH") or "/api_keys/generate_web3_key"),
+            "challenge": (_os.getenv("VENICE_CHALLENGE_PATH") or "/api_keys/generate_web3_key"),
+            "revoke": (_os.getenv("VENICE_REVOKE_KEY_PATH") or "/api_keys/{key_id}"),
+            "rate_limits": (_os.getenv("VENICE_RATE_LIMITS_PATH") or "/api_keys/rate_limits"),
+            "usage": (_os.getenv("VENICE_USAGE_PATH") or "/api_keys/rate_limits/log"),
+        }
         ven_key = (_os.getenv("VENICE_API_KEY") or "").strip()
         ven_headers = {"Content-Type": "application/json"}
         if ven_key:
@@ -608,6 +616,7 @@ try:
 
         venice_cfg = {
             "baseUrl": ven_base or None,
+            "modelsPath": ven_paths["models"],
             "vvvPath": ven_paths["vvv"],
             "offlineSignals": ((_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}),
             "ready": bool(ven_ready),
@@ -617,6 +626,7 @@ try:
                 "models": _reason(models_ok, models_code),
                 "vvv": _reason(vvv_ok, vvv_code if vvv_ok else (vvv_circ_code or vvv_util_code or vvv_yield_code)),
             },
+            "keyPaths": ven_key_paths,
         }
 
         # Public env snapshot (web3/dex/pricing/abi)
