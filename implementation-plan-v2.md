@@ -8,10 +8,10 @@
 2. **Core Services**
 
    * **Staking service**: provides `approve`, `stake`, `claim`, `unstake` and status queries; uses AgentKit to interact with the VVV staking contract.
-   * **Market data service**: retrieves VVV metrics (circulating supply, network utilization, staking yield) and DIEM balances from Venice API.  Quotes prices using DEX aggregator across Uniswap V2 and Aerodrome.
-   * **Venice SDK & Key manager**: supports model listing, rate-limit queries, API key and subkey creation/revocation.
-   * **DEX aggregator**: abstracts trading/price quoting across Uniswap V2 and Aerodrome with slippage control.
-   * **DIEM service (scaffold)**: defines interfaces for mint and burn, though on-chain logic is not yet implemented.
+   * **Market data service**: fetches VVV metrics via explicit endpoints (`/vvv/circulatingsupply`, `/vvv/utilization`, `/vvv/staking_yield`) and DIEM balances/rate limits via `GET /api_keys/rate_limits` (no `/diem` signals). Prices/quotes come from the DEX aggregator.
+   * **Venice SDK & Key manager**: supports model listing, rate-limit queries, API key and subkey creation/revocation; paths are env‑overridable.
+   * **DEX aggregator**: UniswapV2 supports exact‑in and exact‑out; Aerodrome exact‑out is intentionally disabled. FOT fallback and slippage guards enforced.
+   * **DIEM service**: on‑chain mint/burn wired via AgentKit actions, with optional sVVV capacity gate; emits telemetry; integrates with risk sizing.
 
 3. **Broker API & CLI**
 
@@ -58,8 +58,8 @@
 
 4. **Pool & Liquidity Discovery**
 
-   * Use Etherscan v2 (`chainid=8453`) to query Uniswap and Aerodrome factories (`getPair`) and read reserves (`getReserves`); build a local cache of DIEM/USDC and VVV/DIEM pool liquidity.
-   * Integrate liquidity data into pricing and risk calculations.
+   * Implemented via Etherscan v2 (`chainid=8453`) helper using `proxy/eth_call` for `getPair`/`getReserves`; local cache populated for DIEM↔WETH and WETH↔USDC.
+   * CLI `startup:probe` warms the cache and prints a compact report; `quotes:preview` shows reserve‑cap and slippage reasoning.
 
 5. **On-chain Event Watchers**
 
@@ -67,9 +67,28 @@
 
 6. **Broker API Enhancements**
 
+   * Ensure `.replit` installs required extras (`--extra broker --extra web3 --extra agentkit`) so DEX/web3 stay installed across restarts.
    * Implement dynamic quotas and DIEM‑denominated pricing; support tenant self‑service adjustments; add key rotation and expiry notifications.
 
 7. **Additional Tests & Documentation**
 
-   * Extend test suite to cover DIEM mint/burn flows, risk-driven trade sizing, dynamic pricing and quorum logic.
-   * Update README, AGENTS.md and runbooks with tokenomics details, Etherscan v2 setup instructions and usage of new risk/pool discovery features.
+   * Extend test suite for: UniswapV2 exact‑out, Aerodrome exact‑in fallback, DIEM mint/burn sVVV gate, reserve‑cap sizing and risk integration, orchestrator persistence.
+   * Update README/AGENTS.md with: Venice path rules (no `/diem`), Base Etherscan v2 setup, DEX constraints (Aerodrome exact‑out disabled), Replit runbook, and recommended `RISK_MAX_POOL_TAKE_BPS` defaults.
+
+---
+
+## 🔧 Environment Defaults (Updated)
+
+- `TRADE_PATH` should be multi‑hop on Base for DIEM pricing: `DIEM -> WETH -> USDC`.
+- Set `RISK_MAX_POOL_TAKE_BPS` (e.g., 25) to cap input to a conservative fraction of first‑hop reserves when pools are shallow.
+- Keep `.replit` uv sync extras as `--extra broker --extra web3 --extra agentkit` to persist DEX/web3 across restarts.
+
+---
+
+## ▶️ Operational Notes (v1)
+
+- Aerodrome exact‑out is skipped by design; UniswapV2 handles exact‑out (buy). Exact‑in sells supported on both; FOT fallback enabled.
+- CLI probes:
+  - `venice:signals` → VVV metrics + DIEM balances via `rate_limits`.
+  - `startup:probe` → warms liquidity cache (Etherscan v2) and prints pairs/reserves.
+  - `quotes:preview` → prints reserve‑cap and slippage reasoning; Aerodrome exact‑out skip noted.
