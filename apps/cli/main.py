@@ -751,6 +751,26 @@ def cmd_market_diem(args: argparse.Namespace) -> None:
     logger.info(f"diem_balance: {res}")
 
 
+def cmd_diem_mint(args: argparse.Namespace) -> None:
+    """Mint DIEM via DIEMService with optional dry-run and idempotency."""
+    from services.diem.client import DIEMService
+
+    svc = DIEMService()
+    amount = int(args.amount)
+    res = svc.mint(amount, dry_run=bool(args.dry_run), idem_key=args.idem_key, corr_id=args.corr_id)
+    logger.info(f"diem:mint amount={amount} dry_run={args.dry_run} res={res}")
+
+
+def cmd_diem_burn(args: argparse.Namespace) -> None:
+    """Burn DIEM via DIEMService with optional dry-run and idempotency."""
+    from services.diem.client import DIEMService
+
+    svc = DIEMService()
+    amount = int(args.amount)
+    res = svc.burn(amount, dry_run=bool(args.dry_run), idem_key=args.idem_key, corr_id=args.corr_id)
+    logger.info(f"diem:burn amount={amount} dry_run={args.dry_run} res={res}")
+
+
 def cmd_ci_gate(args: argparse.Namespace) -> None:
     """CI/Health gate: validates readiness and prod defaults.
 
@@ -939,6 +959,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("market:diem", help="Fetch DIEM signals via Venice API")
     sp.set_defaults(func=cmd_market_diem)
+
+    # DIEM direct actions (base units)
+    sp = sub.add_parser("diem:mint", help="Mint DIEM (amount in base units); honors capacity gate if enabled")
+    sp.add_argument("amount", type=int, help="Amount in base units (respecting DIEM_DECIMALS)")
+    sp.add_argument("--dry-run", action="store_true", default=False, help="Do not send transaction; print intended action")
+    sp.add_argument("--idem-key", dest="idem_key", default=None, help="Idempotency key to suppress duplicates")
+    sp.add_argument("--corr-id", dest="corr_id", default=None, help="Correlation ID for telemetry")
+    sp.set_defaults(func=cmd_diem_mint)
+
+    sp = sub.add_parser("diem:burn", help="Burn DIEM (amount in base units)")
+    sp.add_argument("amount", type=int, help="Amount in base units (respecting DIEM_DECIMALS)")
+    sp.add_argument("--dry-run", action="store_true", default=False, help="Do not send transaction; print intended action")
+    sp.add_argument("--idem-key", dest="idem_key", default=None, help="Idempotency key to suppress duplicates")
+    sp.add_argument("--corr-id", dest="corr_id", default=None, help="Correlation ID for telemetry")
+    sp.set_defaults(func=cmd_diem_burn)
 
     # Quotes preview to exercise liquidity-aware metrics without trading
     def cmd_quotes_preview(args: argparse.Namespace) -> None:
