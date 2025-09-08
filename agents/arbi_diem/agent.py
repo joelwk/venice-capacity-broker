@@ -171,6 +171,21 @@ class ArbiDiem:
         if market_price > fair * threshold_mult:  # premium over threshold
             # Risk-gated sizing (utilization/vol-aware if available)
             want = int(desired_units) if desired_units is not None else self._desired_units()
+            # Optional pool reserve cap (best-effort)
+            reserve_cap: int | None = None
+            pool_take_bps: int | None = None
+            try:
+                from services.marketdata.provider import MarketDataProvider  # lazy import
+
+                md = MarketDataProvider()
+                path = self.diem._path_from_env()
+                try:
+                    pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+                except Exception:
+                    pool_take_bps = 100
+                reserve_cap = md.reserve_cap_units(path, take_bps=pool_take_bps)
+            except Exception:
+                reserve_cap = None
             try:
                 suggested = self.risk.size_with_risk(
                     want,
@@ -178,10 +193,18 @@ class ArbiDiem:
                     current_inventory_usd=current_inventory_usd,
                     utilization_ratio=utilization_ratio,
                     vol_bps=vol_bps,
+                    reserve_cap_units=reserve_cap,
                 )
             except Exception:
                 suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
-            rationale.update({"desired_units": int(want), "suggested_units": int(suggested)})
+            rationale.update({
+                "desired_units": int(want),
+                "suggested_units": int(suggested),
+                "reserve_cap_units": (int(reserve_cap) if isinstance(reserve_cap, int) else None),
+                "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
+                "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
+                "vol_bps": (float(vol_bps) if vol_bps is not None else None),
+            })
             if suggested <= 0:
                 logger.info("Risk rejected mint/trade (suggested=0)")
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})

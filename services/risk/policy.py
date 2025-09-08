@@ -274,8 +274,9 @@ class RiskPolicy:
         current_inventory_usd: Optional[float] = None,
         utilization_ratio: Optional[float] = None,
         vol_bps: Optional[float] = None,
+        reserve_cap_units: Optional[int] = None,
     ) -> int:
-        """Combined sizing: base gate -> utilization multiplier -> volatility cap.
+        """Combined sizing: base gate -> utilization multiplier -> volatility cap -> reserve cap.
 
         Returns non-negative int units.
         """
@@ -290,4 +291,10 @@ class RiskPolicy:
             sized = int(base)
         # Volatility cap
         sized2 = self.cap_by_volatility(sized, vol_bps)
+        # Optional pool reserve cap
+        if reserve_cap_units is not None and int(reserve_cap_units) >= 0:
+            try:
+                sized2 = min(int(sized2), int(reserve_cap_units))
+            except Exception:
+                pass
         return max(0, int(sized2))

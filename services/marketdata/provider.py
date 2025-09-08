@@ -272,6 +272,7 @@ class MarketDataProvider:
                 get_reserves,
                 get_token0,
                 get_token1,
+                get_cached_pair_info_for_tokens,
             )
         except Exception:
             return None
@@ -284,24 +285,39 @@ class MarketDataProvider:
         tbps = int(tbps)
         if tbps <= 0:
             return None
-        disc = verify_trade_path(path)
-        if not disc or not isinstance(disc, dict):
-            return None
-        hops = disc.get("hops") or []
-        if not hops:
-            return None
-        hop0 = hops[0] or {}
-        uv2 = hop0.get("uniswap_v2") or {}
-        pair = uv2.get("pair")
+        # Try cache first for (token_in -> token_out)
+        pair = None
+        rez = None
+        t0 = None
+        t1 = None
+        try:
+            cached = get_cached_pair_info_for_tokens(path[0], path[1])
+            if isinstance(cached, dict):
+                pair = cached.get("pair")
+                rez = cached.get("reserves")
+                t0 = cached.get("token0")
+                t1 = cached.get("token1")
+        except Exception:
+            pass
         if not pair:
-            return None
+            disc = verify_trade_path(path)
+            if not disc or not isinstance(disc, dict):
+                return None
+            hops = disc.get("hops") or []
+            if not hops:
+                return None
+            hop0 = hops[0] or {}
+            uv2 = hop0.get("uniswap_v2") or {}
+            pair = uv2.get("pair")
+            if not pair:
+                return None
         # Fetch reserves and token0/1 to map to the input token
         try:
-            rez = uv2.get("reserves") or get_reserves(pair)
+            rez = rez or uv2.get("reserves") or get_reserves(pair)
             if not isinstance(rez, tuple) or len(rez) < 2:
                 return None
-            t0 = uv2.get("token0") or get_token0(pair)
-            t1 = uv2.get("token1") or get_token1(pair)
+            t0 = t0 or uv2.get("token0") or get_token0(pair)
+            t1 = t1 or uv2.get("token1") or get_token1(pair)
             if not t0 or not t1:
                 return None
             # Normalize addresses without requiring web3 dependency

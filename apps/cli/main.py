@@ -1006,8 +1006,24 @@ def build_parser() -> argparse.ArgumentParser:
             return
         svc = DIEMService(build_aggregator_from_env())
         arbi = ArbiDiem(diem=svc, risk=risk)
+        # Reserve-cap sizing (best-effort)
+        try:
+            cap_bps = int((os.getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+        except Exception:
+            cap_bps = 100
+        md2 = MarketDataProvider()
+        cap_units = md2.reserve_cap_units(path, take_bps=cap_bps)
+        if isinstance(cap_units, int) and cap_units > 0:
+            logger.info(f"reserve-cap: take_bps={cap_bps} units_cap={cap_units}")
+            units = min(units, cap_units)
         adjusted, last_bps = arbi._adjust_for_liquidity(units, px)  # noqa: SLF001
-        logger.info(f"preview: price={px:.6f} desired_units={units} adjusted_units={adjusted} slippage_bps={last_bps}")
+        logger.info(
+            "preview: price=%.6f desired_units=%d adjusted_units=%d slippage_bps=%s note='Aerodrome exact-out disabled'",
+            px,
+            units,
+            adjusted,
+            last_bps,
+        )
 
     sp = sub.add_parser(
         "quotes:preview",
@@ -1110,11 +1126,38 @@ def build_parser() -> argparse.ArgumentParser:
             return
         path = [p.strip() for p in tp.split(",") if p.strip()]
         try:
-            from services.marketdata.etherscan_verify import verify_trade_path, format_report  # type: ignore
+            from services.marketdata.etherscan_verify import (
+                warm_cache_for_path,
+                format_report,  # type: ignore
+                get_liquidity_cache_summary,
+            )
 
-            res = verify_trade_path(path)
+            res = warm_cache_for_path(path)
             report = format_report(res)
             print(report)
+            # Print a compact cache summary with common labels when possible
+            try:
+                sym = {
+                    "DIEM": (os.getenv("DIEM_TOKEN_ADDRESS") or "").lower(),
+                    "VVV": (os.getenv("VVV_TOKEN_ADDRESS") or "").lower(),
+                    "USDC": (os.getenv("QUOTE_TOKEN_ADDRESS") or "").lower(),
+                }
+                cache = get_liquidity_cache_summary()
+                # Annotate token keyed entries with symbols for readability
+                annotated = {}
+                for k, v in (cache.get("by_tokens") or {}).items():
+                    try:
+                        a, b = k.split("->", 1)
+                        la = next((n for n, addr in sym.items() if addr and addr == a.lower()), a)
+                        lb = next((n for n, addr in sym.items() if addr and addr == b.lower()), b)
+                        annotated[f"{la}->{lb}"] = v
+                    except Exception:
+                        annotated[k] = v
+                print("Cache by_tokens:")
+                for k, v in annotated.items():
+                    print(f" - {k}: pair={v.get('pair')} has_reserves={v.get('has_reserves')}")
+            except Exception:
+                pass
         except Exception as e:  # noqa: BLE001
             logger.warning(f"startup probe failed: {e}")
 

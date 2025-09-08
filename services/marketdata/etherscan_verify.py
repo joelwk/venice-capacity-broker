@@ -5,6 +5,7 @@ import textwrap
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import time
 
 
 ETHERSCAN_API_URL_DEFAULT = "https://api.etherscan.io/v2/api"
@@ -176,6 +177,11 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
                         rec["uniswap_v2"]["token0"] = t0
                     if t1:
                         rec["uniswap_v2"]["token1"] = t1
+                    # Update local liquidity cache (best-effort)
+                    try:
+                        _cache_update_tokens(a, b, p, rec["uniswap_v2"].get("reserves"), t0, t1)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
         except Exception:
@@ -202,6 +208,101 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
         "path": path,
         "hops": hops,
     }
+
+# --- Lightweight liquidity cache (best-effort) ---
+_LIQ_CACHE: Dict[str, Any] = {
+    "by_pair": {},        # pair_addr(lower) -> {"reserves": (r0,r1,ts), "token0": addr, "token1": addr, "cached_at": epoch}
+    "by_tokens": {},      # (a.lower(), b.lower()) -> {"pair": addr, "reserves": (..), "cached_at": epoch}
+}
+
+def _norm(a: Optional[str]) -> str:
+    if not a:
+        return ""
+    s = str(a).strip().lower()
+    return "0x" + s.removeprefix("0x") if s else ""
+
+def _cache_update_pair(pair: str, reserves: Optional[tuple[int,int,int]] = None, token0: Optional[str] = None, token1: Optional[str] = None) -> None:
+    try:
+        p = _norm(pair)
+        if not p:
+            return
+        ent = _LIQ_CACHE["by_pair"].setdefault(p, {})
+        if isinstance(reserves, tuple) and len(reserves) >= 2:
+            ent["reserves"] = reserves
+        if token0:
+            ent["token0"] = _norm(token0)
+        if token1:
+            ent["token1"] = _norm(token1)
+        ent["cached_at"] = int(time.time())
+    except Exception:
+        return
+
+def _cache_update_tokens(a: str, b: str, pair: Optional[str], reserves: Optional[tuple[int,int,int]], token0: Optional[str], token1: Optional[str]) -> None:
+    try:
+        if not pair:
+            return
+        p = _norm(pair)
+        _cache_update_pair(p, reserves, token0, token1)
+        k = (_norm(a), _norm(b))
+        _LIQ_CACHE["by_tokens"][k] = {"pair": p, "reserves": reserves, "cached_at": int(time.time())}
+    except Exception:
+        return
+
+def warm_cache_for_path(path: List[str]) -> Dict[str, Any]:
+    """Populate cache entries for the given path via verify_trade_path.
+
+    Returns the same structure as verify_trade_path and updates cache.
+    """
+    res = verify_trade_path(path)
+    # verify_trade_path already updates cache for UniswapV2 entries; ensure Aerodrome too
+    try:
+        for hop in res.get("hops", []) or []:
+            for key in ("aerodrome_vol", "aerodrome_stable"):
+                ent = hop.get(key) or {}
+                p = ent.get("pair")
+                if p and ent.get("reserves"):
+                    _cache_update_pair(p, ent.get("reserves"))
+    except Exception:
+        pass
+    return res
+
+def get_cached_pair_info_for_tokens(a: str, b: str) -> Optional[Dict[str, Any]]:
+    """Return cached info for token pair (a->b) if available.
+
+    Keys: pair, reserves, token0, token1
+    """
+    try:
+        k = (_norm(a), _norm(b))
+        ent = _LIQ_CACHE["by_tokens"].get(k)
+        if not ent:
+            return None
+        out: Dict[str, Any] = {"pair": ent.get("pair"), "reserves": ent.get("reserves")}
+        # Enrich from by_pair
+        try:
+            p = _norm(ent.get("pair"))
+            bp = _LIQ_CACHE["by_pair"].get(p) or {}
+            if bp:
+                if bp.get("token0"):
+                    out["token0"] = bp.get("token0")
+                if bp.get("token1"):
+                    out["token1"] = bp.get("token1")
+        except Exception:
+            pass
+        return out
+    except Exception:
+        return None
+
+def get_liquidity_cache_summary() -> Dict[str, Any]:
+    """Return a compact snapshot of the current liquidity cache."""
+    try:
+        by_tokens = {
+            f"{k[0]}->{k[1]}": {"pair": v.get("pair"), "has_reserves": bool(v.get("reserves"))}
+            for k, v in _LIQ_CACHE.get("by_tokens", {}).items()
+        }
+        by_pair = {p: {"has_reserves": bool(v.get("reserves"))} for p, v in _LIQ_CACHE.get("by_pair", {}).items()}
+        return {"by_tokens": by_tokens, "by_pair": by_pair}
+    except Exception:
+        return {"by_tokens": {}, "by_pair": {}}
 
 
 def format_report(result: Dict[str, Any]) -> str:

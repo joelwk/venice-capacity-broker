@@ -8,6 +8,21 @@ from typing import Dict, List, Optional, Tuple
 from libs.agentkit_ext.web3_utils import get_contract, get_web3
 from libs.agentkit_ext.agentkit_wallet import get_address, send_tx
 try:
+    from libs.telemetry.logger import get_logger  # type: ignore
+    _logger = get_logger("dex.agg")
+except Exception:  # noqa: BLE001
+    class _L:  # minimal stub
+        def info(self, *args, **kwargs):
+            return
+
+        def debug(self, *args, **kwargs):
+            return
+
+        def warning(self, *args, **kwargs):
+            return
+
+    _logger = _L()  # type: ignore[assignment]
+try:
     from libs.telemetry.metrics import inc as _metrics_inc
 except Exception:  # noqa: BLE001
     def _metrics_inc(name: str, value: int = 1, labels: dict | None = None) -> None:  # type: ignore
@@ -552,6 +567,15 @@ class DexAggregator:
                     pass
                 continue
             if p.name == "aerodrome":
+                # Aerodrome exact-out intentionally disabled (ABI getAmountsIn unavailable)
+                try:
+                    _metrics_inc("dex_exact_out_skipped_total", labels={"provider": p.name})
+                except Exception:
+                    pass
+                try:
+                    _logger.info("exact-out: skipping Aerodrome (design limitation)")
+                except Exception:
+                    pass
                 continue
             try:
                 q = p.quote_exact_out(amount_out, path)
