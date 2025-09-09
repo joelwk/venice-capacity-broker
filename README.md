@@ -95,6 +95,9 @@ DIEM on-chain actions (live):
   - Burn: `python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run] [--idem-key K] [--corr-id ID]`
 - Optional sVVV capacity gate and lock/unlock hooks can be enabled via env (see DIEM mint/burn gate below).
 
+Buy/burn on discount:
+- When market price falls sufficiently below fair value, ArbiDiem can buy DIEM on the reversed `TRADE_PATH` (e.g., `USDC -> WETH -> DIEM`) using exact‑out quotes and then burn those units, honoring the same risk and slippage caps.
+
 Risk policy:
 - Configure DIEM trade sizing and exposure limits via env:
   - `RISK_MAX_DIEM_TRADE_USD` (default 10000)

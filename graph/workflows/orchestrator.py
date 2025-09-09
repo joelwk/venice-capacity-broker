@@ -183,9 +183,19 @@ class Orchestrator:
                 decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                     px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=current_inventory_usd
                 )
+        # Prefer agent-provided decision label when available
+        last_why = getattr(self.arbi, "_last_rationale", None)
+        action_label = None
+        try:
+            if isinstance(last_why, dict):
+                lbl = last_why.get("decision")
+                if isinstance(lbl, str) and lbl:
+                    action_label = lbl
+        except Exception:
+            action_label = None
         record = {
             "agent": "arbi_diem",
-            "action": "mint_sell" if decision else "hold",
+            "action": action_label or ("mint_sell" if decision else "hold"),
             "price": px,
             "inventoryUsd": current_inventory_usd,
             "dry_run": dry_run,

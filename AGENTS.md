@@ -7,6 +7,13 @@ This document describes the production v1 agents, their responsibilities, depend
 - Planning baseline and tie-breaker: `implementation-plan.md`
 - Venice API configuration rules: `.cursor/rules/venice-api-config.mdc`
 
+## WRITING STYLE
+- Each long sentence should be followed by **two newline characters**.
+- Avoid long bullet lists.
+- Write in **natural, plain English**. Be conversational.
+- Avoid overly complex language and super-long sentences.
+- Use **simple & easy-to-understand language**. Be concise.
+
 ## Shared prerequisites
 
 ### Environment
@@ -69,6 +76,7 @@ This document describes the production v1 agents, their responsibilities, depend
     uv run python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run]
     ```
     Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`. Optional sVVV capacity gate and lock/unlock hooks via env.
+  - Discount handling: When price is sufficiently below fair value, ArbiDiem can buy DIEM (exact‑out on the reversed TRADE_PATH) and burn it, with the same risk and slippage guards applied.
 
 - CapacityBroker (minimal issuance)
   - Purpose: Issue scoped sub-keys with `consumptionLimit` and `expiresAt` for tenants; supports multi-tenant resale through Broker API.
@@ -174,6 +182,11 @@ uv run pytest -q
 - Risk & sizing defaults
   - Cap input against first-hop reserves with `RISK_MAX_POOL_TAKE_BPS` (e.g., 25 = 0.25%).
   - Slippage cap defaults to 150 bps; adjust via `RISK_MAX_SLIPPAGE_BPS`.
+  
+## OUTPUT STYLE
+- Write in complete, clear sentences. Like a **Senior Developer** mentoring a **Junior Engineer**.
+- Always provide enough context for the User to understand — in a **simple & short way**.
+- Clearly explain your **assumptions** and your **conclusions**.
 
 ## Known ambiguities and follow-ups
 

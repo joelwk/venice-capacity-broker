@@ -178,12 +178,13 @@ class DIEMACTIONS:
         path_env = os.getenv("TRADE_PATH")
         if not path_env:
             raise EnvironmentError("TRADE_PATH must be set (comma-separated addresses)")
-        path: List[str] = [Web3.to_checksum_address(p.strip()) for p in path_env.split(",")]
+        raw_path: List[str] = [Web3.to_checksum_address(p.strip()) for p in path_env.split(",")]
         if side.lower() not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
-        # For 'sell': amount is amountIn (path[0] units)
-        # For 'buy': amount is desired amountOut (path[-1] units)
+        # For 'sell': amount is amountIn (path[0] units) using TRADE_PATH as-is (e.g., DIEM->...->USDC)
+        # For 'buy': amount is desired amountOut (DIEM units). Use reversed path (e.g., USDC->...->DIEM).
         if side.lower() == "buy":
+            path: List[str] = list(reversed(raw_path))
             # Approve router to spend up to maxIn (computed below) of input token
             erc20_in = get_contract(self.w3, path[0], "erc20.json")
             # Determine required amountIn via getAmountsIn
@@ -211,6 +212,7 @@ class DIEMACTIONS:
             }
 
         # Approve router to spend the input token
+        path = raw_path
         erc20_in = get_contract(self.w3, path[0], "erc20.json")
         approve_data = erc20_in.encode_abi(
             fn_name="approve", args=[self.router.address, amount]

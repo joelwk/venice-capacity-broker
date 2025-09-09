@@ -62,6 +62,43 @@ class ArbiDiem:
         except Exception:
             return 0.0
 
+    def _erc20_decimals(self, address: str) -> int:
+        try:
+            from libs.agentkit_ext.web3_utils import get_contract, get_web3
+            from web3 import Web3  # type: ignore
+
+            w3 = get_web3()
+            erc20 = get_contract(w3, Web3.to_checksum_address(address), "erc20.json")
+            return int(erc20.functions.decimals().call())
+        except Exception:
+            return 18
+
+    def _preview_exec_price_buy(self, units_out: int) -> float:
+        """Quote execution price (USD per DIEM) for exact-out buy of DIEM units.
+
+        Uses aggregator.best_quote_exact_out on the reversed TRADE_PATH (QUOTE->...->DIEM).
+        Returns 0.0 when unavailable.
+        """
+        try:
+            if self.diem.aggregator is None:
+                return 0.0
+            # Build reversed path so output is DIEM
+            path = list(reversed(self.diem._path_from_env()))
+            q = self.diem.aggregator.best_quote_exact_out(units_out, path)  # type: ignore[attr-defined]
+            if q is None:
+                return 0.0
+            # Input is QUOTE token (e.g., USDC), output is DIEM
+            dec_in = self._erc20_decimals(path[0])
+            dec_out = self.risk._diem_decimals()
+            amt_in = q.amount_in / float(10 ** dec_in)
+            amt_out = q.amount_out / float(10 ** dec_out)
+            if amt_out <= 0:
+                return 0.0
+            # USD per DIEM
+            return float(amt_in / amt_out)
+        except Exception:
+            return 0.0
+
     def _slippage_bucket(self, bps: float) -> str:
         try:
             s = float(bps)
@@ -131,6 +168,60 @@ class ArbiDiem:
                     break
             except Exception:
                 pass
+        try:
+            _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "true"})
+            _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(last_bps if last_bps is not None else float("inf"))})
+        except Exception:
+            pass
+        return int(max(0, adjusted)), last_bps
+
+    def _check_slippage_buy(self, exec_price: float, ref_price: float) -> dict:
+        try:
+            if ref_price <= 0 or exec_price <= 0:
+                return {"ok": False, "slippage_bps": float("inf")}
+            slip = max(0.0, (exec_price - ref_price) / ref_price * 10_000.0)
+            return {"ok": slip <= float(self.risk.slippage_bps_cap), "slippage_bps": float(slip)}
+        except Exception:
+            return {"ok": False, "slippage_bps": float("inf")}
+
+    def _adjust_for_liquidity_buy(self, units_out: int, market_price: float) -> tuple[int, float | None]:
+        """Reduce DIEM units to buy until preview slippage is within cap using exact-out quotes.
+
+        Returns (adjusted_units_out, last_slippage_bps or None if no preview).
+        """
+        if units_out <= 0 or market_price <= 0:
+            return 0, None
+        exec_px = self._preview_exec_price_buy(units_out)
+        if exec_px <= 0:
+            return units_out, None
+        slip = self._check_slippage_buy(exec_px, market_price)
+        bps = float(slip.get("slippage_bps", 0.0)) if isinstance(slip, dict) else 0.0
+        if bool(slip.get("ok", False)):
+            try:
+                _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "false"})
+                _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(bps)})
+            except Exception:
+                pass
+            return int(units_out), bps
+        adjusted = int(units_out)
+        last_bps = bps
+        for _ in range(6):
+            adjusted = max(0, adjusted // 2)
+            if adjusted <= 0:
+                break
+            px = self._preview_exec_price_buy(adjusted)
+            if px <= 0:
+                break
+            slip2 = self._check_slippage_buy(px, market_price)
+            bps2 = float(slip2.get("slippage_bps", 0.0)) if isinstance(slip2, dict) else float("inf")
+            last_bps = bps2
+            if bool(slip2.get("ok", False)):
+                try:
+                    _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "true"})
+                    _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(bps2)})
+                except Exception:
+                    pass
+                return int(adjusted), bps2
         try:
             _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "true"})
             _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(last_bps if last_bps is not None else float("inf"))})
@@ -233,6 +324,70 @@ class ArbiDiem:
             if not simulate:
                 self.diem.mint(suggested, corr_id=corr_id)
                 self.diem.trade("sell", suggested, corr_id=corr_id)
+            setattr(self, "_last_rationale", rationale)
+            return True
+        # Discount branch: consider buy and burn when price is sufficiently below fair
+        if fair > 0 and market_price < (fair / threshold_mult):
+            want = int(desired_units) if desired_units is not None else self._desired_units()
+            # Reserve cap for reversed path (QUOTE->...->DIEM)
+            reserve_cap: int | None = None
+            pool_take_bps: int | None = None
+            try:
+                from services.marketdata.provider import MarketDataProvider  # lazy import
+
+                md = MarketDataProvider()
+                path_buy = list(reversed(self.diem._path_from_env()))
+                try:
+                    pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+                except Exception:
+                    pool_take_bps = 100
+                reserve_cap = md.reserve_cap_units(path_buy, take_bps=pool_take_bps)
+            except Exception:
+                reserve_cap = None
+            try:
+                suggested = self.risk.size_with_risk(
+                    want,
+                    market_price,
+                    current_inventory_usd=current_inventory_usd,
+                    utilization_ratio=utilization_ratio,
+                    vol_bps=vol_bps,
+                    reserve_cap_units=reserve_cap,
+                )
+            except Exception:
+                suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
+            rationale.update({
+                "desired_units": int(want),
+                "suggested_units": int(suggested),
+                "reserve_cap_units": (int(reserve_cap) if isinstance(reserve_cap, int) else None),
+                "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
+                "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
+                "vol_bps": (float(vol_bps) if vol_bps is not None else None),
+            })
+            if suggested <= 0:
+                logger.info("Risk rejected buy/burn (suggested=0)")
+                rationale.update({"decision": "hold", "reason": "risk_rejected"})
+                setattr(self, "_last_rationale", rationale)
+                return False
+            adjusted, last_bps = self._adjust_for_liquidity_buy(suggested, market_price)
+            if last_bps is not None:
+                rationale.update({
+                    "slippage_bps": float(last_bps),
+                    "slippage_ok": bool(last_bps <= float(self.risk.slippage_bps_cap)),
+                })
+            if adjusted <= 0:
+                logger.info("Rejected buy due to liquidity/slippage after adjustment")
+                rationale.update({"decision": "hold", "reason": "slippage_exceeded"})
+                setattr(self, "_last_rationale", rationale)
+                return False
+            if adjusted != suggested:
+                rationale.update({"liquidity_adjusted_units": int(adjusted)})
+            suggested = adjusted
+            logger.info(f"Signal: Buy and burn DIEM (units={suggested}, want={want}) simulate={simulate}")
+            rationale.update({"decision": "buy_burn"})
+            _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": "buy_burn"})
+            if not simulate:
+                self.diem.trade("buy", suggested, corr_id=corr_id)
+                self.diem.burn(suggested, corr_id=corr_id)
             setattr(self, "_last_rationale", rationale)
             return True
         logger.info("No-op: market not favorable")

@@ -343,13 +343,13 @@ class DIEMService:
         side_l = side.lower()
         # Path may not be set in tests; allow empty path for fake aggregators
         try:
-            path = self._path_from_env()
+            base_path = self._path_from_env()
         except Exception:
-            path = []
+            base_path = []
         slippage_bps = int(os.getenv("SLIPPAGE_BPS", "100"))
         if side_l == "sell":
             if self.aggregator is not None:
-                res = self.aggregator.trade_best(amount, slippage_bps, path)
+                res = self.aggregator.trade_best(amount, slippage_bps, base_path)
             else:
                 # Fallback to actions if aggregator unavailable (test/mocked path)
                 res = self._get_actions().trade("sell", amount)
@@ -363,10 +363,12 @@ class DIEMService:
                 pass
             return out
         if side_l == "buy":
+            # For buy, reverse the TRADE_PATH so output is DIEM at the end.
+            path_buy = list(reversed(base_path)) if base_path else []
             # Prefer aggregator if supports exact-out; else fall back to AgentKit actions
             if (self.aggregator is not None) and hasattr(self.aggregator, "trade_best_exact_out"):
                 try:
-                    res = self.aggregator.trade_best_exact_out(amount, slippage_bps, path)  # type: ignore[attr-defined]
+                    res = self.aggregator.trade_best_exact_out(amount, slippage_bps, path_buy)  # type: ignore[attr-defined]
                     out = {"status": "sent", **res}
                     try:
                         payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
