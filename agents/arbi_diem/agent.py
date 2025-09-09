@@ -328,6 +328,17 @@ class ArbiDiem:
             return True
         # Discount branch: consider buy and burn when price is sufficiently below fair
         if fair > 0 and market_price < (fair / threshold_mult):
+            # Require exact-out support from aggregator to enable buy/burn in v1
+            try:
+                if (self.diem.aggregator is None) or (not hasattr(self.diem.aggregator, "trade_best_exact_out")):
+                    logger.info("Buy/burn skipped: exact-out unsupported by aggregator")
+                    rationale.update({"decision": "hold", "reason": "buy_unsupported"})
+                    setattr(self, "_last_rationale", rationale)
+                    return False
+            except Exception:
+                rationale.update({"decision": "hold", "reason": "buy_unsupported"})
+                setattr(self, "_last_rationale", rationale)
+                return False
             want = int(desired_units) if desired_units is not None else self._desired_units()
             # Reserve cap for reversed path (QUOTE->...->DIEM)
             reserve_cap: int | None = None
@@ -369,6 +380,12 @@ class ArbiDiem:
                 setattr(self, "_last_rationale", rationale)
                 return False
             adjusted, last_bps = self._adjust_for_liquidity_buy(suggested, market_price)
+            if last_bps is None:
+                # Cannot preview exact-out; avoid falling back to action-based buy in v1
+                logger.info("Buy/burn skipped: no exact-out preview available")
+                rationale.update({"decision": "hold", "reason": "no_exact_out_preview"})
+                setattr(self, "_last_rationale", rationale)
+                return False
             if last_bps is not None:
                 rationale.update({
                     "slippage_bps": float(last_bps),
