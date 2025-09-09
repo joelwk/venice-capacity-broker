@@ -63,6 +63,12 @@ This document describes the production v1 agents, their responsibilities, depend
     ```bash
     uv run python apps/cli/main.py run:quorum --dry-run   # uses minimal workflow for mint/sell decision
     ```
+  - Live DIEM actions (on-chain mint/burn):
+    ```bash
+    uv run python apps/cli/main.py diem:mint <amountBaseUnits> [--dry-run]
+    uv run python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run]
+    ```
+    Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`. Optional sVVV capacity gate and lock/unlock hooks via env.
 
 - CapacityBroker (minimal issuance)
   - Purpose: Issue scoped sub-keys with `consumptionLimit` and `expiresAt` for tenants; supports multi-tenant resale through Broker API.
@@ -78,6 +84,14 @@ This document describes the production v1 agents, their responsibilities, depend
     # venice keys cleanup (parent key recommended)
     uv run python apps/cli/main.py venice:keys:cleanup --prefix T1 --dry-run
     ```
+  - Tenant self-service (new):
+    - `GET /v1/me` returns `{ role, tenant }` for the authenticated tenant subkey.
+    - `GET /v1/me/usage` returns Venice usage and limits for the authenticated tenant.
+    - `GET /v1/me/broker-limits` returns current broker limiter settings.
+    - `POST /v1/me/broker-limits` allows tenants to tighten their own limits only:
+      - `windowSeconds`: may increase only (more restrictive). Decreases require admin.
+      - `maxRequests`: may decrease only. Increases require admin.
+      - `label`: must start with `self:` when set by tenants.
 
 - Orchestrator (loop)
   - Purpose: Single-agent loop coordinating market observation and ArbiDiem decisions with persistence and backoff.
@@ -86,6 +100,7 @@ This document describes the production v1 agents, their responsibilities, depend
     ```bash
     uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0
     ```
+  - Portfolio cap wiring (env-gated): set `RISK_ENABLE_PORTFOLIO_CAP=true` and provide `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS` in base units; orchestrator passes the USD exposure to ArbiDiem sizing.
 
 Notes:
 - Quorum multi-agent orchestration and full AI Treasurer are post‑v1, except a minimal Treasurer heuristic may exist. Any advancement beyond v1 must not regress the tested v1 behaviors.

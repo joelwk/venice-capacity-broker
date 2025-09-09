@@ -190,6 +190,7 @@ class Orchestrator:
             "inventoryUsd": current_inventory_usd,
             "dry_run": dry_run,
             "correlationId": corr,
+            "ts": time.time(),
             "limits": {
                 "slippage_bps_cap": getattr(self.arbi.risk, "slippage_bps_cap", None),
                 "max_trade_usd": getattr(self.arbi.risk, "max_trade_usd", None),

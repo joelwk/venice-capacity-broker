@@ -89,6 +89,12 @@ On-chain and wallets:
 - Base gating enforced: only base-mainnet or base-sepolia are allowed.
 To enable on-chain calls: set `BASE_RPC_URL` and provide ABIs in `abi/`.
 
+DIEM on-chain actions (live):
+- Mint/burn via CLI using DIEMService and AgentKit actions. Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`.
+  - Mint: `python apps/cli/main.py diem:mint <amountBaseUnits> [--dry-run] [--idem-key K] [--corr-id ID]`
+  - Burn: `python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run] [--idem-key K] [--corr-id ID]`
+- Optional sVVV capacity gate and lock/unlock hooks can be enabled via env (see DIEM mint/burn gate below).
+
 Risk policy:
 - Configure DIEM trade sizing and exposure limits via env:
   - `RISK_MAX_DIEM_TRADE_USD` (default 10000)
@@ -344,6 +350,14 @@ Notes:
   - View: `GET /v1/tenants/{tenantId}/broker-limits` (requires admin bearer).
   - Set: `POST /v1/tenants/{tenantId}/broker-limits` with `{ "windowSeconds": 60, "maxRequests": 120, "label": "premium" }`.
   - Enforced by `/v1/chat` in addition to global `RATE_LIMIT_*` defaults.
+
+- Broker limits (tenant self-service, new):
+  - View my limits: `GET /v1/me/broker-limits` (bearer must be a tenant subkey)
+  - Update my limits: `POST /v1/me/broker-limits` with any subset of fields:
+    - `windowSeconds`: tenants may increase only (more restrictive). Decreases require admin.
+    - `maxRequests`: tenants may decrease only. Increases require admin.
+    - `label`: tenants may annotate with labels prefixed `self:` (e.g., `self:throttled`).
+  - Stored in KV alongside admin-set defaults and enforced by the limiter.
 
 CLI admin helpers:
 - List tenants: `python apps/cli/main.py broker:tenants:list`

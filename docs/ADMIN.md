@@ -17,6 +17,14 @@ Features (MVP)
 - Limits
   - View broker limits: `GET /v1/tenants/{id}/broker-limits`
   - Set broker limits: `POST /v1/tenants/{id}/broker-limits` (windowSeconds/maxRequests/label)
+ - Tenant self-service (no admin token)
+   - Who am I: `GET /v1/me` (returns `{ role, tenant }` for tenant tokens)
+   - My usage: `GET /v1/me/usage`
+   - My broker limits: `GET /v1/me/broker-limits`
+   - Update my limits: `POST /v1/me/broker-limits`
+     - `windowSeconds`: tenants may increase only (more restrictive). Decreasing requires admin.
+     - `maxRequests`: tenants may decrease only. Increasing requires admin.
+     - `label`: must be prefixed `self:` when set by tenants (purely descriptive).
 - Health/Env
   - Health: `GET /health`
   - Env snapshot: `GET /v1/env`
@@ -63,7 +71,7 @@ Environment & Backends
   - Offline fallback (dev): set `VENICE_OFFLINE_SIGNALS=true` to return stubbed signals from `/v1/market/signals` when Venice endpoints are unavailable.
 
 Decision Record (operators)
-- Fields: `agent`, `action`, `price`, `inventoryUsd`, `dry_run`, `correlationId`, `limits` (slippage_bps_cap, max_trade_usd, max_inventory_usd, max_trade_units), `why` (market_price, fair_per_day, threshold_mult, premium, desired_units, suggested_units, exec_price_preview, slippage_bps, slippage_ok, decision, reason), `outcome`.
+- Fields: `agent`, `action`, `price`, `inventoryUsd`, `dry_run`, `correlationId`, `ts`, `limits` (slippage_bps_cap, max_trade_usd, max_inventory_usd, max_trade_units), `why` (market_price, fair_per_day, threshold_mult, premium, desired_units, suggested_units, exec_price_preview, slippage_bps, slippage_ok, decision, reason), `outcome`.
 - Example (JSON, abbreviated):
   `{ "agent": "arbi_diem", "action": "mint_sell", "price": 2.15, "inventoryUsd": 3.0, "correlationId": "...", "limits": {"slippage_bps_cap":150}, "why": {"premium":1.12, "desired_units":1000, "suggested_units":800, "slippage_bps":45, "decision":"mint_sell"}, "outcome": true }`
 

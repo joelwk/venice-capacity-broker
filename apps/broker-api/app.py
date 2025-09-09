@@ -141,6 +141,14 @@ try:
         usage: dict
         limits: dict | None = None
 
+    # Broker limits schema used by both admin and tenant self-service endpoints
+    from pydantic import Field
+
+    class BrokerLimits(BaseModel):
+        windowSeconds: int | None = Field(default=None, ge=1)
+        maxRequests: int | None = Field(default=None, ge=0)
+        label: str | None = None  # classification label (e.g., premium, basic)
+
     # --- Optional: CORS (flag-gated) ---
     try:
         import os as _cors_os
@@ -1297,6 +1305,69 @@ try:
             limits = None
         return UsageResponse(usage=usage, limits=limits)
 
+    # --- Tenant self-service: view/update broker limits (restrictive only) ---
+    @app.get("/v1/me/broker-limits")
+    @_traceable("broker.me_broker_limits")
+    def my_broker_limits(
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> dict:
+        role, tenant_ctx = _auth_context(authorization)
+        if role != "tenant" or tenant_ctx is None:
+            raise HTTPException(status_code=403, detail="tenant auth required")
+        return _get_broker_limits_obj(tenant_ctx.id)
+
+    @app.post("/v1/me/broker-limits")
+    @_traceable("broker.me_set_broker_limits")
+    def my_set_broker_limits(
+        limits: BrokerLimits,
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> dict:
+        role, tenant_ctx = _auth_context(authorization)
+        if role != "tenant" or tenant_ctx is None:
+            raise HTTPException(status_code=403, detail="tenant auth required")
+        # KV is required for persistence
+        if _kv_admin is None:
+            raise HTTPException(status_code=503, detail="KV store unavailable")
+        current = _get_broker_limits_obj(tenant_ctx.id)
+        new_obj = dict(current)
+        # Allow only more restrictive settings by tenant:
+        # - windowSeconds: can increase (longer window reduces rate) but not decrease below current
+        # - maxRequests: can decrease but not increase above current
+        # - label: only allow self-annotation with prefix 'self:'
+        if limits.windowSeconds is not None:
+            try:
+                ws = int(limits.windowSeconds)
+                if ws < 1:
+                    raise ValueError
+            except Exception:
+                raise HTTPException(status_code=422, detail="invalid windowSeconds")
+            if ws < int(current.get("windowSeconds", ws)):
+                raise HTTPException(status_code=403, detail="cannot decrease windowSeconds (admin only)")
+            new_obj["windowSeconds"] = ws
+        if limits.maxRequests is not None:
+            try:
+                mr = int(limits.maxRequests)
+                if mr < 0:
+                    raise ValueError
+            except Exception:
+                raise HTTPException(status_code=422, detail="invalid maxRequests")
+            if mr > int(current.get("maxRequests", mr)):
+                raise HTTPException(status_code=403, detail="cannot increase maxRequests (admin only)")
+            new_obj["maxRequests"] = mr
+        if limits.label is not None:
+            # Guardrails: tenants may only write self-annotation labels prefixed with 'self:'
+            lb = str(limits.label).strip()
+            if not lb.startswith("self:"):
+                raise HTTPException(status_code=403, detail="label must start with 'self:' for tenant updates")
+            new_obj["label"] = lb
+        try:
+            import json as _json
+
+            _kv_admin.set(f"broker:tenant:{tenant_ctx.id}:limits", _json.dumps(new_obj))
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"failed to update limits: {e}")
+        return new_obj
+
     # --- Metrics via starlette_exporter (with builtin fallback) ---
     METRICS_BACKEND = (_os.getenv("METRICS_BACKEND") or "auto").strip().lower()
     METRICS_PATH = (_os.getenv("METRICS_PATH") or "/metrics").strip() or "/metrics"
@@ -1387,12 +1458,6 @@ try:
             return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # --- Admin: per-tenant broker limits (caps/labels) ---
-    from pydantic import Field
-
-    class BrokerLimits(BaseModel):
-        windowSeconds: int | None = Field(default=None, ge=1)
-        maxRequests: int | None = Field(default=None, ge=0)
-        label: str | None = None  # classification label (e.g., premium, basic)
 
     # --- Market data (prices/signals) ---
     @app.get("/v1/market/prices")

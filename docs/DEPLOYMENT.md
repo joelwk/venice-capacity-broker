@@ -34,6 +34,9 @@ Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.
 - Probe limiter (CLI): `make chat-admin TENANT=<id> [MESSAGE=Hello]` for a quick write, or run `python scripts/limit_probe.py --tenant <subkey> --rps 15 --duration 30`.
 - Idempotency: repeated identical `POST /v1/chat` returns `409` with `X-Idempotency-Accepted: false`.
+ - Tenant self-service: authenticate with a tenant subkey and call:
+   - `GET /v1/me/broker-limits` to view current limiter settings
+   - `POST /v1/me/broker-limits` to tighten limits (increase `windowSeconds`, decrease `maxRequests`)
 
 Makefile shortcuts (operator quality-of-life)
 - `make env-status` prints `/v1/env` (if reachable) plus a local snapshot including KV detection (Redis vs Replit DB vs memory).
@@ -62,6 +65,7 @@ Risk-aware ArbiDiem (optional operators)
 - Set `ARBI_DIEM_MINT_UNITS` to your desired mint lot size (in token units). The risk policy will reduce it as needed using the live DIEM price.
 - Slippage cap via `RISK_MAX_SLIPPAGE_BPS` (default 150 bps).
 - Portfolio-cap wiring in orchestrator (env-gated): `RISK_ENABLE_PORTFOLIO_CAP=true` and set `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`.
+ - DIEM on-chain actions (live): ensure `DIEM_TOKEN_ADDRESS` and `abi/diem.json` are present; use CLI `diem:mint` and `diem:burn` for direct actions (honors sVVV capacity gate when enabled).
 
 DEX trading modes (Base)
 - Providers: set `DEX_PROVIDERS=uniswap_v2,aerodrome`, router envs (`UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`).
