@@ -121,15 +121,21 @@ class MarketPricingEngine:
         # Resolve via market provider (best-effort)
         try:
             from services.marketdata.provider import MarketDataProvider  # lazy import
-
             mdp = MarketDataProvider()
             px = mdp.prices(["DIEM", "ETH", "USDC"]) or {}
             # Prices are in QUOTE token (USDC); USDC≈1 USD
             if isinstance(px, dict):
                 diem_usd = float(px.get("DIEM") or 0.0)
                 eth_usd = float(px.get("ETH") or 0.0)
+            # Sanity: reject clearly invalid DIEM prices (too small/large) and try robust fallback
+            if not (diem_usd and 1e-6 < diem_usd < 1e6):
+                try:
+                    alt = mdp.diem_price_with_fallback()
+                    if alt and 1e-6 < float(alt) < 1e6:
+                        diem_usd = float(alt)
+                except Exception:
+                    pass
         except Exception:
-            # Provider unavailable; rely on hints/env
             diem_usd = 0.0
             eth_usd = 0.0
         # Units kind mapping

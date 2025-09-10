@@ -341,3 +341,35 @@ def format_report(result: Dict[str, Any]) -> str:
                 lines.append(f" - {label}: (no pair)")
         lines.append("")
     return textwrap.dedent("\n".join(lines)).strip() + "\n"
+
+
+if __name__ == "__main__":
+    # Lightweight CLI: verify a path and print a compact report.
+    # Usage examples:
+    #   python services/marketdata/etherscan_verify.py \
+    #       --path 0xf4d97f2da56e8c3098f3a8d538db630a2606a024,0x4200000000000000000000000000000000000006,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+    #   ETHERSCAN_API_KEY=... BASE_CHAIN_ID=8453 python services/marketdata/etherscan_verify.py
+    import argparse as _arg
+    import os as _os
+
+    ap = _arg.ArgumentParser(description="Verify DEX trade path via Etherscan v2 proxy")
+    ap.add_argument(
+        "--path",
+        default=_os.getenv("TRADE_PATH", ""),
+        help="Comma-separated token addresses (e.g., DIEM,WETH,USDC)",
+    )
+    args = ap.parse_args()
+    p = [a.strip() for a in (args.path or "").split(",") if a.strip()]
+    if len(p) < 2:
+        print("Provide --path or set TRADE_PATH with at least 2 addresses.")
+        raise SystemExit(2)
+    res = verify_trade_path(p)
+    print(format_report(res))
+    # Print cache summary (best-effort)
+    try:
+        summ = get_liquidity_cache_summary()
+        print("Cache by_tokens:")
+        for k, v in (summ.get("by_tokens") or {}).items():
+            print(f" - {k}: pair={v.get('pair')} has_reserves={v.get('has_reserves')}")
+    except Exception:
+        pass

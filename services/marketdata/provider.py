@@ -319,13 +319,27 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
             if not diem or not weth or not quote:
                 return None
-            # Prefer router quote for DIEM->WETH; fall back to mid-price if it fails
+            # Prefer router quote for DIEM->WETH; fall back to mid-price or inverse WETH->DIEM if needed
             px_dw = 0.0
             try:
                 b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
                 px_dw = float(b1.get("price") or 0.0)
             except Exception:
                 px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
+            if px_dw <= 0:
+                # Try the inverse direction if DIEM->WETH cannot be priced directly
+                try:
+                    b1r = self.best_price([weth, diem], amount_in_decimal=1.0)
+                    r = float(b1r.get("price") or 0.0)
+                    if r > 0:
+                        px_dw = 1.0 / r
+                except Exception:
+                    try:
+                        rmid = self._mid_price_from_reserves(weth, diem) or 0.0
+                        if rmid > 0:
+                            px_dw = 1.0 / float(rmid)
+                    except Exception:
+                        pass
             if px_dw <= 0:
                 return None
             # Try aggregator for WETH->QUOTE
