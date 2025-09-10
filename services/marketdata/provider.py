@@ -349,19 +349,18 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
             if not diem or not weth or not quote:
                 return None
-            # Prefer router quote for DIEM->WETH; fall back to scan/mid/inverse
-            px_dw = 0.0
-            # Try direct quote with scanning
-            px_dw = self._best_price_scan([diem, weth], start=1.0, min_amount=1e-12, factor=10.0) or 0.0
+            # Prefer mid-price for DIEM->WETH to avoid size-dependent distortion on tiny pools
+            px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
             if px_dw <= 0:
-                # Try single quote
-                try:
-                    b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
-                    px_dw = float(b1.get("price") or 0.0)
-                except Exception:
-                    px_dw = 0.0
-            if px_dw <= 0:
-                px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
+                # Try router quotes with scanning down to very small inputs
+                px_dw = self._best_price_scan([diem, weth], start=1.0, min_amount=1e-18, factor=10.0) or 0.0
+                if px_dw <= 0:
+                    # Try a single router quote (1.0) as a last resort
+                    try:
+                        b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
+                        px_dw = float(b1.get("price") or 0.0)
+                    except Exception:
+                        px_dw = 0.0
             if px_dw <= 0:
                 # Try the inverse direction if DIEM->WETH cannot be priced directly
                 try:
@@ -404,17 +403,21 @@ class MarketDataProvider:
         for sym in symbols:
             SU = sym.upper()
             if SU == "DIEM":
-                # Try direct best price; if unavailable, use derived fallback (DIEM->WETH mid × WETH->QUOTE)
+                # Prefer robust fallback composition to avoid size distortion on thin pools
+                try:
+                    px_fb = self.diem_price_with_fallback()
+                    if px_fb and px_fb > 0:
+                        out[sym] = float(px_fb)
+                        continue
+                except Exception:
+                    pass
+                # Last resort: attempt direct best price on the full path
                 try:
                     path = self._path_from_env()
                     bp = self.best_price(path, amount_in_decimal=1.0)
-                    out[sym] = float(bp["price"])  # DIEM per USDC (or vice-versa based on path)
+                    out[sym] = float(bp["price"])  # execution price for 1 DIEM
                 except Exception:
-                    try:
-                        px_fb = self.diem_price_with_fallback()
-                        out[sym] = float(px_fb) if px_fb else 1.0
-                    except Exception:
-                        out[sym] = 1.0
+                    out[sym] = 1.0
             elif SU == "VVV":
                 # Resolve VVV price vs QUOTE. Prefer direct pair; fall back to WETH bridge or mid-price.
                 try:
