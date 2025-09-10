@@ -19,7 +19,7 @@ Overview
      - `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
      - `DEX_PROVIDERS=uniswap_v2,aerodrome`
      - `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`
-     - Optional: `DEX_BRIDGE_TOKEN_ADDRESS` (e.g., Base WETH)
+     - Optional: `BRIDGE_TOKEN_ADDRESS` (e.g., Base WETH)
      - Optional: price path cache tuning `PRICE_PATH_CACHE_TTL_SECONDS` (default 1800), `PRICE_PATH_CACHE_MAX` (default 256)
   - Risk policy (for ArbiDiem sizing and exposure limits):
     - `RISK_MAX_DIEM_TRADE_USD` (default 10000)
