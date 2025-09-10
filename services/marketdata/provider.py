@@ -292,9 +292,10 @@ class MarketDataProvider:
         """Return DIEM price in QUOTE token using aggregator, then mid-price fallbacks.
 
         Strategy:
-        1) Try aggregator best price for TRADE_PATH
-        2) If unavailable and path is DIEM->WETH->QUOTE, compute
-           price = mid(DIEM->WETH) * bestPrice(WETH->QUOTE) or mid(WETH->QUOTE)
+        1) Try aggregator best price for TRADE_PATH (multi-hop)
+        2) If unavailable and path is DIEM->WETH->QUOTE (or addresses resolvable), compute
+           price = bestPrice(DIEM->WETH) * bestPrice(WETH->QUOTE)
+           Fallback to mid(DIEM->WETH) and/or mid(WETH->QUOTE) when router quotes fail
         """
         try:
             path = self._path_from_env()
@@ -318,7 +319,13 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
             if not diem or not weth or not quote:
                 return None
-            px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
+            # Prefer router quote for DIEM->WETH; fall back to mid-price if it fails
+            px_dw = 0.0
+            try:
+                b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
+                px_dw = float(b1.get("price") or 0.0)
+            except Exception:
+                px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
             if px_dw <= 0:
                 return None
             # Try aggregator for WETH->QUOTE
