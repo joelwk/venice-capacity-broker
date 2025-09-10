@@ -136,6 +136,36 @@ class MarketDataProvider:
             "path": path,
         }
 
+    def _best_price_scan(self, path: List[str], start: float = 1.0, min_amount: float = 1e-12, factor: float = 10.0) -> Optional[float]:
+        """Scan progressively smaller input amounts until a quote is found; return price.
+
+        Uses router quotes only (no reserve math) to avoid dependence on external explorers.
+        """
+        if len(path) < 2:
+            return None
+        try:
+            dec_in = self._erc20_decimals(path[0])
+            dec_out = self._erc20_decimals(path[-1])
+        except Exception:
+            return None
+        amt = float(start)
+        if factor <= 1.0:
+            factor = 10.0
+        from libs.dex.providers import build_aggregator_from_env
+        agg = build_aggregator_from_env()
+        while amt >= float(min_amount):
+            try:
+                amount_in_units = int(amt * (10 ** dec_in))
+                q = agg.best_quote(amount_in_units, path)
+                if q is not None and q.amount_in > 0 and q.amount_out > 0:
+                    price = (q.amount_out / (10 ** dec_out)) / (q.amount_in / (10 ** dec_in))
+                    if price > 0:
+                        return float(price)
+            except Exception:
+                pass
+            amt = amt / factor
+        return None
+
     # --- Constant-product AMM fallback (UniswapV2-style) ---
     def _uni_v2_out(self, amount_in: int, reserve_in: int, reserve_out: int, fee_bps: int = 30) -> int:
         try:
@@ -319,18 +349,26 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
             if not diem or not weth or not quote:
                 return None
-            # Prefer router quote for DIEM->WETH; fall back to mid-price or inverse WETH->DIEM if needed
+            # Prefer router quote for DIEM->WETH; fall back to scan/mid/inverse
             px_dw = 0.0
-            try:
-                b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
-                px_dw = float(b1.get("price") or 0.0)
-            except Exception:
+            # Try direct quote with scanning
+            px_dw = self._best_price_scan([diem, weth], start=1.0, min_amount=1e-12, factor=10.0) or 0.0
+            if px_dw <= 0:
+                # Try single quote
+                try:
+                    b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
+                    px_dw = float(b1.get("price") or 0.0)
+                except Exception:
+                    px_dw = 0.0
+            if px_dw <= 0:
                 px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
             if px_dw <= 0:
                 # Try the inverse direction if DIEM->WETH cannot be priced directly
                 try:
-                    b1r = self.best_price([weth, diem], amount_in_decimal=1.0)
-                    r = float(b1r.get("price") or 0.0)
+                    r = self._best_price_scan([weth, diem], start=1.0, min_amount=1e-12, factor=10.0) or 0.0
+                    if r <= 0:
+                        b1r = self.best_price([weth, diem], amount_in_decimal=1.0)
+                        r = float(b1r.get("price") or 0.0)
                     if r > 0:
                         px_dw = 1.0 / r
                 except Exception:
@@ -342,13 +380,14 @@ class MarketDataProvider:
                         pass
             if px_dw <= 0:
                 return None
-            # Try aggregator for WETH->QUOTE
-            px_wq = 0.0
-            try:
-                b2 = self.best_price([weth, quote], amount_in_decimal=1.0)
-                px_wq = float(b2.get("price") or 0.0)
-            except Exception:
-                px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
+            # Resolve WETH->QUOTE via scan/quote/mid as needed
+            px_wq = self._best_price_scan([weth, quote], start=1.0, min_amount=1e-9, factor=10.0) or 0.0
+            if px_wq <= 0:
+                try:
+                    b2 = self.best_price([weth, quote], amount_in_decimal=1.0)
+                    px_wq = float(b2.get("price") or 0.0)
+                except Exception:
+                    px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
             if px_wq <= 0:
                 return None
             return float(px_dw * px_wq)

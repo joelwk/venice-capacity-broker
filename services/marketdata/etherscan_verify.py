@@ -23,6 +23,28 @@ def _pad_addr(addr: str) -> str:
     return ("0" * (64 - len(a))) + a
 
 
+def _abi_bool32(v: bool) -> str:
+    """Return 32-byte ABI-encoded boolean (hex, without 0x)."""
+    return ("0" * 63) + ("1" if v else "0")
+
+
+def _selector(sig: str) -> str:
+    """Compute 4-byte function selector for a signature like 'getPair(address,address)'."""
+    try:
+        from web3 import Web3  # type: ignore
+
+        selector = Web3.keccak(text=sig)[:4].hex()
+        return "0x" + selector
+    except Exception:
+        # Fallback for known selectors
+        if sig == "getPair(address,address)":
+            return "0xe6a43905"
+        if sig == "getPair(address,address,bool)":
+            # Precomputed with keccak('getPair(address,address,bool)')[:4]
+            return "0x8a6f75c0"
+        return "0x00000000"
+
+
 def _etherscan_base_url() -> str:
     """Return the Etherscan v2 base URL (multi‑chain).
 
@@ -81,12 +103,30 @@ def eth_call(to: str, data: str) -> Optional[str]:
 
 
 def get_pair(factory_addr: str, token_a: str, token_b: str) -> Optional[str]:
-    sel = "0xe6a43905"  # getPair(address,address)
+    sel = _selector("getPair(address,address)")
     data = sel + _pad_addr(token_a) + _pad_addr(token_b)
     out = eth_call(factory_addr, data)
     if not out or not isinstance(out, str) or len(out) < 42 or not out.startswith("0x"):
         return None
     # Etherscan returns 0x000... when no pair exists
+    addr = out[-40:]
+    if set(addr) == {"0"}:
+        return None
+    return "0x" + addr
+
+
+def get_pair_aerodrome(factory_addr: str, token_a: str, token_b: str, stable: bool) -> Optional[str]:
+    """Return Aerodrome pair address for tokenA/tokenB with stable flag.
+
+    Aerodrome/Velodrome factory: getPair(address,address,bool)
+    """
+    sel = _selector("getPair(address,address,bool)")
+    if sel == "0x00000000":
+        return None
+    data = sel + _pad_addr(token_a) + _pad_addr(token_b) + _abi_bool32(bool(stable))
+    out = eth_call(factory_addr, data)
+    if not out or not isinstance(out, str) or len(out) < 42 or not out.startswith("0x"):
+        return None
     addr = out[-40:]
     if set(addr) == {"0"}:
         return None
@@ -198,7 +238,10 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
             pass
         # Aerodrome volatile
         try:
-            p = get_pair(fac["aerodrome_vol"], a, b)
+            p = get_pair_aerodrome(fac["aerodrome_vol"], a, b, stable=False)
+            if not p:
+                # Aerodrome allows reversed token order as well
+                p = get_pair_aerodrome(fac["aerodrome_vol"], b, a, stable=False)
             if p:
                 rec["aerodrome_vol"]["pair"] = p
                 rec["aerodrome_vol"]["reserves"] = get_reserves(p)
@@ -206,7 +249,9 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
             pass
         # Aerodrome stable
         try:
-            p = get_pair(fac["aerodrome_stable"], a, b)
+            p = get_pair_aerodrome(fac["aerodrome_stable"], a, b, stable=True)
+            if not p:
+                p = get_pair_aerodrome(fac["aerodrome_stable"], b, a, stable=True)
             if p:
                 rec["aerodrome_stable"]["pair"] = p
                 rec["aerodrome_stable"]["reserves"] = get_reserves(p)
