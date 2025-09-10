@@ -324,7 +324,8 @@ class MarketDataProvider:
     def prices(self, symbols: List[str]) -> Dict[str, float]:
         """Return prices for requested symbols.
 
-        MVP+: DIEM resolved via TRADE_PATH, VVV via QUOTE_TOKEN_ADDRESS if set; others = 1.0
+        MVP+: DIEM resolved via TRADE_PATH, VVV via QUOTE_TOKEN_ADDRESS; ETH resolved via WETH->QUOTE.
+        USDC (quote) remains 1.0 by definition.
         """
         out: Dict[str, float] = {}
         for sym in symbols:
@@ -351,6 +352,22 @@ class MarketDataProvider:
                     out[sym] = float(bp["price"])  # VVV per USDC
                 except Exception:
                     out[sym] = 1.0
+            elif SU == "ETH":
+                # Resolve ETH price using WETH->QUOTE path
+                try:
+                    weth = self._weth_address()
+                    quote = self._quote_token_address()
+                    bp = self.best_price([weth, quote], amount_in_decimal=1.0)
+                    out[sym] = float(bp["price"])  # ETH per USDC
+                except Exception:
+                    # Fallback to mid price from reserves
+                    try:
+                        weth = self._weth_address()
+                        quote = self._quote_token_address()
+                        px = self._mid_price_from_reserves(weth, quote)
+                        out[sym] = float(px) if px else 1.0
+                    except Exception:
+                        out[sym] = 1.0
             else:
                 out[sym] = 1.0
         # Emit centralized signal for prices (best-effort)
