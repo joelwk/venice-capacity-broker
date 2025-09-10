@@ -84,7 +84,7 @@ def get_pair(factory_addr: str, token_a: str, token_b: str) -> Optional[str]:
     sel = "0xe6a43905"  # getPair(address,address)
     data = sel + _pad_addr(token_a) + _pad_addr(token_b)
     out = eth_call(factory_addr, data)
-    if not out or not isinstance(out, str) or len(out) < 42:
+    if not out or not isinstance(out, str) or len(out) < 42 or not out.startswith("0x"):
         return None
     # Etherscan returns 0x000... when no pair exists
     addr = out[-40:]
@@ -114,7 +114,7 @@ def get_token0(pair_addr: str) -> Optional[str]:
     try:
         # token0() selector
         out = eth_call(pair_addr, "0x0dfe1681")
-        if not out or not isinstance(out, str) or len(out) < 66:
+        if not out or not isinstance(out, str) or len(out) < 66 or not out.startswith("0x"):
             return None
         return "0x" + out[-40:]
     except Exception:
@@ -125,7 +125,7 @@ def get_token1(pair_addr: str) -> Optional[str]:
     """Return token1 address for a UniswapV2-like pair via proxy eth_call."""
     try:
         out = eth_call(pair_addr, "0xd21220a7")  # token1()
-        if not out or not isinstance(out, str) or len(out) < 66:
+        if not out or not isinstance(out, str) or len(out) < 66 or not out.startswith("0x"):
             return None
         return "0x" + out[-40:]
     except Exception:

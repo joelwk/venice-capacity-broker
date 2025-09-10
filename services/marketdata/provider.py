@@ -111,6 +111,19 @@ class MarketDataProvider:
                         path = alt_path  # report the path actually used
                 except Exception:
                     q = None
+        # Final fallback: approximate price via AMM reserves when quotes are unavailable
+        if q is None:
+            approx = self.approx_exec_price(amount_in_units, path)
+            if approx and approx > 0:
+                price = float(approx)
+                return {
+                    "provider": "approx",
+                    "amount_in": amount_in_units,
+                    "amount_out": int(price * amount_in_units * (10 ** (dec_out - dec_in))) if dec_out >= dec_in else int(price * amount_in_units / (10 ** (dec_in - dec_out))),
+                    "decimals": {"in": dec_in, "out": dec_out},
+                    "price": price,
+                    "path": path,
+                }
         if q is None:
             raise RuntimeError("No quotes available for provided path")
         price = (q.amount_out / (10 ** dec_out)) / (q.amount_in / (10 ** dec_in))
