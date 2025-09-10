@@ -24,6 +24,12 @@ def _pad_addr(addr: str) -> str:
 
 
 def _etherscan_base_url() -> str:
+    """Return the Etherscan v2 base URL (multi‑chain).
+
+    Uses `ETHERSCAN_API_URL` when set; otherwise defaults to
+    `https://api.etherscan.io/v2/api`. Chain selection is controlled by the
+    `chainid` parameter we already pass on each request.
+    """
     return _env("ETHERSCAN_API_URL", ETHERSCAN_API_URL_DEFAULT) or ETHERSCAN_API_URL_DEFAULT
 
 
@@ -37,6 +43,10 @@ def _etherscan_chain_id() -> str:
 
 
 def _etherscan_api_key() -> Optional[str]:
+    """Return the universal Etherscan v2 API key.
+
+    Etherscan v2 supports 50+ chains via one key; we only use ETHERSCAN_API_KEY.
+    """
     return _env("ETHERSCAN_API_KEY")
 
 

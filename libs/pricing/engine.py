@@ -77,11 +77,11 @@ class MarketPricingEngine:
 
     Behavior:
     - If `PURCHASE_UNITS_KIND=diem`, 1 unit == 1 DIEM. Unit price follows the live DIEM→USD price.
-      Fallbacks: DIEM_PRICE_USD env, then BASE_UNIT_USD.
+      Fallbacks: on-chain AMM mid-price and aggregator WETH bridge only.
     - Otherwise, units are generic and priced off `BASE_UNIT_USD` (default 0.1 USD per unit).
 
-    ETH pricing no longer requires `ETH_PRICE_USD`; we derive ETH/USD via MarketDataProvider
-    using the configured `QUOTE_TOKEN_ADDRESS` path (WETH->QUOTE) with AMM fallbacks.
+    ETH pricing derives ETH/USD via MarketDataProvider using the configured `QUOTE_TOKEN_ADDRESS`
+    path (WETH->QUOTE) with AMM fallbacks. No static price overrides.
     """
 
     def __init__(self) -> None:
@@ -95,15 +95,9 @@ class MarketPricingEngine:
             self._base_unit_usd_default = float(os.getenv("BASE_UNIT_USD", "0.1") or 0.1)
         except Exception:
             self._base_unit_usd_default = 0.1
-        # Optional manual hints
-        try:
-            self._diem_usd_hint = float(os.getenv("DIEM_PRICE_USD", "0") or 0)
-        except Exception:
-            self._diem_usd_hint = 0.0
-        try:
-            self._vvv_usd_hint = float(os.getenv("VVV_PRICE_USD", "0") or 0)
-        except Exception:
-            self._vvv_usd_hint = 0.0
+        # No manual price overrides in market mode
+        self._diem_usd_hint = 0.0
+        self._vvv_usd_hint = 0.0
         # Fractional unit bounds
         try:
             self._min_u = float(os.getenv("PRICE_ACCEPTED_MIN_UNITS", os.getenv("PRICE_MIN_UNITS", "0.01")) or 0.01)
@@ -118,11 +112,11 @@ class MarketPricingEngine:
         """Return tuple (base_unit_usd, diem_usd, eth_usd).
 
         - base_unit_usd reflects per-unit USD cost based on units kind.
-        - Fetches DIEM/ETH prices from MarketDataProvider with safe fallbacks.
+        - Fetches DIEM/ETH prices from MarketDataProvider with AMM/bridge fallbacks.
         """
         # Default fallbacks
         base_unit_usd = float(self._base_unit_usd_default)
-        diem_usd = float(self._diem_usd_hint or 0.0)
+        diem_usd = 0.0
         eth_usd = 0.0
         # Resolve via market provider (best-effort)
         try:
@@ -132,23 +126,29 @@ class MarketPricingEngine:
             px = mdp.prices(["DIEM", "ETH", "USDC"]) or {}
             # Prices are in QUOTE token (USDC); USDC≈1 USD
             if isinstance(px, dict):
-                diem_usd = float(px.get("DIEM") or diem_usd or 0.0)
+                diem_usd = float(px.get("DIEM") or 0.0)
                 eth_usd = float(px.get("ETH") or 0.0)
         except Exception:
             # Provider unavailable; rely on hints/env
-            pass
+            diem_usd = 0.0
+            eth_usd = 0.0
         # Units kind mapping
         uk = str(self._units_kind or "").lower()
         if uk == "diem":
             # 1 unit == 1 DIEM
             if diem_usd and diem_usd > 0:
                 base_unit_usd = float(diem_usd)
-            elif self._diem_usd_hint and self._diem_usd_hint > 0:
-                base_unit_usd = float(self._diem_usd_hint)
         elif uk == "vvv":
             # 1 unit == 1 VVV (rare); use hint if provided, otherwise fall back to default base
-            if self._vvv_usd_hint and self._vvv_usd_hint > 0:
-                base_unit_usd = float(self._vvv_usd_hint)
+            # No static override; keep default base if no price
+            try:
+                from services.marketdata.provider import MarketDataProvider  # lazy import
+                px = MarketDataProvider().prices(["VVV"]) or {}
+                vvv = float(px.get("VVV") or 0.0)
+                if vvv > 0:
+                    base_unit_usd = vvv
+            except Exception:
+                pass
         else:
             # Generic USD-priced units
             base_unit_usd = float(self._base_unit_usd_default)
@@ -163,15 +163,9 @@ class MarketPricingEngine:
         if asset_u == "USDC":
             unit_p = int(round(float(base_unit_usd) * 1_000_000))
         elif asset_u == "ETH":
-            # Derive wei per unit using ETH/USD
+            # Derive wei per unit using ETH/USD from market provider only
             if not (eth_usd and eth_usd > 0):
-                # Last-resort: try env hint
-                try:
-                    eth_usd = float((__import__("os").getenv("ETH_PRICE_USD") or "0").strip() or 0)
-                except Exception:
-                    eth_usd = 0.0
-            if not (eth_usd and eth_usd > 0):
-                raise ValueError("ETH pricing unavailable (missing ETH/USD); check DEX config or ETH_PRICE_USD")
+                raise ValueError("ETH pricing unavailable (missing ETH/USD from DEX); check QUOTE_TOKEN_ADDRESS and WETH route")
             unit_p = int(round((float(base_unit_usd) / float(eth_usd)) * 1e18))
         else:
             raise ValueError("unsupported asset; use ETH or USDC")
