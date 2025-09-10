@@ -368,6 +368,9 @@ class MarketDataProvider:
                                 out[sym] = float(px_tw * px_wq) if (px_tw > 0 and px_wq > 0) else 1.0
                             except Exception:
                                 out[sym] = 1.0
+                except Exception:
+                    # Any unexpected failure resolving VVV price
+                    out[sym] = 1.0
             elif SU == "ETH":
                 # Resolve ETH price using WETH->QUOTE path
                 try:
