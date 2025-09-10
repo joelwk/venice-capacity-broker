@@ -12,11 +12,20 @@ except Exception:  # noqa: BLE001
 try:
     from sqlmodel import SQLModel, Field
 except Exception:  # noqa: BLE001
-    # Soft fallback to avoid import errors if sqlmodel isn't installed yet
+    # Soft fallback to avoid import errors if sqlmodel isn't installed yet.
+    # FastAPI route registration imports this module at startup. When
+    # sqlmodel isn't available, class definitions like
+    #   class Foo(SQLModel, table=True)
+    # would raise because the base doesn't accept the "table" kw.
+    # Implement __init_subclass__ to swallow any kwargs so import succeeds.
     class SQLModel:  # type: ignore
-        pass
+        @classmethod
+        def __init_subclass__(cls, **kwargs):  # type: ignore[override]
+            # Ignore SQLModel-specific subclass kwargs (e.g., table=True)
+            return None
 
     def Field(*args, **kwargs):  # type: ignore
+        # Placeholder that allows annotations to parse without sqlmodel.
         return None
 
 
