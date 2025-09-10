@@ -1633,17 +1633,17 @@ try:
 
             class QuoteResponse(BaseModel):
                 quoteId: str
-                units: int
+                units: float
                 asset: str
                 unitPrice: int
                 totalPrice: int
-                acceptedMin: int | None = None
-                acceptedMax: int | None = None
+                acceptedMin: float | None = None
+                acceptedMax: float | None = None
                 expiresAt: int
 
             @app.get("/v1/quotes", response_model=QuoteResponse)
             def get_quote(
-                units: int = Query(..., ge=1),
+                units: float = Query(..., gt=0),
                 asset: str = Query(..., description="ETH or USDC"),
             ) -> dict:
                 try:
@@ -1807,7 +1807,7 @@ try:
                                 "amountPaid": int(paid_val or q.total_price),
                                 "quote": {
                                     "quoteId": q.quote_id,
-                                    "units": int(q.units),
+                                    "units": float(q.units),
                                     "unitPrice": int(q.unit_price),
                                     "totalPrice": int(q.total_price),
                                 },
@@ -1820,8 +1820,11 @@ try:
                     # Mint subkey and upsert tenant
                     try:
                         # Map units → consumption limit and expiry (24h default)
+                        import math as _math
                         limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
-                        cons = {"diem": int(q.units)} if limit_kind == "diem" else {limit_kind: int(q.units)}
+                        # Venice consumption limits are integers; map fractional units by ceiling to nearest whole unit.
+                        _units_limit = max(1, int(_math.ceil(float(q.units))))
+                        cons = {"diem": _units_limit} if limit_kind == "diem" else {limit_kind: _units_limit}
                         expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
                         sub = keys.issue_scoped_key(
                             (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or ""),
@@ -1843,7 +1846,7 @@ try:
                             raise RuntimeError("failed to mint subkey")
                         # Choose tenant id: reuse provided or derive from wallet address
                         tenant_id = req.tenantId or ("w:" + req.buyerAddress.lower())
-                        store.upsert(Tenant(id=tenant_id, label="Buyer", subkey=subkey, quota=q.units, expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")))
+                        store.upsert(Tenant(id=tenant_id, label="Buyer", subkey=subkey, quota=float(q.units), expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")))
                         p.status = "fulfilled"
                         p.tenant_id = tenant_id
                         p.subkey = subkey
@@ -1866,7 +1869,7 @@ try:
                     try:
                         from libs.telemetry.events import emit as _emit
 
-                        _emit("purchase.verified", {**out, "txHash": req.txHash, "asset": q.asset, "units": int(q.units)})
+                        _emit("purchase.verified", {**out, "txHash": req.txHash, "asset": q.asset, "units": float(q.units)})
                     except Exception:
                         pass
                     return out
@@ -1916,7 +1919,7 @@ try:
                                 continue
                             out.append({
                                 "quoteId": r.quote_id,
-                                "units": int(r.units),
+                                "units": float(r.units),
                                 "asset": r.asset,
                                 "unitPrice": int(r.unit_price),
                                 "totalPrice": int(r.total_price),

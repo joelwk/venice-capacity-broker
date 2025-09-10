@@ -93,7 +93,7 @@ class Quote(SQLModel, table=True):  # type: ignore[call-arg]
 
     id: Optional[int] = Field(default=None, primary_key=True)
     quote_id: str = Field(index=True)
-    units: int
+    units: float
     asset: str
     unit_price: int  # price per unit in smallest unit of asset
     total_price: int  # total price in smallest unit of asset

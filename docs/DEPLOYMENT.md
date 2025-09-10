@@ -156,6 +156,11 @@ Buyer Flow (flag-gated)
  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
  - `GET /v1/purchases/{purchaseId}`
 
+Notes on pricing and units
+- Quotes accept fractional `units` (e.g., `0.10`) for small purchases. Two-decimal precision is supported by default.
+- Configure min/max via `PRICE_ACCEPTED_MIN_UNITS` (default `0.01`) and `PRICE_ACCEPTED_MAX_UNITS`.
+- Responses include integer `unitPrice`/`totalPrice` in smallest units of the chosen asset (wei for ETH, 6‑decimals for USDC).
+
 Venice alignment (runbook)
 - Ensure `VENICE_API_BASE_URL` includes `/api/v1` (example: `https://api.venice.ai/api/v1`).
 - Prefer explicit VVV metrics endpoints; override paths if your deployment differs:

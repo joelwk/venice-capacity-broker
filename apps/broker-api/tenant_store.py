@@ -13,7 +13,7 @@ class Tenant:
     id: str
     label: str
     subkey: str
-    quota: int
+    quota: float
     expires_at: Optional[str] = None
     status: str = "active"  # active|revoked
     # Optional Venice API key id to allow revoke via API

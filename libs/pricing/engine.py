@@ -9,12 +9,12 @@ from typing import Optional, Tuple
 @dataclass
 class QuoteDraft:
     quote_id: str
-    units: int
+    units: float
     asset: str
     unit_price: int
     total_price: int
-    accepted_min: Optional[int]
-    accepted_max: Optional[int]
+    accepted_min: Optional[float]
+    accepted_max: Optional[float]
     expires_at_epoch: int
 
 
@@ -31,11 +31,18 @@ class StaticPricingEngine:
     def __init__(self) -> None:
         self._unit_eth = int(os.getenv("PRICE_UNIT_ETH_WEI", "0") or 0)
         self._unit_usdc = int(os.getenv("PRICE_UNIT_USDC", "0") or 0)
-        self._min_u = int(os.getenv("PRICE_ACCEPTED_MIN_UNITS", "1") or 1)
-        self._max_u = int(os.getenv("PRICE_ACCEPTED_MAX_UNITS", "1000000") or 1_000_000)
+        # Allow fractional unit bounds
+        try:
+            self._min_u = float(os.getenv("PRICE_ACCEPTED_MIN_UNITS", "0.01") or 0.01)
+        except Exception:
+            self._min_u = 0.01
+        try:
+            self._max_u = float(os.getenv("PRICE_ACCEPTED_MAX_UNITS", "1000000") or 1_000_000)
+        except Exception:
+            self._max_u = 1_000_000.0
         self._ttl = int(os.getenv("PRICE_QUOTE_TTL_SECONDS", "120") or 120)
 
-    def price(self, units: int, asset: str) -> QuoteDraft:
+    def price(self, units: float, asset: str) -> QuoteDraft:
         asset_u = asset.strip().upper()
         if asset_u == "ETH":
             unit_p = self._unit_eth
@@ -45,14 +52,17 @@ class StaticPricingEngine:
             raise ValueError("unsupported asset; use ETH or USDC")
         if unit_p <= 0:
             raise ValueError("unit price not configured; set PRICE_UNIT_ETH_WEI or PRICE_UNIT_USDC")
-        units = int(units)
-        units = max(self._min_u, min(self._max_u, units))
-        total = unit_p * units
+        try:
+            uf = float(units)
+        except Exception:
+            uf = 0.0
+        uf = max(float(self._min_u), min(float(self._max_u), uf))
+        total = int(round(unit_p * uf))
         now = int(time.time())
-        qid = f"q-{asset_u}-{now}-{units}"
+        qid = f"q-{asset_u}-{now}-{uf}"
         return QuoteDraft(
             quote_id=qid,
-            units=units,
+            units=uf,
             asset=asset_u,
             unit_price=unit_p,
             total_price=total,
@@ -86,8 +96,17 @@ class MarketPricingEngine:
         # Unit pricing per asset computed from USD baseline
         self._unit_usdc_minor = int(round(self._base_unit_usd * 1_000_000))
         self._unit_eth_wei = int(round(self._base_unit_usd / self._eth_usd * 1e18)) if self._eth_usd > 0 else 0
+        # Fractional unit bounds
+        try:
+            self._min_u = float(os.getenv("PRICE_ACCEPTED_MIN_UNITS", os.getenv("PRICE_MIN_UNITS", "0.01")) or 0.01)
+        except Exception:
+            self._min_u = 0.01
+        try:
+            self._max_u = float(os.getenv("PRICE_ACCEPTED_MAX_UNITS", "1000000") or 1_000_000)
+        except Exception:
+            self._max_u = 1_000_000.0
 
-    def price(self, units: int, asset: str) -> QuoteDraft:
+    def price(self, units: float, asset: str) -> QuoteDraft:
         import time
 
         asset_u = asset.strip().upper()
@@ -101,17 +120,21 @@ class MarketPricingEngine:
             raise ValueError("unsupported asset; use ETH or USDC")
         if unit_p <= 0:
             raise ValueError("unit price not configured for selected asset")
-        units = max(1, int(units))
-        total = unit_p * units
+        try:
+            uf = float(units)
+        except Exception:
+            uf = 0.0
+        uf = max(float(self._min_u), min(float(self._max_u), uf))
+        total = int(round(unit_p * uf))
         now = int(time.time())
-        qid = f"qM-{asset_u}-{now}-{units}"
+        qid = f"qM-{asset_u}-{now}-{uf}"
         return QuoteDraft(
             quote_id=qid,
-            units=units,
+            units=uf,
             asset=asset_u,
             unit_price=unit_p,
             total_price=total,
-            accepted_min=1,
-            accepted_max=1_000_000,
+            accepted_min=self._min_u,
+            accepted_max=self._max_u,
             expires_at_epoch=now + self._ttl,
         )

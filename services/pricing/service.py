@@ -21,19 +21,19 @@ class PricingService:
         except Exception:
             pass
 
-    def get_quote(self, units: int, asset: str) -> Dict[str, object]:
-        draft = self.engine.price(units, asset)
+    def get_quote(self, units: float, asset: str) -> Dict[str, object]:
+        draft = self.engine.price(float(units), asset)
         # Utilization-aware adjustment
         util = self._utilization_ratio()
         alpha = float(os.getenv("PRICE_UTIL_ALPHA", "0.5") or 0.5)
         mult = 1.0 + max(0.0, min(1.0, util)) * alpha
         unit_price = int(round(draft.unit_price * mult))
-        total_price = unit_price * draft.units
+        total_price = int(round(unit_price * float(draft.units)))
         from datetime import datetime
         with next(get_session()) as s:  # type: ignore[call-arg]
             q = Quote(
                 quote_id=draft.quote_id,
-                units=draft.units,
+                units=float(draft.units),
                 asset=draft.asset,
                 unit_price=unit_price,
                 total_price=total_price,
@@ -46,7 +46,7 @@ class PricingService:
             s.commit()
         return {
             "quoteId": draft.quote_id,
-            "units": draft.units,
+            "units": float(draft.units),
             "asset": draft.asset,
             "unitPrice": unit_price,
             "totalPrice": total_price,

@@ -343,15 +343,31 @@ class MarketDataProvider:
                     except Exception:
                         out[sym] = 1.0
             elif SU == "VVV":
+                # Resolve VVV price vs QUOTE. Prefer direct pair; fall back to WETH bridge or mid-price.
                 try:
                     token = self._address_for_symbol("VVV")
                     quote = self._quote_token_address()
                     if not token or not quote:
                         raise ValueError("VVV or QUOTE token address missing")
-                    bp = self.best_price([token, quote], amount_in_decimal=1.0)
-                    out[sym] = float(bp["price"])  # VVV per USDC
-                except Exception:
-                    out[sym] = 1.0
+                    # Try direct route first
+                    try:
+                        bp = self.best_price([token, quote], amount_in_decimal=1.0)
+                        out[sym] = float(bp["price"])  # VVV per QUOTE
+                    except Exception:
+                        # Bridge via WETH when direct pool is illiquid/missing
+                        try:
+                            weth = self._weth_address()
+                            bp2 = self.best_price([token, weth, quote], amount_in_decimal=1.0)
+                            out[sym] = float(bp2["price"])  # VVV per QUOTE via bridge
+                        except Exception:
+                            # Last resort: multiply infinitesimal mids if available
+                            try:
+                                weth = self._weth_address()
+                                px_tw = self._mid_price_from_reserves(token, weth) or 0.0
+                                px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
+                                out[sym] = float(px_tw * px_wq) if (px_tw > 0 and px_wq > 0) else 1.0
+                            except Exception:
+                                out[sym] = 1.0
             elif SU == "ETH":
                 # Resolve ETH price using WETH->QUOTE path
                 try:

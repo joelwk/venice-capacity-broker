@@ -52,7 +52,7 @@
             <div class="row grid-2">
               <div>
                 <label>Units (e.g., DIEM/day)</label>
-                <input id="units" type="number" min="1" value="60" />
+                <input id="units" type="number" min="0.01" step="0.01" value="0.10" />
                 <label>Asset</label>
                 <select id="asset">
                   <option value="USDC">USDC</option>
@@ -151,7 +151,7 @@
       async function getQuote() {
         qs('quoteMsg').textContent = '';
         qs('quoteOut').textContent = '';
-        const units = parseInt(qs('units').value || '0', 10);
+        const units = parseFloat(qs('units').value || '0');
         const asset = qs('asset').value;
         try {
           const res = await fetch(`/v1/quotes?units=${units}&asset=${encodeURIComponent(asset)}`);
