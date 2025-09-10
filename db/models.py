@@ -95,10 +95,17 @@ class Quote(SQLModel, table=True):  # type: ignore[call-arg]
     quote_id: str = Field(index=True)
     units: float
     asset: str
-    unit_price: int  # price per unit in smallest unit of asset
-    total_price: int  # total price in smallest unit of asset
-    accepted_min: Optional[int] = None
-    accepted_max: Optional[int] = None
+    # Use high-precision NUMERIC to avoid overflow for wei amounts on Postgres
+    if _HAS_SA:
+        unit_price: int = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=False))  # type: ignore[call-arg]
+        total_price: int = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=False))  # type: ignore[call-arg]
+        accepted_min: Optional[float] = Field(default=None, sa_column=sa.Column(sa.Numeric(24, 6), nullable=True))  # type: ignore[call-arg]
+        accepted_max: Optional[float] = Field(default=None, sa_column=sa.Column(sa.Numeric(24, 6), nullable=True))  # type: ignore[call-arg]
+    else:
+        unit_price: int  # price per unit in smallest unit of asset
+        total_price: int  # total price in smallest unit of asset
+        accepted_min: Optional[float] = None
+        accepted_max: Optional[float] = None
     expires_at: datetime
     status: str = Field(default="open")
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())

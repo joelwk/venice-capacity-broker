@@ -93,6 +93,7 @@
       let account = null;
       let quote = null;
       let envInfo = null;
+      let lastPrices = null; // cache of latest market prices
 
       // --- Market helpers ---
       function _adminToken(){
@@ -119,11 +120,21 @@
           if(!r.ok) throw new Error(await r.text());
           const j = await r.json();
           qs('marketRaw').textContent = JSON.stringify(j,null,2);
+          lastPrices = j && j.prices ? j.prices : null;
           const grid = qs('marketGrid');
           const prices = j.prices || {}; const ratios = j.ratios || {};
           const kv = [];
-          const p = (k)=> (prices[k]!==undefined? Number(prices[k]).toFixed(6):'');
-          const rr = (k)=> (ratios[k]!==undefined? Number(ratios[k]).toFixed(6):'');
+          function fmtNum(x){
+            try{
+              const v = Number(x);
+              if (!isFinite(v)) return '';
+              if (v === 0) return '0.000000';
+              if (Math.abs(v) < 1e-6) return v.toExponential(2); // tiny values
+              return v.toFixed(6);
+            }catch{ return '' }
+          }
+          const p = (k)=> (prices[k]!==undefined? fmtNum(prices[k]):'');
+          const rr = (k)=> (ratios[k]!==undefined? fmtNum(ratios[k]):'');
           kv.push(['VVV price', p('VVV')]);
           kv.push(['DIEM price', p('DIEM')]);
           kv.push(['ETH price', p('ETH')]);
@@ -176,7 +187,17 @@
             payDiv.appendChild(btn);
             const deep = document.createElement('a'); deep.href = `ethereum:${treas}@${chainId}?value=0x${Number(quote.totalPrice).toString(16)}`; deep.textContent='Open in wallet (EIP-681)'; deep.target='_blank';
             payDiv.appendChild(deep);
-            qs('quoteMsg').textContent = `Send ${fmtEth(quote.totalPrice)} ETH to ${treas}`;
+            // Also show approximate USDC equivalent using lastPrices
+            let approx = '';
+            try{
+              const ethUsd = lastPrices && Number(lastPrices['ETH']);
+              if (ethUsd && isFinite(ethUsd)){
+                const eth = Number(quote.totalPrice)/1e18;
+                const usd = eth * ethUsd;
+                approx = ` (~${usd.toFixed(2)} USDC)`;
+              }
+            }catch{}
+            qs('quoteMsg').textContent = `Send ${fmtEth(quote.totalPrice)} ETH to ${treas}${approx}`;
           } else if (asset === 'USDC'){
             const copyA = document.createElement('button'); copyA.textContent='Copy treasury address'; copyA.onclick=()=>{ navigator.clipboard.writeText(treas); };
             payDiv.appendChild(copyA);
