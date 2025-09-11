@@ -2435,7 +2435,8 @@ try:
                                     s.commit()
                                 if status != last_status:
                                     import json as _json4
-                                    yield f"data: {_json4.dumps({\"bidId\": r.bid_id, \"status\": r.status, \"context\": ctx})}\n\n"
+                                    # Avoid backslashes inside f-string expression by using single-quoted keys
+                                    yield f"data: {_json4.dumps({'bidId': r.bid_id, 'status': r.status, 'context': ctx})}\n\n"
                                     last_status = status
                         except Exception as _e:  # noqa: BLE001
                             yield f"event: error\n" f"data: {str(_e)}\n\n"
