@@ -163,8 +163,8 @@ Buyer Flow — Extended (clearing price, bids, settlement)
   - `SETTLEMENT_ENABLED=true` (Bid settlement + DEX preview)
   - EIP‑712 domain: `SIGN_DOMAIN_NAME=Venice Broker`, `SIGN_DOMAIN_VERSION=1`, `CHAIN_ID=8453`
 - Clearing Price:
-  - `GET /v1/pricing/clearing_price` returns `{ price, bandMin, bandMax, components, ts }`
-  - `GET /v1/pricing/clearing_price/stream` (SSE) streams periodic updates
+  - `GET /v1/pricing/clearing_price` returns `{ price, bandMin, bandMax, band: { min, max }, change24h|null, components, ts }`.
+  - `GET /v1/pricing/clearing_price/stream` (SSE) streams the same structure periodically.
   - Tuning: `CLEARING_BAND_BPS` (default 200), `CLEARING_SSE_INTERVAL_SECONDS` (default 5)
 - Bids (wallet signs EIP‑712 ‘PurchaseIntent’):
   - `POST /v1/bids` with `{ buyer, units(uint256, micro-units), maxPrice(uint256), asset, expiry, slippageBps, nonce, chainId, signature }`
@@ -172,8 +172,9 @@ Buyer Flow — Extended (clearing price, bids, settlement)
   - `GET /v1/bids/{bidId}` returns bid details
   - `GET /v1/bids/{bidId}/stream` (SSE) streams status (`out_of_band|in_band|accepted_window|expired`)
 - Settlement (v1: ETH/USDC, server quote + Pay/Verify):
-  - `POST /v1/bids/{bidId}/settle` returns a fresh server quote; enforces `unitPrice <= maxPrice`
-  - Then call `POST /v1/purchases/verify` as usual to issue the key
+  - `POST /v1/bids/{bidId}/settle` returns a fresh server quote; enforces `unitPrice <= maxPrice`.
+  - Confirm payment via `POST /v1/purchases/verify` or its alias `POST /v1/settlement/confirm` (same body/response) to issue the key.
+  - Monitor issuance in real time via SSE `GET /v1/purchases/{purchaseId}/stream`, which emits status updates until fulfilled. If SSE is unavailable, fall back to polling `GET /v1/purchases/{purchaseId}`.
 - DEX exact‑out preview (buy‑side; UniswapV2 only):
   - `GET /v1/settlement/quote?fromToken=<addr>&toAsset=<ETH|USDC>&amountOut=<minor>&[path=addr0,addr1,...]`
   - Returns `{ provider|null, path, amountIn, amountOut, approx }` — `approx=true` when mid‑price fallback is used

@@ -688,6 +688,11 @@ try:
                 "clearing": (_os.getenv("CLEARING_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
                 "bids": (_os.getenv("BIDS_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
                 "settlement": (_os.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                # Admin UI/features are considered enabled when either:
+                # - A BROKER_ADMIN_TOKEN is configured (typical production), or
+                # - Admin token is not required at startup (development mode).
+                # This mirrors endpoint accessibility for client UIs.
+                "admin": (bool(ADMIN_TOKEN) or (not bool(REQUIRE_ADMIN))),
                 "external_market": (_os.getenv("EXTERNAL_MARKET_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
             },
             "orchestrator": {
@@ -1640,6 +1645,7 @@ try:
             price: float
             bandMin: float
             bandMax: float
+            band: dict | None = None
             change24h: float | None = None
             components: dict | None = None
             ts: int
@@ -1659,8 +1665,11 @@ try:
                 hi = float(diem * (1.0 + span))
                 out = {
                     "price": float(diem),
+                    # Backward-compatible fields
                     "bandMin": float(lo),
                     "bandMax": float(hi),
+                    # New nested band object for clients expecting { band: { min, max } }
+                    "band": {"min": float(lo), "max": float(hi)},
                     "change24h": None,  # populated from TokenSnapshot history when available
                     "components": {"diem_usd": float(diem), "vvv_usd": (float(vvv) if vvv > 0 else None)},
                     "ts": int(time.time()),
@@ -2056,7 +2065,8 @@ try:
             @app.post("/v1/settlement/confirm", response_model=PurchaseStatus)
             @_traceable("broker.settlement_confirm")
             def settlement_confirm(req: PurchaseVerifyRequest) -> dict:  # type: ignore[valid-type]
-                return purchase_verify(req)
+                # Delegate to the same verification logic as /v1/purchases/verify
+                return verify_purchase(req)
 
         # Admin listings (quotes, purchases, utilization)
         try:
