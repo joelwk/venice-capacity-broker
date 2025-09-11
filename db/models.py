@@ -194,3 +194,20 @@ class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
     symbol: str = Field(default="DIEM")
     ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
     price_usd: float
+
+
+# --- Bids (EIP-712 purchase intents) ---
+class Bid(SQLModel, table=True):  # type: ignore[call-arg]
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bid_id: str = Field(index=True)
+    buyer_address: str = Field(index=True)
+    units: float
+    max_price: int  # price per unit in smallest unit of asset
+    asset: str
+    expiry: datetime
+    slippage_bps: int = 0
+    nonce: int = 0
+    status: str = Field(default="received")  # received|out_of_band|in_band|accepted_window|expired
+    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    context: Optional[str] = None  # JSON blob with extra info (e.g., last clearing price)

@@ -112,11 +112,16 @@ Makefile Shortcuts (handy in Replit Shell)
 - `make db-compact` and `make db-counters TENANT=t1 [LIMIT=20]`
 
 Buyer Page
-- Navigate to `/admin/buy.html` for a minimal Buyer flow: connect wallet, request quote, pay to the treasury address, paste tx hash, and retrieve the issued key.
-- For ETH quotes, the page offers a one-click `eth_sendTransaction` and an EIP-681 deeplink. For USDC, copy address/amount helpers and a token link are provided.
- - Audit receipts: Each verified purchase stores a JSON `receipt` (SQL) with tx details, amount, quote summary, and verification metadata. Admin listings include status; detailed receipts can be queried via the DB.
+- Navigate to `/admin/buy.html` for the Buyer flow. Cards appear when the corresponding flags are enabled in `/v1/env.features`.
+- Quote (baseline): connect wallet → request quote → pay to Treasury → paste tx hash → retrieve issued key. ETH offers one‑click `eth_sendTransaction` and EIP‑681 deeplink; USDC provides copy helpers.
+- Clearing Price (when `CLEARING_ENABLED=true`): live clearing price card with SSE updates showing price and acceptance band (min/max), plus component prices (DIEM/VVV) when available.
+- Bids (when `BIDS_ENABLED=true`): Place Bid form signs EIP‑712 `PurchaseIntent` via wallet; creates a bid with server verification and SSE status updates. “My Bids” lists recent bids for the connected wallet and allows subscribing to bid updates.
+- Settle Now (when `SETTLEMENT_ENABLED=true`): for bids in the `accepted_window` with asset ETH/USDC, click Settle to create a server quote; the page then switches to the Quote card for Pay & Verify.
+- Settlement Preview (when `SETTLEMENT_ENABLED=true`): exact‑out DEX preview (UniswapV2 only) to estimate required input for a desired ETH/USDC output; mid‑price fallback is marked `approx=true`.
+- Audit receipts: Successful verification persists a JSON `receipt` (SQL) with tx details, amount, quote summary, and verification metadata. Admin listings include status; detailed receipts can be queried via the DB.
 
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
 - Rotate + probe from shell: `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`.
 - Server compaction: `make server-db-compact [MINUTES=60 DELETE_AFTER=false]` (works with in-memory KV); then `make db-counters TENANT=t1 [LIMIT=20]`.
+- Buyer Upgrades: Clearing Price API + SSE, EIP‑712 Bids + SSE, Settlement (v1) via server quotes, and DEX exact‑out preview are now available behind flags (`CLEARING_ENABLED`, `BIDS_ENABLED`, `SETTLEMENT_ENABLED`).

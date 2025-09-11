@@ -170,6 +170,13 @@ Admin Control Panel:
 - The UI prompts once for `BROKER_ADMIN_TOKEN` and stores it in your browser `localStorage`.
 - Chat probe requires a model: set `BROKER_DEFAULT_MODEL` (or provide a model field in the form).
 
+Buyer Flow (flag‑gated):
+- Baseline: enable `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`, set `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and (for USDC) `USDC_ADDRESS`. Open `/admin/buy.html` → Connect Wallet → Get Quote (ETH/USDC) → Pay → Paste Tx → Key issued. Purchases also support SSE streaming of status.
+- Clearing Price (optional): set `CLEARING_ENABLED=true`. Endpoints: `GET /v1/pricing/clearing_price` and SSE `GET /v1/pricing/clearing_price/stream`. Response includes an optional `change24h` when token snapshots are available.
+- Bids (optional): set `BIDS_ENABLED=true` and configure EIP‑712 domain: `SIGN_DOMAIN_NAME`, `SIGN_DOMAIN_VERSION`, `CHAIN_ID`. Endpoints: `POST /v1/bids`, `GET /v1/bids?buyer=0x...`, `GET /v1/bids/{bidId}`, and SSE `GET /v1/bids/{bidId}/stream`.
+- Settlement v1 (optional): set `SETTLEMENT_ENABLED=true`. Endpoint: `POST /v1/bids/{bidId}/settle` (returns a server quote for Pay & Verify). DEX preview endpoint: `GET /v1/settlement/quote?fromToken=<addr>&toAsset=<ETH|USDC>&amountOut=<minor>[&path=...]` (UniswapV2 only; Aerodrome exact‑out is disabled; falls back to mid‑price with `approx=true`). Preview includes `slippageBps` when derivable and enforces risk caps.
+- UI cards hide automatically when features are disabled in `/v1/env.features`.
+
 ## Implementation Status (Plan Alignment)
 
 This repository tracks the implementation plan in `implementation-plan` and prioritizes core infrastructure and marketplace first.
@@ -178,6 +185,7 @@ This repository tracks the implementation plan in `implementation-plan` and prio
   - Broker API: multi-tenant `/v1` endpoints (tenants, chat, limits), idempotency middleware, optional KV-backed sliding-window limiter, basic metrics, SQL store (default) with JSON fallback.
   - Admin UI: static control panel mounted at `/admin` with auth prompt, health/env view, tenant and limits management, chat probe. Buyer page at `/admin/buy.html`.
   - Marketplace: feature-gated Quotes and Purchases endpoints with on-chain ETH/USDC payment verification on Base; issues scoped Venice subkeys on success.
+  - Buyer upgrades: Clearing Price API + SSE (flag‑gated), EIP‑712 bids + SSE (flag‑gated), Settlement v1 via server quotes (flag‑gated), and DEX exact‑out preview (flag‑gated).
   - Venice SDK + Key Manager: autonomous root/subkey flows; CLI and Makefile helpers for rotation, probing, and compaction.
 
 - Needs attention: hardening and productionization
@@ -622,11 +630,13 @@ Endpoints
 - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`
 - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }` → verifies on Base and issues a subkey
 - `GET /v1/purchases/{purchaseId}` → returns status and (if fulfilled) key metadata
+ - `GET /v1/purchases/{purchaseId}/stream` → SSE stream of purchase status transitions (e.g., confirmed → fulfilled)
+ - `POST /v1/settlement/confirm` → alias to purchase verification (shape‑compatible with `/v1/purchases/verify`)
 
 Buyer UI
 - Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
 - For ETH, the page offers a one-click “Pay with wallet (ETH)” using `eth_sendTransaction`, and an EIP‑681 deeplink. For USDC, copy address/amount helpers are shown.
- - Receipts & audit: verification attaches a JSON receipt to each purchase (stored in SQL) with tx details, quote summary, and verification metadata.
+- Receipts & audit: verification attaches a JSON receipt to each purchase (stored in SQL) with tx details, quote summary, and verification metadata.
 
 ## End-to-End Demo (MVP)
 

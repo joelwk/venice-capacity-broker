@@ -38,6 +38,59 @@
             <pre id="marketRaw" class="mono" style="margin-top:8px"></pre>
           </section>
 
+          <section class="card" id="clearingCard">
+            <h2>Clearing Price</h2>
+            <div id="clearMsg" class="status"></div>
+            <div class="kvs" id="clearGrid"></div>
+            <pre id="clearRaw" class="mono" style="margin-top:8px"></pre>
+          </section>
+
+          <section class="card" id="bidsCard">
+            <h2>Bids</h2>
+            <div class="row grid-2">
+              <div>
+                <label>Units (DIEM)</label>
+                <input id="bidUnits" type="number" min="0.01" step="0.01" value="0.10" />
+                <label>Max price per unit (<span id="bidAssetLabel">USDC</span>)</label>
+                <input id="bidMaxPrice" type="number" min="0.00000001" step="0.00000001" value="1.00" />
+                <div class="row">
+                  <label class="inline">Expiry (minutes)
+                    <input id="bidExpiryMin" type="number" min="1" step="1" value="30" />
+                  </label>
+                  <label class="inline">Slippage (bps)
+                    <input id="bidSlippage" type="number" min="0" step="1" value="100" />
+                  </label>
+                </div>
+                <button id="placeBidBtn">Place Bid (sign & submit)</button>
+                <div id="bidMsg" class="status"></div>
+              </div>
+              <pre id="bidOut" class="mono"></pre>
+            </div>
+            <h3>My Bids</h3>
+            <div id="bidsMsg" class="status"></div>
+            <div id="bidsTable"></div>
+          </section>
+
+          <section class="card" id="settlePreviewCard">
+            <h2>Settlement Preview</h2>
+            <div class="row grid-2">
+              <div>
+                <label>From Token (ERC-20 address)</label>
+                <input id="prevFrom" placeholder="0x..." />
+                <label>To Asset</label>
+                <select id="prevTo">
+                  <option value="USDC">USDC</option>
+                  <option value="ETH">ETH</option>
+                </select>
+                <label>Output Amount (in To Asset)</label>
+                <input id="prevAmount" type="number" min="0.00000001" step="0.00000001" value="1.00" />
+                <button id="prevBtn">Preview Swap (exact-out)</button>
+                <div id="prevMsg" class="status"></div>
+              </div>
+              <pre id="prevOut" class="mono"></pre>
+            </div>
+          </section>
+
           <section class="card">
             <h2>Wallet</h2>
             <div class="row">
@@ -114,11 +167,24 @@
       let lastPrices = null; // cache of latest market prices
       let quoteTimer = null; // countdown timer for quote expiry
       let tabMode = 'units'; // 'units' | 'budget'
+      let clearSSE = null;   // clearing price SSE handle
+      let bidSSE = null;     // current bid SSE handle
 
       // --- Market helpers ---
       function _adminToken(){
         // support both keys used elsewhere in the admin UI
         return localStorage.getItem('adminToken') || localStorage.getItem('admin_token') || '';
+      }
+
+      async function settleBid(bidId, asset){
+        qs('bidMsg').textContent='';
+        try{
+          const r = await fetch(`/v1/bids/${encodeURIComponent(bidId)}/settle?asset=${encodeURIComponent(asset||'')}`, { method:'POST' });
+          const body = await r.json().catch(()=>({}));
+          if (!r.ok){ throw new Error(body.detail || JSON.stringify(body)); }
+          applyQuote(body, (body && body.asset) || asset || 'USDC');
+          qs('bidMsg').textContent = 'Settlement quote ready. Proceed to Pay & Verify.';
+        }catch(e){ qs('bidMsg').textContent = 'Settle failed: '+e; }
       }
 
       async function loadEnv() {
@@ -156,6 +222,28 @@
               qs('verifyBtn').disabled = true;
               qs('verifyMsg').textContent = 'Purchases are disabled on the server.';
             }
+            // Clearing UI init
+            try {
+              const card = document.getElementById('clearingCard');
+              if (!feats.clearing) {
+                if (card) card.style.display = 'none';
+              } else {
+                if (card) card.style.display = '';
+                startClearing();
+              }
+            } catch {}
+            // Bids UI init
+            try {
+              const bidsCard = document.getElementById('bidsCard');
+              if (!feats.bids) { if (bidsCard) bidsCard.style.display='none'; }
+              else { if (bidsCard) bidsCard.style.display=''; if (account) loadMyBids(); }
+            } catch {}
+            // Settlement preview UI
+            try {
+              const sp = document.getElementById('settlePreviewCard');
+              if (!feats.settlement) { if (sp) sp.style.display='none'; }
+              else { if (sp) sp.style.display=''; seedPreviewAmount(); }
+            } catch {}
           } catch {}
           // Hide tenants panel for non-admin users
           try {
@@ -206,6 +294,234 @@
           grid.innerHTML = kv.map(([k,v])=>`<div><span>${k}</span><strong>${v}</strong></div>`).join('');
           qs('marketMsg').textContent = 'Live prices refreshed';
         }catch(e){ qs('marketMsg').textContent = 'Market fetch failed: '+e; }
+      }
+
+      // --- Clearing price ---
+      function renderClearing(obj){
+        try{
+          if (!obj || typeof obj !== 'object') return;
+          qs('clearRaw').textContent = JSON.stringify(obj,null,2);
+          const price = Number(obj.price||0);
+          const lo = Number(obj.bandMin||0);
+          const hi = Number(obj.bandMax||0);
+          const ch = (obj.change24h===null||obj.change24h===undefined) ? null : Number(obj.change24h);
+          const kv = [];
+          function fmt(x,n=6){ try{ return Number(x).toFixed(n); } catch { return '' } }
+          kv.push(['Price (USDC)', fmt(price,6)]);
+          kv.push(['Band Min', fmt(lo,6)]);
+          kv.push(['Band Max', fmt(hi,6)]);
+          if (ch!==null && isFinite(ch)){
+            const pct = (ch*100);
+            kv.push(['24h Change', `${pct.toFixed(2)}%`]);
+          }
+          const comps = obj.components||{};
+          if (comps.diem_usd) kv.push(['DIEM (USDC)', fmt(comps.diem_usd,6)]);
+          if (comps.vvv_usd) kv.push(['VVV (USDC)', fmt(comps.vvv_usd,6)]);
+          qs('clearGrid').innerHTML = kv.map(([k,v])=>`<div><span>${k}</span><strong>${v}</strong></div>`).join('');
+          qs('clearMsg').textContent = 'Clearing price updated';
+        }catch(e){ qs('clearMsg').textContent = 'Clearing render failed: '+e; }
+      }
+
+      async function loadClearingOnce(){
+        try{
+          const r = await fetch('/v1/pricing/clearing_price');
+          if (!r.ok) throw new Error(await r.text());
+          const j = await r.json();
+          renderClearing(j);
+        }catch(e){ qs('clearMsg').textContent = 'Clearing fetch failed: '+e; }
+      }
+
+      function startClearing(){
+        try{
+          if (clearSSE) { try{ clearSSE.close(); }catch{} clearSSE=null; }
+          if (!envInfo || !envInfo.features || !envInfo.features.clearing){ return; }
+          // Try SSE first; fallback to polling
+          try{
+            clearSSE = new EventSource('/v1/pricing/clearing_price/stream');
+            clearSSE.onmessage = (ev)=>{
+              try{ const data = JSON.parse(ev.data||'{}'); renderClearing(data); }catch{}
+            };
+            clearSSE.onerror = ()=>{ try{ clearSSE.close(); }catch{} clearSSE=null; };
+            // Also trigger an immediate fetch to fill quickly
+            loadClearingOnce();
+          }catch(e){
+            // Fallback polling
+            loadClearingOnce();
+            setInterval(loadClearingOnce, 5000);
+          }
+        }catch(e){ qs('clearMsg').textContent = 'Clearing init failed: '+e; }
+      }
+
+      // --- Bids ---
+      function _asset(){ return (qs('asset').value || 'USDC').toUpperCase(); }
+      function _toMinorPrice(perUnit, asset){
+        try{
+          const a = (asset||'USDC').toUpperCase();
+          const v = Number(perUnit);
+          if (!isFinite(v) || v<=0) return null;
+          if (a==='USDC') return Math.round(v * 1e6);
+          if (a==='ETH') return Math.round(v * 1e18);
+          return Math.round(v * 1e6);
+        }catch{return null}
+      }
+      function _toUnitsMinor(units){ try{ const u=Number(units); if(!isFinite(u)||u<=0) return null; return Math.round(u*1e6);}catch{return null} }
+
+      function updateBidAssetLabel(){ try{ qs('bidAssetLabel').textContent = _asset(); }catch{} }
+
+      async function placeBid(){
+        qs('bidMsg').textContent=''; qs('bidOut').textContent='';
+        try{
+          if (!account){ await connectWallet(); if (!account){ qs('bidMsg').textContent='Connect wallet first.'; return; } }
+          const asset = _asset(); updateBidAssetLabel();
+          const unitsMinor = _toUnitsMinor(qs('bidUnits').value);
+          if (unitsMinor==null){ qs('bidMsg').textContent='Invalid units'; return; }
+          const maxPriceMinor = _toMinorPrice(qs('bidMaxPrice').value, asset);
+          if (maxPriceMinor==null){ qs('bidMsg').textContent='Invalid max price'; return; }
+          const mins = Math.max(1, parseInt(qs('bidExpiryMin').value||'30',10));
+          const expiry = Math.floor(Date.now()/1000) + mins*60;
+          const slippageBps = Math.max(0, parseInt(qs('bidSlippage').value||'100',10));
+          const chainId = (envInfo && envInfo.signing && envInfo.signing.chainId) || 8453;
+          const domain = { name: (envInfo && envInfo.signing && envInfo.signing.name)||'Venice Broker', version: (envInfo && envInfo.signing && envInfo.signing.version)||'1', chainId };
+          const nonce = Math.floor(Date.now()/1000); // simple monotonic nonce per buyer
+          const message = { buyer: account, units: unitsMinor, maxPrice: maxPriceMinor, asset, expiry, slippageBps, nonce, chainId };
+          const typedData = {
+            types: {
+              EIP712Domain: [
+                { name: 'name', type: 'string' },
+                { name: 'version', type: 'string' },
+                { name: 'chainId', type: 'uint256' },
+              ],
+              PurchaseIntent: [
+                { name: 'buyer', type: 'address' },
+                { name: 'units', type: 'uint256' },
+                { name: 'maxPrice', type: 'uint256' },
+                { name: 'asset', type: 'string' },
+                { name: 'expiry', type: 'uint256' },
+                { name: 'slippageBps', type: 'uint16' },
+                { name: 'nonce', type: 'uint256' },
+                { name: 'chainId', type: 'uint256' },
+              ]
+            },
+            primaryType: 'PurchaseIntent',
+            domain,
+            message
+          };
+          let sig = '';
+          try{
+            sig = await window.ethereum.request({ method: 'eth_signTypedData_v4', params: [account, JSON.stringify(typedData)] });
+          }catch(e){ qs('bidMsg').textContent = 'Signature rejected: '+e; return; }
+          const res = await fetch('/v1/bids', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ...message, signature: sig }) });
+          const body = await res.json().catch(()=>({}));
+          if (!res.ok){ throw new Error(body.detail || JSON.stringify(body)); }
+          qs('bidOut').textContent = JSON.stringify(body, null, 2);
+          qs('bidMsg').textContent = `Bid placed (${body.status}).`;
+          if (body && body.bidId){ watchBid(body.bidId); }
+          loadMyBids();
+        }catch(e){ qs('bidMsg').textContent = 'Place bid failed: '+e; }
+      }
+
+      function watchBid(bidId){
+        try{
+          if (bidSSE){ try{ bidSSE.close(); }catch{} bidSSE=null; }
+          bidSSE = new EventSource(`/v1/bids/${encodeURIComponent(bidId)}/stream`);
+          bidSSE.onmessage = (ev)=>{ try{ const d=JSON.parse(ev.data||'{}'); qs('bidMsg').textContent = `Bid ${d.bidId} → ${d.status}`; }catch{} };
+          bidSSE.onerror = ()=>{ try{ bidSSE.close(); }catch{} bidSSE=null; };
+        }catch(e){ qs('bidMsg').textContent = 'Watch failed: '+e; }
+      }
+
+      function renderBidsTable(list){
+        if (!Array.isArray(list) || list.length===0){ qs('bidsTable').innerHTML = '<div class="status">No bids</div>'; return; }
+        const rows = list.map(b=>`
+          <tr>
+            <td>${b.bidId}</td>
+            <td>${b.status}</td>
+            <td>${b.units}</td>
+            <td>${b.maxPrice}</td>
+            <td>${b.asset}</td>
+            <td>${b.nonce}</td>
+            <td>${b.expiry||''}</td>
+            <td>
+              <button onclick="watchBid('${b.bidId}')">Watch</button>
+              ${ (b.status==='accepted_window' && (b.asset==='ETH' || b.asset==='USDC')) ? `<button onclick="settleBid('${'${'}b.bidId}', '${'${'}b.asset}')">Settle</button>` : '' }
+            </td>
+          </tr>`).join('');
+        qs('bidsTable').innerHTML = `
+          <table>
+            <thead><tr><th>Bid</th><th>Status</th><th>Units</th><th>MaxPrice</th><th>Asset</th><th>Nonce</th><th>Expiry</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      }
+
+      // Safer renderer (avoids nested template literals)
+      function renderBidsTableSimple(list){
+        if (!Array.isArray(list) || list.length===0){ qs('bidsTable').innerHTML = '<div class="status">No bids</div>'; return; }
+        let html = '<table><thead><tr><th>Bid</th><th>Status</th><th>Units</th><th>MaxPrice</th><th>Asset</th><th>Nonce</th><th>Expiry</th><th></th></tr></thead><tbody>';
+        for (const b of list){
+          const canSettle = (b.status==='accepted_window' && (b.asset==='ETH' || b.asset==='USDC'));
+          const row = [
+            '<tr>',
+            '<td>'+b.bidId+'</td>',
+            '<td>'+b.status+'</td>',
+            '<td>'+b.units+'</td>',
+            '<td>'+b.maxPrice+'</td>',
+            '<td>'+b.asset+'</td>',
+            '<td>'+b.nonce+'</td>',
+            '<td>'+(b.expiry||'')+'</td>',
+            '<td>',
+            '<button onclick="watchBid(\''+b.bidId+'\')">Watch</button>',
+            canSettle ? (' <button onclick="settleBid(\''+b.bidId+'\', \''+b.asset+'\')">Settle</button>') : '',
+            '</td>',
+            '</tr>'
+          ].join('');
+          html += row;
+        }
+        html += '</tbody></table>';
+        qs('bidsTable').innerHTML = html;
+      }
+
+      function seedPreviewAmount(){
+        try{
+          const to = qs('prevTo').value || 'USDC';
+          if (quote && quote.totalPrice && quote.asset && String(quote.asset).toUpperCase()===to.toUpperCase()){
+            const v = to.toUpperCase()==='USDC' ? fmtUsdc(quote.totalPrice) : fmtEth(quote.totalPrice);
+            if (v) qs('prevAmount').value = String(v);
+          }
+        }catch{}
+      }
+
+      function toMinorUnits(val, asset){
+        try{ const x = Number(val); if(!isFinite(x)||x<=0) return null; const a=(asset||'USDC').toUpperCase(); return a==='USDC'? Math.round(x*1e6): Math.round(x*1e18);}catch{return null}
+      }
+      async function previewSwap(){
+        qs('prevMsg').textContent=''; qs('prevOut').textContent='';
+        try{
+          const from = (qs('prevFrom').value||'').trim(); if(!from){ qs('prevMsg').textContent='Enter from token address'; return; }
+          const to = (qs('prevTo').value||'USDC').toUpperCase();
+          const amt = toMinorUnits(qs('prevAmount').value, to); if(amt==null){ qs('prevMsg').textContent='Invalid output amount'; return; }
+          const url = `/v1/settlement/quote?fromToken=${encodeURIComponent(from)}&toAsset=${encodeURIComponent(to)}&amountOut=${amt}`;
+          const r = await fetch(url);
+          const body = await r.json().catch(()=>({}));
+          if(!r.ok) throw new Error(body.detail || JSON.stringify(body));
+          qs('prevOut').textContent = JSON.stringify(body, null, 2);
+          const approx = body && body.approx ? ' (approx)' : '';
+          let note = `Required input: ${body.amountIn} units${approx}`;
+          if (body && (body.slippageBps!==null && body.slippageBps!==undefined)){
+            note += `; slippage=${body.slippageBps} bps`;
+          }
+          qs('prevMsg').textContent = note;
+        }catch(e){ qs('prevMsg').textContent = 'Preview failed: '+e; }
+      }
+
+      async function loadMyBids(){
+        const feats = (envInfo && envInfo.features) || {}; if (!feats.bids) return;
+        if (!account){ qs('bidsMsg').textContent = 'Connect wallet to view bids.'; qs('bidsTable').innerHTML=''; return; }
+        try{
+          const r = await fetch(`/v1/bids?buyer=${encodeURIComponent(account)}`);
+          const body = await r.json().catch(()=>({}));
+          if (!r.ok) throw new Error(body.detail || JSON.stringify(body));
+          renderBidsTableSimple(body);
+          qs('bidsMsg').textContent='';
+        }catch(e){ qs('bidsMsg').textContent = 'Bids fetch failed: '+e; }
       }
 
       async function connectWallet() {
@@ -304,6 +620,16 @@
           } catch {}
           startQuoteTimer();
           refreshVerifyState();
+          applyQuote(quote, asset);
+        } catch (e) {
+          qs('quoteMsg').textContent = 'Quote failed: ' + e;
+        }
+      }
+
+      function applyQuote(q, asset){
+        try{
+          quote = q;
+          qs('quoteOut').textContent = JSON.stringify(q, null, 2);
           const payDiv = qs('payButtons');
           payDiv.innerHTML = '';
           const treas = (envInfo && envInfo.payments && envInfo.payments.treasury_address) || '';
@@ -315,37 +641,37 @@
               try{
                 if (!window.ethereum) { alert('No wallet'); return; }
                 await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x2105' }] }).catch(()=>{});
-                const tx = await window.ethereum.request({ method:'eth_sendTransaction', params:[{ to: treas, value: '0x'+Number(quote.totalPrice).toString(16) }]});
+                const tx = await window.ethereum.request({ method:'eth_sendTransaction', params:[{ to: treas, value: '0x'+Number(q.totalPrice).toString(16) }]});
                 qs('txHash').value = tx;
               }catch(e){ alert('Send failed: '+e); }
             };
             payDiv.appendChild(btn);
-            const deep = document.createElement('a'); deep.href = `ethereum:${treas}@${chainId}?value=0x${Number(quote.totalPrice).toString(16)}`; deep.textContent='Open in wallet (EIP-681)'; deep.target='_blank';
+            const deep = document.createElement('a'); deep.href = `ethereum:${treas}@${chainId}?value=0x${Number(q.totalPrice).toString(16)}`; deep.textContent='Open in wallet (EIP-681)'; deep.target='_blank';
             payDiv.appendChild(deep);
-            // Also show approximate USDC equivalent using lastPrices
             let approx = '';
             try{
               const ethUsd = lastPrices && Number(lastPrices['ETH']);
               if (ethUsd && isFinite(ethUsd)){
-                const eth = Number(quote.totalPrice)/1e18;
+                const eth = Number(q.totalPrice)/1e18;
                 const usd = eth * ethUsd;
                 approx = ` (~${usd.toFixed(2)} USDC)`;
               }
             }catch{}
-            qs('quoteMsg').textContent = `Send ${fmtEth(quote.totalPrice)} ETH to ${treas}${approx}`;
+            qs('quoteMsg').textContent = `Send ${fmtEth(q.totalPrice)} ETH to ${treas}${approx}`;
           } else if (asset === 'USDC'){
             const copyA = document.createElement('button'); copyA.textContent='Copy treasury address'; copyA.onclick=()=>{ navigator.clipboard.writeText(treas); };
             payDiv.appendChild(copyA);
-            const amt = fmtUsdc(quote.totalPrice);
+            const amt = fmtUsdc(q.totalPrice);
             const copyAmt = document.createElement('button'); copyAmt.textContent=`Copy amount (${amt} USDC)`; copyAmt.onclick=()=>{ navigator.clipboard.writeText(amt); };
             payDiv.appendChild(copyAmt);
             const view = document.createElement('a'); view.href=`https://basescan.org/token/${(envInfo && envInfo.payments && envInfo.payments.usdc_address) || ''}`; view.textContent='View USDC token'; view.target='_blank';
             payDiv.appendChild(view);
             qs('quoteMsg').textContent = `Send ${amt} USDC to ${treas}`;
           }
-        } catch (e) {
-          qs('quoteMsg').textContent = 'Quote failed: ' + e;
-        }
+          stopQuoteTimer();
+          startQuoteTimer();
+          refreshVerifyState();
+        }catch(e){ qs('quoteMsg').textContent = 'Apply quote failed: '+e; }
       }
 
       async function verify() {
@@ -368,11 +694,29 @@
             qs('verifyMsg').textContent = 'Key issued (copy and store securely).';
           } else if (body && body.purchaseId) {
             qs('verifyMsg').textContent = 'Payment verified. Issuing key...';
-            await pollPurchase(body.purchaseId);
+            try { await startPurchaseStream(body.purchaseId); }
+            catch { await pollPurchase(body.purchaseId); }
           } else {
             qs('verifyMsg').textContent = 'Verified. Waiting for key issuance...';
           }
         } catch (e) { qs('verifyMsg').textContent = 'Verify failed: ' + e; }
+      }
+
+      async function startPurchaseStream(purchaseId){
+        return new Promise((resolve)=>{
+          try{
+            const es = new EventSource(`/v1/purchases/${encodeURIComponent(purchaseId)}/stream`);
+            es.onmessage = (ev)=>{
+              try{
+                const d = JSON.parse(ev.data||'{}');
+                qs('keyOut').textContent = JSON.stringify(d, null, 2);
+                if (d && d.subkey){ qs('verifyMsg').textContent = 'Key issued (copy and store securely).'; try{ es.close(); }catch{} resolve(); }
+                else { qs('verifyMsg').textContent = `Waiting for key... status=${d.status||'pending'}`; }
+              }catch{}
+            };
+            es.onerror = ()=>{ try{ es.close(); }catch{} resolve(); };
+          }catch{ resolve(); }
+        });
       }
 
       async function pollPurchase(purchaseId){
@@ -426,11 +770,15 @@
         }catch(e){ qs('tenantsMsg').textContent = 'Tenants fetch failed: '+e; }
       }
 
-      qs('connectBtn').onclick = connectWallet;
+      qs('connectBtn').onclick = async ()=>{ await connectWallet(); loadMyBids(); };
       qs('getQuoteBtn').onclick = getQuote;
       qs('verifyBtn').onclick = verify;
       qs('tabUnits').onclick = ()=> setTab('units');
       qs('tabBudget').onclick = ()=> setTab('budget');
+      qs('placeBidBtn').onclick = placeBid;
+      qs('asset').onchange = ()=>{ updateBidAssetLabel(); };
+      qs('prevBtn').onclick = previewSwap;
+      updateBidAssetLabel();
       loadEnv();
       loadMarket();
       loadTenants();

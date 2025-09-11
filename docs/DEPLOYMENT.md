@@ -156,6 +156,29 @@ Buyer Flow (flag-gated)
  - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }`
  - `GET /v1/purchases/{purchaseId}`
 
+Buyer Flow — Extended (clearing price, bids, settlement)
+- Flags (enable as needed):
+  - `CLEARING_ENABLED=true` (Clearing Price API + SSE)
+  - `BIDS_ENABLED=true` (EIP‑712 bids + SSE)
+  - `SETTLEMENT_ENABLED=true` (Bid settlement + DEX preview)
+  - EIP‑712 domain: `SIGN_DOMAIN_NAME=Venice Broker`, `SIGN_DOMAIN_VERSION=1`, `CHAIN_ID=8453`
+- Clearing Price:
+  - `GET /v1/pricing/clearing_price` returns `{ price, bandMin, bandMax, components, ts }`
+  - `GET /v1/pricing/clearing_price/stream` (SSE) streams periodic updates
+  - Tuning: `CLEARING_BAND_BPS` (default 200), `CLEARING_SSE_INTERVAL_SECONDS` (default 5)
+- Bids (wallet signs EIP‑712 ‘PurchaseIntent’):
+  - `POST /v1/bids` with `{ buyer, units(uint256, micro-units), maxPrice(uint256), asset, expiry, slippageBps, nonce, chainId, signature }`
+  - `GET /v1/bids?buyer=0x...` lists recent bids for the wallet
+  - `GET /v1/bids/{bidId}` returns bid details
+  - `GET /v1/bids/{bidId}/stream` (SSE) streams status (`out_of_band|in_band|accepted_window|expired`)
+- Settlement (v1: ETH/USDC, server quote + Pay/Verify):
+  - `POST /v1/bids/{bidId}/settle` returns a fresh server quote; enforces `unitPrice <= maxPrice`
+  - Then call `POST /v1/purchases/verify` as usual to issue the key
+- DEX exact‑out preview (buy‑side; UniswapV2 only):
+  - `GET /v1/settlement/quote?fromToken=<addr>&toAsset=<ETH|USDC>&amountOut=<minor>&[path=addr0,addr1,...]`
+  - Returns `{ provider|null, path, amountIn, amountOut, approx }` — `approx=true` when mid‑price fallback is used
+  - Aerodrome exact‑out is intentionally disabled; provide route overrides via `path` when needed
+
 Notes on pricing and units
 - Quotes accept fractional `units` (e.g., `0.10`) for small purchases. Two-decimal precision is supported by default.
 - Configure min/max via `PRICE_ACCEPTED_MIN_UNITS` (default `0.01`) and `PRICE_ACCEPTED_MAX_UNITS`.

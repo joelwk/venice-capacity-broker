@@ -62,7 +62,7 @@ logger = get_logger("broker.api")
 
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
-    from fastapi.responses import PlainTextResponse
+    from fastapi.responses import PlainTextResponse, StreamingResponse
     from fastapi.middleware.cors import CORSMiddleware
     from starlette.staticfiles import StaticFiles
     from pathlib import Path as _Path2
@@ -685,6 +685,10 @@ try:
             "features": {
                 "quotes": (_os.getenv("QUOTES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
                 "purchases": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "clearing": (_os.getenv("CLEARING_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "bids": (_os.getenv("BIDS_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "settlement": (_os.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
+                "external_market": (_os.getenv("EXTERNAL_MARKET_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
             },
             "orchestrator": {
                 "dryRunFakePrice": dr_fake_price,
@@ -692,6 +696,11 @@ try:
             "signals": {
                 "recent": recent_signals,
                 "offline": bool(signals_offline),
+            },
+            "signing": {
+                "name": (_os.getenv("SIGN_DOMAIN_NAME") or "Venice Broker").strip(),
+                "version": (_os.getenv("SIGN_DOMAIN_VERSION") or "1").strip(),
+                "chainId": int((_os.getenv("CHAIN_ID") or _os.getenv("BASE_CHAIN_ID") or "8453").strip() or 8453),
             },
             "venice": venice_cfg,
             "web3": snap.get("web3", {}),
@@ -1621,6 +1630,124 @@ try:
             )
         return out
 
+    # --- Clearing Price (flag-gated) ---
+    try:
+        _clearing_enabled = (_os.getenv("CLEARING_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
+        _clearing_band_bps = int((_os.getenv("CLEARING_BAND_BPS") or "200").strip() or 200)  # +/- band in bps (default 200 = 2%)
+        _clearing_sse_interval = float((_os.getenv("CLEARING_SSE_INTERVAL_SECONDS") or "5").strip() or 5.0)
+
+        class ClearingPriceResponse(BaseModel):  # type: ignore[valid-type]
+            price: float
+            bandMin: float
+            bandMax: float
+            change24h: float | None = None
+            components: dict | None = None
+            ts: int
+
+        def _compute_clearing_price() -> dict:
+            try:
+                from services.marketdata.provider import MarketDataProvider  # lazy import
+                mdp = MarketDataProvider()
+                px = mdp.prices(["DIEM", "VVV"]) or {}
+                diem = float(px.get("DIEM") or 0.0)
+                vvv = float(px.get("VVV") or 0.0)
+                if not (diem and diem > 0):
+                    raise RuntimeError("DIEM price unavailable")
+                bps = int(_clearing_band_bps if _clearing_band_bps > 0 else 200)
+                span = float(bps) / 10_000.0
+                lo = float(diem * (1.0 - span))
+                hi = float(diem * (1.0 + span))
+                out = {
+                    "price": float(diem),
+                    "bandMin": float(lo),
+                    "bandMax": float(hi),
+                    "change24h": None,  # populated from TokenSnapshot history when available
+                    "components": {"diem_usd": float(diem), "vvv_usd": (float(vvv) if vvv > 0 else None)},
+                    "ts": int(time.time()),
+                }
+                # Optional 24h change from TokenSnapshot if SQL is available
+                try:
+                    from sqlmodel import Session, select  # type: ignore
+                    from db.session import get_engine
+                    from db.models import TokenSnapshot, AssetToken
+                    from datetime import datetime as _dt, timedelta as _td
+                    import os as __os2
+
+                    # Resolve DIEM token address
+                    addr = (__os2.getenv("DIEM_TOKEN_ADDRESS") or "").strip()
+                    if not addr:
+                        # Fallback: find by symbol if present in AssetToken
+                        engine0 = get_engine()
+                        with Session(engine0) as s0:  # type: ignore[call-arg]
+                            tok = s0.exec(select(AssetToken).where((AssetToken.symbol == "DIEM") | (AssetToken.name == "Venice DIEM"))).first()  # type: ignore[misc]
+                            if tok and getattr(tok, "address", None):
+                                addr = str(tok.address)
+                    if addr:
+                        engine = get_engine()
+                        cutoff = _dt.utcnow() - _td(hours=24)
+                        with Session(engine) as s:  # type: ignore[call-arg]
+                            # Prefer the last snapshot at or before cutoff
+                            row = s.exec(
+                                select(TokenSnapshot)
+                                .where(TokenSnapshot.token_address == addr)
+                                .where(TokenSnapshot.ts <= cutoff)
+                                .order_by(TokenSnapshot.ts.desc())
+                                .limit(1)
+                            ).first()
+                            if row is None:
+                                # Fallback to the first snapshot after cutoff (approximation)
+                                row = s.exec(
+                                    select(TokenSnapshot)
+                                    .where(TokenSnapshot.token_address == addr)
+                                    .where(TokenSnapshot.ts >= cutoff)
+                                    .order_by(TokenSnapshot.ts.asc())
+                                    .limit(1)
+                                ).first()
+                        if row and getattr(row, "price_usd", None):
+                            try:
+                                p0 = float(row.price_usd)  # type: ignore[arg-type]
+                                if p0 > 0:
+                                    out["change24h"] = float((diem - p0) / p0)
+                            except Exception:
+                                pass
+                except Exception:
+                    # Leave change24h as None when SQL/model not available
+                    pass
+                return out
+            except Exception as _e:  # noqa: BLE001
+                raise HTTPException(status_code=503, detail=f"clearing price unavailable: {_e}")
+
+        if _clearing_enabled:
+            @app.get("/v1/pricing/clearing_price", response_model=ClearingPriceResponse)
+            @_traceable("broker.clearing_price")
+            def clearing_price() -> dict:
+                return _compute_clearing_price()
+
+            @app.get("/v1/pricing/clearing_price/stream")
+            @_traceable("broker.clearing_price_stream")
+            def clearing_price_stream() -> StreamingResponse:  # type: ignore[name-defined]
+                def _gen():
+                    while True:
+                        try:
+                            payload = _compute_clearing_price()
+                            import json as _json
+                            yield f"data: {_json.dumps(payload)}\n\n"
+                        except Exception as _e:  # noqa: BLE001
+                            yield f"event: error\n" f"data: {str(_e)}\n\n"
+                        time.sleep(max(1.0, float(_clearing_sse_interval)))
+
+                return StreamingResponse(_gen(), media_type="text/event-stream")
+        else:
+            @app.get("/v1/pricing/clearing_price", include_in_schema=False)
+            def clearing_price_disabled() -> dict:
+                raise HTTPException(status_code=404, detail="clearing price disabled")
+
+            @app.get("/v1/pricing/clearing_price/stream", include_in_schema=False)
+            def clearing_price_stream_disabled() -> dict:
+                raise HTTPException(status_code=404, detail="clearing price disabled")
+    except Exception as _e_clearing:  # noqa: BLE001
+        logger.warning("clearing endpoints init error: %s", _e_clearing)
+
     # --- Quotes & Purchases (flag-gated; non-admin) ---
     try:
         _features = {
@@ -1890,6 +2017,47 @@ try:
                         "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
                     }
 
+            # SSE stream for purchase status transitions (confirmed -> fulfilled)
+            @app.get("/v1/purchases/{purchase_id}/stream")
+            @_traceable("broker.purchases_stream")
+            def purchases_stream(purchase_id: str) -> StreamingResponse:  # type: ignore[name-defined]
+                def _gen():
+                    last_status = None
+                    while True:
+                        try:
+                            if not _has_sqlmodel_p:
+                                yield "event: error\n" + "data: SQL unavailable\n\n"
+                                time.sleep(3)
+                                continue
+                            with next(get_session()) as s:  # type: ignore[call-arg]
+                                p = s.exec(_select(Purchase).where(Purchase.purchase_id == purchase_id)).first()
+                                if p is None:
+                                    yield "event: error\n" + "data: not found\n\n"
+                                    time.sleep(3)
+                                    continue
+                                if p.status != last_status:
+                                    import json as _jsons
+                                    payload = {
+                                        "purchaseId": p.purchase_id,
+                                        "status": p.status,
+                                        "tenantId": p.tenant_id,
+                                        "subkey": p.subkey,
+                                        "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
+                                    }
+                                    yield f"data: {_jsons.dumps(payload)}\n\n"
+                                    last_status = p.status
+                        except Exception as _e:  # noqa: BLE001
+                            yield f"event: error\n" f"data: {str(_e)}\n\n"
+                        time.sleep(3)
+
+                return StreamingResponse(_gen(), media_type="text/event-stream")
+
+            # Alias for settlement confirm to purchase verify (shape-compatible)
+            @app.post("/v1/settlement/confirm", response_model=PurchaseStatus)
+            @_traceable("broker.settlement_confirm")
+            def settlement_confirm(req: PurchaseVerifyRequest) -> dict:  # type: ignore[valid-type]
+                return purchase_verify(req)
+
         # Admin listings (quotes, purchases, utilization)
         try:
             from sqlmodel import select as _select_all  # type: ignore
@@ -2005,6 +2173,510 @@ try:
                     return {"minutes": int(minutes), "total": 0}
     except Exception as _e_features:  # noqa: BLE001
         logger.warning("features init error: %s", _e_features)
+
+    # --- Bids (flag-gated; EIP-712) ---
+    try:
+        _bids_enabled = (_os.getenv("BIDS_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
+        _sign_domain_name = (_os.getenv("SIGN_DOMAIN_NAME") or "Venice Broker").strip()
+        _sign_domain_version = (_os.getenv("SIGN_DOMAIN_VERSION") or "1").strip()
+        try:
+            _chain_id_env = int((_os.getenv("CHAIN_ID") or _os.getenv("BASE_CHAIN_ID") or "8453").strip() or 8453)
+        except Exception:
+            _chain_id_env = 8453
+
+        class BidRequest(BaseModel):  # type: ignore[valid-type]
+            buyer: str
+            units: int  # integer micro-units (1e6 = 1.0 unit)
+            maxPrice: int
+            asset: str
+            expiry: int
+            slippageBps: int
+            nonce: int
+            chainId: int
+            signature: str
+
+        class BidResponse(BaseModel):  # type: ignore[valid-type]
+            bidId: str
+            status: str
+
+        def _recover_buyer(req: BidRequest) -> str:
+            try:
+                from eth_account import Account as _Account
+                from eth_account.messages import encode_structured_data as _encode_sd
+            except Exception as _e:  # noqa: BLE001
+                raise HTTPException(status_code=503, detail=f"eth-account unavailable: {_e}")
+
+            # Construct EIP-712 typed data
+            typed = {
+                "types": {
+                    "EIP712Domain": [
+                        {"name": "name", "type": "string"},
+                        {"name": "version", "type": "string"},
+                        {"name": "chainId", "type": "uint256"},
+                    ],
+                    "PurchaseIntent": [
+                        {"name": "buyer", "type": "address"},
+                        {"name": "units", "type": "uint256"},
+                        {"name": "maxPrice", "type": "uint256"},
+                        {"name": "asset", "type": "string"},
+                        {"name": "expiry", "type": "uint256"},
+                        {"name": "slippageBps", "type": "uint16"},
+                        {"name": "nonce", "type": "uint256"},
+                        {"name": "chainId", "type": "uint256"},
+                    ],
+                },
+                "primaryType": "PurchaseIntent",
+                "domain": {
+                    "name": _sign_domain_name,
+                    "version": _sign_domain_version,
+                    "chainId": int(req.chainId),
+                },
+                "message": {
+                    "buyer": req.buyer,
+                    "units": int(req.units),
+                    "maxPrice": int(req.maxPrice),
+                    "asset": str(req.asset),
+                    "expiry": int(req.expiry),
+                    "slippageBps": int(req.slippageBps),
+                    "nonce": int(req.nonce),
+                    "chainId": int(req.chainId),
+                },
+            }
+            if int(req.chainId) != int(_chain_id_env):
+                raise HTTPException(status_code=400, detail=f"chainId mismatch: got {req.chainId}, expected {_chain_id_env}")
+            try:
+                msg = _encode_sd(primitive=typed)
+                addr = _Account.recover_message(msg, signature=req.signature)
+                return ("0x" + str(addr).lower().removeprefix("0x"))
+            except Exception as _e:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"invalid signature: {_e}")
+
+        def _price_usdc_per_unit_from_asset(max_price_minor: int, asset: str) -> float:
+            try:
+                a = str(asset or "").upper()
+                if a == "USDC":
+                    return float(max_price_minor) / 1_000_000.0
+                if a == "ETH":
+                    from services.marketdata.provider import MarketDataProvider  # lazy
+                    mdp = MarketDataProvider()
+                    px = mdp.prices(["ETH"]) or {}
+                    eth_usd = float(px.get("ETH") or 0.0)
+                    if eth_usd <= 0:
+                        raise RuntimeError("ETH price unavailable")
+                    return (float(max_price_minor) / 1e18) * float(eth_usd)
+                # Default/unsupported asset: treat as USDC (conservative)
+                return float(max_price_minor) / 1_000_000.0
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("bids: price convert failed: %s", _e)
+                return 0.0
+
+        def _classify_bid_status(max_price_usdc: float, now_s: int, expiry_s: int) -> tuple[str, dict]:
+            # Uses clearing price if available; otherwise degrades to 'received/expired'
+            if now_s >= expiry_s:
+                return "expired", {"reason": "time"}
+            try:
+                cp = _compute_clearing_price()  # type: ignore[name-defined]
+                price = float(cp.get("price") or 0.0)
+                lo = float(cp.get("bandMin") or 0.0)
+                ctx = {"clearing": cp}
+                if max_price_usdc < lo:
+                    return "out_of_band", ctx
+                if max_price_usdc >= price:
+                    return "accepted_window", ctx
+                return "in_band", ctx
+            except Exception:
+                return "received", {"reason": "no_clearing"}
+
+        if _bids_enabled:
+            from db.session import get_session as _get_sess2
+            from db.models import Bid as _DbBid
+            try:
+                from sqlmodel import select as _sel2  # type: ignore
+                _has_sql_bids = True
+            except Exception:
+                _sel2 = None  # type: ignore
+                _has_sql_bids = False
+            import hashlib as _hh2
+            import json as _json2
+            from datetime import datetime as _dt
+
+            @app.post("/v1/bids", response_model=BidResponse)
+            @_traceable("broker.bids_create")
+            def bids_create(req: BidRequest) -> dict:
+                # Verify signature and fields
+                buyer_rx = _recover_buyer(req)
+                if buyer_rx.lower() != str(req.buyer or "").lower():
+                    raise HTTPException(status_code=400, detail="buyer/signature mismatch")
+                # Idempotency on (buyer, nonce)
+                if not _has_sql_bids:
+                    raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
+                now_s = int(time.time())
+                with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                    exists = s.exec(
+                        _sel2(_DbBid).where((_DbBid.buyer_address == buyer_rx) & (_DbBid.nonce == int(req.nonce)))  # type: ignore[misc]
+                    ).first()
+                    # Consistent bidId across retries
+                    base = f"{buyer_rx}:{int(req.nonce)}:{str(req.asset).upper()}:{int(req.maxPrice)}:{int(req.units)}:{int(req.expiry)}"
+                    bid_id = _hh2.sha256(base.encode()).hexdigest()[:16]
+                    if exists is not None:
+                        # If payload matches, return existing (idempotent). Otherwise, conflict.
+                        try:
+                            same = (
+                                exists.max_price == int(req.maxPrice)
+                                and str(exists.asset).upper() == str(req.asset).upper()
+                                and int(round(float(exists.units) * 1_000_000)) == int(req.units)
+                                and int(exists.expiry.timestamp()) == int(req.expiry)
+                            )
+                        except Exception:
+                            same = False
+                        if not same:
+                            raise HTTPException(status_code=409, detail="nonce replay with different payload")
+                        return {"bidId": exists.bid_id, "status": exists.status}
+                    # Compute initial status
+                    max_usdc = _price_usdc_per_unit_from_asset(int(req.maxPrice), str(req.asset))
+                    status, ctx = _classify_bid_status(max_usdc, now_s, int(req.expiry))
+                    ctx_json = None
+                    try:
+                        ctx_json = _json2.dumps(ctx)
+                    except Exception:
+                        ctx_json = None
+                    b = _DbBid(
+                        bid_id=bid_id,
+                        buyer_address=buyer_rx,
+                        units=float(int(req.units)) / 1_000_000.0,
+                        max_price=int(req.maxPrice),
+                        asset=str(req.asset).upper(),
+                        expiry=_dt.utcfromtimestamp(int(req.expiry)),
+                        slippage_bps=int(req.slippageBps),
+                        nonce=int(req.nonce),
+                        status=status,
+                        context=ctx_json,
+                    )
+                    s.add(b)
+                    s.commit()
+                    return {"bidId": bid_id, "status": status}
+
+            @app.get("/v1/bids", response_model=list[dict])
+            @_traceable("broker.bids_list")
+            def bids_list(buyer: str = Query(..., description="buyer wallet address")) -> list[dict]:
+                if not _has_sql_bids:
+                    raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
+                with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                    rows = s.exec(_sel2(_DbBid).where(_DbBid.buyer_address == buyer).order_by(_DbBid.created_at.desc()).limit(50)).all()  # type: ignore[misc]
+                    out: list[dict] = []
+                    for r in rows:
+                        out.append(
+                            {
+                                "bidId": r.bid_id,
+                                "status": r.status,
+                                "units": float(r.units),
+                                "maxPrice": int(r.max_price),
+                                "asset": r.asset,
+                                "expiry": int(r.expiry.timestamp()) if r.expiry else None,
+                                "slippageBps": int(r.slippage_bps),
+                                "nonce": int(r.nonce),
+                                "createdAt": r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None,
+                            }
+                        )
+                    return out
+
+            @app.get("/v1/bids/{bid_id}")
+            @_traceable("broker.bids_get")
+            def bids_get(bid_id: str) -> dict:
+                if not _has_sql_bids:
+                    raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
+                with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                    r = s.exec(_sel2(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
+                    if r is None:
+                        raise HTTPException(status_code=404, detail="bid not found")
+                    return {
+                        "bidId": r.bid_id,
+                        "status": r.status,
+                        "units": float(r.units),
+                        "maxPrice": int(r.max_price),
+                        "asset": r.asset,
+                        "expiry": int(r.expiry.timestamp()) if r.expiry else None,
+                        "slippageBps": int(r.slippage_bps),
+                        "nonce": int(r.nonce),
+                        "createdAt": r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None,
+                        "updatedAt": r.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.updated_at else None,
+                        "context": r.context,
+                    }
+
+            @app.get("/v1/bids/{bid_id}/stream")
+            @_traceable("broker.bids_stream")
+            def bids_stream(bid_id: str) -> StreamingResponse:  # type: ignore[name-defined]
+                def _gen():
+                    last_status = None
+                    while True:
+                        try:
+                            now_s = int(time.time())
+                            if not _has_sql_bids:
+                                yield "event: error\n" + "data: SQL unavailable\n\n"
+                                time.sleep(3)
+                                continue
+                            with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                                r = s.exec(_sel2(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
+                                if r is None:
+                                    yield "event: error\n" + "data: not found\n\n"
+                                    time.sleep(3)
+                                    continue
+                                max_usdc = _price_usdc_per_unit_from_asset(int(r.max_price), str(r.asset))
+                                status, ctx = _classify_bid_status(max_usdc, now_s, int(r.expiry.timestamp()) if r.expiry else now_s)
+                                if status != r.status:
+                                    r.status = status
+                                    r.updated_at = _dt.utcnow()
+                                    try:
+                                        import json as _json3
+                                        r.context = _json3.dumps(ctx)
+                                    except Exception:
+                                        pass
+                                    s.add(r)
+                                    s.commit()
+                                if status != last_status:
+                                    import json as _json4
+                                    yield f"data: {_json4.dumps({\"bidId\": r.bid_id, \"status\": r.status, \"context\": ctx})}\n\n"
+                                    last_status = status
+                        except Exception as _e:  # noqa: BLE001
+                            yield f"event: error\n" f"data: {str(_e)}\n\n"
+                        time.sleep(5)
+
+                return StreamingResponse(_gen(), media_type="text/event-stream")
+
+            # --- Settlement v1 (flag-gated) ---
+            try:
+                _settlement_enabled = (_os.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
+                if _settlement_enabled:
+                    from services.pricing.service import PricingService as _PricingSvc  # type: ignore
+                    _settle_pricing = _PricingSvc()
+
+                    class SettleResponse(BaseModel):  # type: ignore[valid-type]
+                        quoteId: str
+                        units: float
+                        asset: str
+                        unitPrice: int
+                        totalPrice: int
+                        expiresAt: int
+
+                    @app.post("/v1/bids/{bid_id}/settle", response_model=SettleResponse)
+                    @_traceable("broker.bids_settle")
+                    def bids_settle(bid_id: str, asset: str | None = None) -> dict:
+                        if not _has_sql_bids:
+                            raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
+                        now_s = int(time.time())
+                        with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                            b = s.exec(_sel2(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
+                            if b is None:
+                                raise HTTPException(status_code=404, detail="bid not found")
+                            if b.expiry and int(b.expiry.timestamp()) <= now_s:
+                                raise HTTPException(status_code=400, detail="bid expired")
+                            pay_asset = (asset or b.asset or "USDC").upper()
+                            if pay_asset not in {"ETH", "USDC"}:
+                                raise HTTPException(status_code=400, detail="unsupported asset for settlement")
+                            if str(pay_asset) != str(b.asset or "").upper():
+                                raise HTTPException(status_code=400, detail="asset must match bid asset")
+                            # Create fresh quote for bid units
+                            q = _settle_pricing.get_quote(units=float(b.units), asset=pay_asset)
+                            # Enforce maxPrice per unit
+                            if int(q.get("unitPrice") or 0) > int(b.max_price):
+                                raise HTTPException(status_code=409, detail="price exceeds bid max")
+                            # Optionally: emit telemetry event
+                            try:
+                                from libs.telemetry.events import emit as _emit
+                                _emit("settlement.quote", {"bidId": bid_id, **q})
+                            except Exception:
+                                pass
+                            return q
+
+                    class DexPreviewResponse(BaseModel):  # type: ignore[valid-type]
+                        provider: str | None
+                        fromToken: str
+                        toToken: str
+                        toAsset: str
+                        path: list[str]
+                        amountIn: int
+                        amountOut: int
+                        expiresAt: int
+                        approx: bool = False
+                        slippageBps: int | None = None
+
+                    @app.get("/v1/settlement/quote", response_model=DexPreviewResponse)
+                    @_traceable("broker.settlement_preview")
+                    def settlement_preview(
+                        fromToken: str = Query(..., description="ERC-20 address to swap from"),
+                        toAsset: str = Query(..., description="ETH or USDC (treasury asset)"),
+                        amountOut: int = Query(..., description="Desired output amount in minor units (wei or 6dp)"),
+                        path: str | None = Query(None, description="Optional CSV path override: addr0,addr1,[addr2]"),
+                    ) -> dict:
+                        """Preview an exact-out swap to fund payment in ETH or USDC.
+
+                        - Uses UniswapV2 exact-out; skips Aerodrome by design.
+                        - When quotes unavailable, falls back to mid-price estimate and marks approx=true.
+                        """
+                        frm = (fromToken or "").strip()
+                        if not frm or not frm.startswith("0x"):
+                            raise HTTPException(status_code=400, detail="invalid fromToken")
+                        asset_u = (toAsset or "USDC").strip().upper()
+                        if asset_u not in {"ETH", "USDC"}:
+                            raise HTTPException(status_code=400, detail="toAsset must be ETH or USDC")
+                        amt_out = int(amountOut)
+                        if amt_out <= 0:
+                            raise HTTPException(status_code=400, detail="amountOut must be > 0")
+                        # Resolve target token address (WETH for ETH)
+                        import os as __os
+                        if asset_u == "ETH":
+                            to_token = (__os.getenv("WETH_ADDRESS") or "0x4200000000000000000000000000000000000006").strip()
+                        else:
+                            to_token = (__os.getenv("USDC_ADDRESS") or __os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip()
+                        if not to_token:
+                            raise HTTPException(status_code=400, detail="target token address not configured")
+                        # Build path (override > default heuristics)
+                        if path and path.strip():
+                            p = [a.strip() for a in path.split(",") if a.strip()]
+                        else:
+                            # Prefer direct hop first; if not viable, client can retry with an explicit path
+                            p = [frm, to_token]
+                            # If same token, no swap needed
+                            if p[0].lower() == p[-1].lower():
+                                return {
+                                    "provider": None,
+                                    "fromToken": frm,
+                                    "toToken": to_token,
+                                    "toAsset": asset_u,
+                                    "path": p,
+                                    "amountIn": 0,
+                                    "amountOut": amt_out,
+                                    "expiresAt": int(time.time()) + 60,
+                                    "approx": True,
+                                    "slippageBps": 0,
+                                }
+                        # Try aggregator exact-out
+                        try:
+                            from libs.dex.providers import build_aggregator_from_env as _build
+                            agg = _build()
+                            q = agg.best_quote_exact_out(amt_out, p)
+                            if q is not None:
+                                # Compute slippage vs mid price and enforce risk caps
+                                slip_bps_val: int | None = None
+                                try:
+                                    from services.marketdata.provider import MarketDataProvider as _MDP2
+                                    from services.risk.policy import RiskPolicy as _RP
+                                    mdp2 = _MDP2()
+                                    policy = _RP.from_env()
+                                    # Execution price in toToken per fromToken
+                                    di = mdp2._erc20_decimals(frm)  # type: ignore[attr-defined]
+                                    do = mdp2._erc20_decimals(to_token)  # type: ignore[attr-defined]
+                                    exec_price = (float(q.amount_out) / float(10 ** int(do))) / (float(q.amount_in) / float(10 ** int(di)))
+                                    # Mid/reference price (direct or via WETH bridge)
+                                    ref = mdp2._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
+                                    if not ref or ref <= 0:
+                                        bt2 = mdp2._weth_address()
+                                        p1_ = mdp2._mid_price_from_reserves(frm, bt2)  # type: ignore[attr-defined]
+                                        p2_ = mdp2._mid_price_from_reserves(bt2, to_token)  # type: ignore[attr-defined]
+                                        ref = (p1_ or 0.0) * (p2_ or 0.0)
+                                    if ref and ref > 0:
+                                        chk = policy.check_slippage(exec_price, ref)
+                                        slip_bps_val = int(round(float(chk.get("slippage_bps", 0.0) or 0.0)))
+                                        if not bool(chk.get("ok", True)):
+                                            raise HTTPException(status_code=409, detail="slippage exceeds cap")
+                                    # Enforce pool-take cap against first hop when available
+                                    try:
+                                        first_hop = q.path[:2] if len(q.path) >= 2 else [frm, to_token]
+                                        cap_units = mdp2.reserve_cap_units(first_hop)
+                                        if cap_units is not None and int(q.amount_in) > int(cap_units):
+                                            raise HTTPException(status_code=409, detail="input exceeds pool take cap")
+                                    except HTTPException:
+                                        raise
+                                    except Exception:
+                                        pass
+                                except HTTPException:
+                                    raise
+                                except Exception:
+                                    slip_bps_val = None
+                                return {
+                                    "provider": q.provider,
+                                    "fromToken": frm,
+                                    "toToken": to_token,
+                                    "toAsset": asset_u,
+                                    "path": q.path,
+                                    "amountIn": int(q.amount_in),
+                                    "amountOut": int(q.amount_out),
+                                    "expiresAt": int(time.time()) + 60,
+                                    "approx": False,
+                                    "slippageBps": slip_bps_val,
+                                }
+                        except Exception:
+                            # Fall through to approx
+                            pass
+                        # Approximate via mid-price (constant-product small-size approximation)
+                        try:
+                            from services.marketdata.provider import MarketDataProvider as _MDP
+                            mdp = _MDP()
+                            # Compute mid price fromToken->toToken; if 0, try via WETH bridge
+                            price = mdp._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
+                            if not price or price <= 0:
+                                # Try frm->WETH and WETH->toToken, multiply
+                                bt = mdp._weth_address()
+                                p1 = mdp._mid_price_from_reserves(frm, bt)  # type: ignore[attr-defined]
+                                p2 = mdp._mid_price_from_reserves(bt, to_token)  # type: ignore[attr-defined]
+                                price = (p1 or 0.0) * (p2 or 0.0)
+                            if not price or price <= 0:
+                                raise RuntimeError("no route/mid-price available")
+                            # amountIn ≈ amountOut / price, normalized to input decimals
+                            di = mdp._erc20_decimals(frm)  # type: ignore[attr-defined]
+                            do = mdp._erc20_decimals(to_token)  # type: ignore[attr-defined]
+                            amt_out_float = float(amt_out) / float(10 ** int(do))
+                            amt_in_float = float(amt_out_float / float(price))
+                            amt_in_units = int(round(amt_in_float * float(10 ** int(di))))
+                            # Optional pool-take cap on approximate path
+                            try:
+                                first_hop = [frm, to_token]
+                                cap_units = mdp.reserve_cap_units(first_hop)
+                                if cap_units is not None and int(amt_in_units) > int(cap_units):
+                                    raise HTTPException(status_code=409, detail="input exceeds pool take cap")
+                            except HTTPException:
+                                raise
+                            except Exception:
+                                pass
+                            return {
+                                "provider": None,
+                                "fromToken": frm,
+                                "toToken": to_token,
+                                "toAsset": asset_u,
+                                "path": [frm, to_token],
+                                "amountIn": int(amt_in_units),
+                                "amountOut": int(amt_out),
+                                "expiresAt": int(time.time()) + 60,
+                                "approx": True,
+                                # Using mid-price approximation, slippage vs ref is ~0 by construction
+                                "slippageBps": 0,
+                            }
+                        except Exception as _e:  # noqa: BLE001
+                            raise HTTPException(status_code=400, detail=f"no route: {_e}")
+                else:
+                    @app.post("/v1/bids/{bid_id}/settle", include_in_schema=False)
+                    def bids_settle_disabled(bid_id: str) -> dict:  # noqa: ARG001
+                        raise HTTPException(status_code=404, detail="settlement disabled")
+                    @app.get("/v1/settlement/quote", include_in_schema=False)
+                    def settlement_preview_disabled() -> dict:
+                        raise HTTPException(status_code=404, detail="settlement disabled")
+            except Exception as _e_settle:  # noqa: BLE001
+                logger.warning("settlement endpoints init error: %s", _e_settle)
+        else:
+            @app.post("/v1/bids", include_in_schema=False)
+            def bids_disabled() -> dict:
+                raise HTTPException(status_code=404, detail="bids disabled")
+            @app.get("/v1/bids", include_in_schema=False)
+            def bids_list_disabled() -> list[dict]:  # noqa: D401
+                raise HTTPException(status_code=404, detail="bids disabled")
+            @app.get("/v1/bids/{bid_id}", include_in_schema=False)
+            def bids_get_disabled(bid_id: str) -> dict:  # noqa: ARG001
+                raise HTTPException(status_code=404, detail="bids disabled")
+            @app.get("/v1/bids/{bid_id}/stream", include_in_schema=False)
+            def bids_stream_disabled(bid_id: str) -> dict:  # noqa: ARG001
+                raise HTTPException(status_code=404, detail="bids disabled")
+    except Exception as _e_bids:  # noqa: BLE001
+        logger.warning("bids endpoints init error: %s", _e_bids)
 
     def _get_broker_limits_obj(tenant_id: str) -> dict:
         win_s = RATE_LIMIT_WINDOW_SECONDS
