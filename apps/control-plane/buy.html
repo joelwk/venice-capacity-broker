@@ -49,10 +49,27 @@
 
           <section class="card">
             <h2>Quote</h2>
+            <style>
+              .tabs{display:flex;gap:8px;margin-bottom:8px}
+              .tabs button{padding:6px 10px}
+              .tabs button.active{outline:2px solid var(--accent)}
+              .hide{display:none}
+            </style>
+            <div class="tabs">
+              <button id="tabUnits" class="active">By Units</button>
+              <button id="tabBudget">By Budget</button>
+            </div>
             <div class="row grid-2">
               <div>
-                <label>Units (DIEM)</label>
-                <input id="units" type="number" min="0.01" step="0.01" value="0.10" />
+                <div id="byUnits">
+                  <label>Units (DIEM)</label>
+                  <input id="units" type="number" min="0.01" step="0.01" value="0.10" />
+                </div>
+                <div id="byBudget" class="hide">
+                  <label>Budget Amount</label>
+                  <input id="budget" type="number" min="0.01" step="0.01" value="1.00" />
+                  <div id="budgetMsg" class="status"></div>
+                </div>
                 <label>Asset</label>
                 <select id="asset">
                   <option value="USDC">USDC</option>
@@ -60,6 +77,7 @@
                 </select>
                 <button id="getQuoteBtn">Get Quote</button>
                 <div id="quoteMsg" class="status"></div>
+                <div id="quoteTtl" class="status"></div>
               </div>
               <pre id="quoteOut" class="mono"></pre>
             </div>
@@ -78,7 +96,7 @@
           </section>
         </div>
 
-        <aside>
+        <aside id="tenantsAside">
           <section class="card">
             <h2>Tenants</h2>
             <div id="tenantsMsg" class="status"></div>
@@ -94,6 +112,8 @@
       let quote = null;
       let envInfo = null;
       let lastPrices = null; // cache of latest market prices
+      let quoteTimer = null; // countdown timer for quote expiry
+      let tabMode = 'units'; // 'units' | 'budget'
 
       // --- Market helpers ---
       function _adminToken(){
@@ -111,6 +131,47 @@
           const assets = (pay.accepted_assets || []).join(', ');
           const addr = pay.treasury_address || '(not set)';
           qs('payInfo').textContent = `Treasury: ${addr}\nAssets: ${assets}`;
+          // Populate asset dropdown dynamically from accepted assets
+          try {
+            const sel = qs('asset');
+            const accepted = Array.isArray(pay.accepted_assets) ? pay.accepted_assets : [];
+            if (sel && accepted.length > 0) {
+              sel.innerHTML = '';
+              accepted.forEach(a => {
+                const opt = document.createElement('option');
+                opt.value = String(a).toUpperCase();
+                opt.textContent = String(a).toUpperCase();
+                sel.appendChild(opt);
+              });
+            }
+          } catch {}
+          // Feature flags from server
+          try {
+            const feats = (j && j.features) || {};
+            if (!feats.quotes) {
+              qs('getQuoteBtn').disabled = true;
+              qs('quoteMsg').textContent = 'Quotes are disabled on the server.';
+            }
+            if (!feats.purchases) {
+              qs('verifyBtn').disabled = true;
+              qs('verifyMsg').textContent = 'Purchases are disabled on the server.';
+            }
+          } catch {}
+          // Hide tenants panel for non-admin users
+          try {
+            const tok = _adminToken();
+            if (!tok) {
+              const aside = document.getElementById('tenantsAside');
+              if (aside) aside.classList.add('hide');
+            }
+          } catch {}
+          // Warn if payments disabled or treasury missing
+          try {
+            const envPayEnabled = !!pay && !!pay.treasury_address && (Array.isArray(pay.accepted_assets) && pay.accepted_assets.length > 0);
+            if (!envPayEnabled) {
+              qs('quoteMsg').textContent = 'Server payments not fully configured. Set TREASURY_ADDRESS and ACCEPT_ASSETS.';
+            }
+          } catch {}
         } catch (e) {}
       }
 
@@ -153,22 +214,96 @@
           const accs = await window.ethereum.request({ method: 'eth_requestAccounts' });
           account = accs && accs[0] || null;
           qs('walletStatus').textContent = account ? `Connected: ${account}` : 'Not connected';
+          refreshVerifyState();
         } catch (e) { qs('walletStatus').textContent = 'Connect failed: ' + e; }
       }
 
       function fmtEth(wei){ try { return (Number(wei)/1e18).toFixed(6); } catch { return '' } }
       function fmtUsdc(minor){ try { return (Number(minor)/1e6).toFixed(2); } catch { return '' } }
 
+      function stopQuoteTimer(){ if (quoteTimer) { clearInterval(quoteTimer); quoteTimer = null; } }
+      function isQuoteExpired(){
+        try {
+          if (!quote || !quote.expiresAt) return true;
+          const now = Math.floor(Date.now()/1000);
+          return now >= Number(quote.expiresAt);
+        } catch { return true; }
+      }
+      function updateQuoteTtl(){
+        try {
+          if (!quote || !quote.expiresAt) { qs('quoteTtl').textContent=''; refreshVerifyState(); return; }
+          const now = Math.floor(Date.now()/1000);
+          let s = Math.max(0, Number(quote.expiresAt) - now);
+          const m = Math.floor(s/60); s = s % 60;
+          qs('quoteTtl').textContent = `Quote TTL: ${m}:${String(s).padStart(2,'0')}`;
+          refreshVerifyState();
+        } catch { qs('quoteTtl').textContent=''; }
+      }
+      function startQuoteTimer(){ stopQuoteTimer(); updateQuoteTtl(); quoteTimer = setInterval(updateQuoteTtl, 1000); }
+      function refreshVerifyState(){ const b = qs('verifyBtn'); if (!b) return; b.disabled = !quote || isQuoteExpired() || !account; }
+
+      function setTab(mode){
+        tabMode = (mode === 'budget') ? 'budget' : 'units';
+        const u = qs('tabUnits'); const b = qs('tabBudget');
+        if (u) u.classList.toggle('active', tabMode==='units');
+        if (b) b.classList.toggle('active', tabMode==='budget');
+        const byU = qs('byUnits'); const byB = qs('byBudget');
+        if (byU) byU.classList.toggle('hide', tabMode!=='units');
+        if (byB) byB.classList.toggle('hide', tabMode!=='budget');
+        qs('budgetMsg').textContent = '';
+      }
+
+      function estimateUnitsFromBudget(){
+        try{
+          const asset = (qs('asset').value || 'USDC').toUpperCase();
+          const budget = parseFloat(qs('budget').value || '0');
+          if (!lastPrices || !isFinite(budget) || budget <= 0){ return null; }
+          const diemUsd = Number(lastPrices['DIEM']);
+          if (!diemUsd || !isFinite(diemUsd) || diemUsd <= 0){ return null; }
+          let usd = 0;
+          if (asset === 'USDC') { usd = budget; }
+          else if (asset === 'ETH') {
+            const ethUsd = Number(lastPrices['ETH']);
+            if (!ethUsd || !isFinite(ethUsd) || ethUsd <= 0) return null;
+            usd = budget * ethUsd;
+          } else { return null; }
+          const units = usd / diemUsd;
+          return units>0 ? units : null;
+        } catch { return null; }
+      }
+
       async function getQuote() {
         qs('quoteMsg').textContent = '';
         qs('quoteOut').textContent = '';
-        const units = parseFloat(qs('units').value || '0');
+        qs('quoteTtl').textContent = '';
+        stopQuoteTimer();
+        let units = parseFloat(qs('units').value || '0');
         const asset = qs('asset').value;
+        if (tabMode === 'budget'){
+          const est = estimateUnitsFromBudget();
+          if (est == null){ qs('budgetMsg').textContent = 'Cannot estimate units from budget (missing prices or invalid input).'; return; }
+          units = est;
+          // Reflect estimate back into the units input for transparency
+          try { qs('units').value = String(units.toFixed(6)); } catch {}
+          qs('budgetMsg').textContent = `Estimated units: ${units.toFixed(6)} (based on DIEM and ${asset} prices)`;
+        }
         try {
           const res = await fetch(`/v1/quotes?units=${units}&asset=${encodeURIComponent(asset)}`);
           if (!res.ok) { throw new Error(await res.text()); }
           quote = await res.json();
           qs('quoteOut').textContent = JSON.stringify(quote, null, 2);
+          // If engine adjusted units, reflect it in the input and indicate accepted bounds
+          try {
+            const u = qs('units');
+            if (u && typeof quote.units !== 'undefined') { u.value = String(quote.units); }
+            if (u && typeof quote.acceptedMin !== 'undefined' && quote.acceptedMin !== null) { u.min = String(quote.acceptedMin); }
+            if (u && typeof quote.acceptedMax !== 'undefined' && quote.acceptedMax !== null) { u.max = String(quote.acceptedMax); }
+            if (quote.acceptedMin != null && quote.acceptedMax != null) {
+              qs('quoteMsg').textContent = `Accepted units: ${quote.acceptedMin} – ${quote.acceptedMax}`;
+            }
+          } catch {}
+          startQuoteTimer();
+          refreshVerifyState();
           const payDiv = qs('payButtons');
           payDiv.innerHTML = '';
           const treas = (envInfo && envInfo.payments && envInfo.payments.treasury_address) || '';
@@ -218,6 +353,7 @@
         qs('keyOut').textContent = '';
         if (!quote) { qs('verifyMsg').textContent = 'Get a quote first.'; return; }
         if (!account) { qs('verifyMsg').textContent = 'Connect wallet first.'; return; }
+        if (isQuoteExpired()) { qs('verifyMsg').textContent = 'Quote expired. Please get a new quote.'; refreshVerifyState(); return; }
         const tx = qs('txHash').value.trim();
         if (!tx) { qs('verifyMsg').textContent = 'Paste transaction hash.'; return; }
         try {
@@ -228,8 +364,34 @@
           const body = await res.json().catch(() => ({}));
           if (!res.ok) { throw new Error(body.detail || JSON.stringify(body)); }
           qs('keyOut').textContent = JSON.stringify(body, null, 2);
-          qs('verifyMsg').textContent = 'Key issued (copy and store securely).';
+          if (body && body.subkey) {
+            qs('verifyMsg').textContent = 'Key issued (copy and store securely).';
+          } else if (body && body.purchaseId) {
+            qs('verifyMsg').textContent = 'Payment verified. Issuing key...';
+            await pollPurchase(body.purchaseId);
+          } else {
+            qs('verifyMsg').textContent = 'Verified. Waiting for key issuance...';
+          }
         } catch (e) { qs('verifyMsg').textContent = 'Verify failed: ' + e; }
+      }
+
+      async function pollPurchase(purchaseId){
+        try {
+          const maxTries = 20; // ~60s
+          for (let i=0; i<maxTries; i++){
+            await new Promise(r => setTimeout(r, 3000));
+            const r = await fetch(`/v1/purchases/${encodeURIComponent(purchaseId)}`);
+            const b = await r.json().catch(()=>({}));
+            if (r.ok){
+              qs('keyOut').textContent = JSON.stringify(b, null, 2);
+              if (b && b.subkey){ qs('verifyMsg').textContent = 'Key issued (copy and store securely).'; return; }
+              qs('verifyMsg').textContent = `Waiting for key... status=${b.status||'pending'}`;
+            } else {
+              qs('verifyMsg').textContent = 'Purchase poll failed: ' + (b && (b.detail||b.message) || r.statusText);
+            }
+          }
+          qs('verifyMsg').textContent = 'Still pending. You can retry later with your purchase id.';
+        } catch (e) { qs('verifyMsg').textContent = 'Polling error: ' + e; }
       }
 
       function renderTenantsTable(list){
@@ -267,6 +429,8 @@
       qs('connectBtn').onclick = connectWallet;
       qs('getQuoteBtn').onclick = getQuote;
       qs('verifyBtn').onclick = verify;
+      qs('tabUnits').onclick = ()=> setTab('units');
+      qs('tabBudget').onclick = ()=> setTab('budget');
       loadEnv();
       loadMarket();
       loadTenants();
