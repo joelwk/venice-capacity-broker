@@ -91,3 +91,12 @@
     - Clearing endpoint returns price, band, and (when data present) `change24h`.  
     - Purchases support polling and (after task) SSE for status.  
     - Tests for clearing, bids, settlement preview, and purchases status pass.
+
+
+curl -X POST "https://chanscope.replit.app/api/v1/nl_query" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Rows that contain USA from the last 48 hours",
+    "limit":10,
+    "format_for_llm": true
+  }'

@@ -2510,6 +2510,7 @@ try:
                         expiresAt: int
                         approx: bool = False
                         slippageBps: int | None = None
+                        poolTakeBps: int | None = None
 
                     @app.get("/v1/settlement/quote", response_model=DexPreviewResponse)
                     @_traceable("broker.settlement_preview")
@@ -2569,6 +2570,7 @@ try:
                             if q is not None:
                                 # Compute slippage vs mid price and enforce risk caps
                                 slip_bps_val: int | None = None
+                                pool_take_bps_val: int | None = None
                                 try:
                                     from services.marketdata.provider import MarketDataProvider as _MDP2
                                     from services.risk.policy import RiskPolicy as _RP
@@ -2589,13 +2591,30 @@ try:
                                         chk = policy.check_slippage(exec_price, ref)
                                         slip_bps_val = int(round(float(chk.get("slippage_bps", 0.0) or 0.0)))
                                         if not bool(chk.get("ok", True)):
-                                            raise HTTPException(status_code=409, detail="slippage exceeds cap")
+                                            max_slippage_bps = int(policy.slippage_bps_cap)
+                                            raise HTTPException(status_code=409, detail=f"slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
                                     # Enforce pool-take cap against first hop when available
                                     try:
                                         first_hop = q.path[:2] if len(q.path) >= 2 else [frm, to_token]
                                         cap_units = mdp2.reserve_cap_units(first_hop)
-                                        if cap_units is not None and int(q.amount_in) > int(cap_units):
-                                            raise HTTPException(status_code=409, detail="input exceeds pool take cap")
+                                        if cap_units is not None:
+                                            # Calculate pool take percentage
+                                            from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
+                                            import os
+                                            cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
+                                            if cached and cached.get("reserves"):
+                                                reserves = cached["reserves"]
+                                                # Determine which reserve corresponds to input token
+                                                if cached.get("token0", "").lower() == first_hop[0].lower():
+                                                    input_reserve = reserves[0]
+                                                else:
+                                                    input_reserve = reserves[1]
+                                                if input_reserve > 0:
+                                                    pool_take_bps_val = int(round((float(q.amount_in) / float(input_reserve)) * 10000))
+                                            
+                                            if int(q.amount_in) > int(cap_units):
+                                                max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                                raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
                                     except HTTPException:
                                         raise
                                     except Exception:
@@ -2604,6 +2623,7 @@ try:
                                     raise
                                 except Exception:
                                     slip_bps_val = None
+                                    pool_take_bps_val = None
                                 return {
                                     "provider": q.provider,
                                     "fromToken": frm,
@@ -2615,6 +2635,7 @@ try:
                                     "expiresAt": int(time.time()) + 60,
                                     "approx": False,
                                     "slippageBps": slip_bps_val,
+                                    "poolTakeBps": pool_take_bps_val,
                                 }
                         except Exception:
                             # Fall through to approx
@@ -2622,7 +2643,9 @@ try:
                         # Approximate via mid-price (constant-product small-size approximation)
                         try:
                             from services.marketdata.provider import MarketDataProvider as _MDP
+                            from services.risk.policy import RiskPolicy as _RP
                             mdp = _MDP()
+                            policy = _RP.from_env()
                             # Compute mid price fromToken->toToken; if 0, try via WETH bridge
                             price = mdp._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
                             if not price or price <= 0:
@@ -2639,16 +2662,78 @@ try:
                             amt_out_float = float(amt_out) / float(10 ** int(do))
                             amt_in_float = float(amt_out_float / float(price))
                             amt_in_units = int(round(amt_in_float * float(10 ** int(di))))
-                            # Optional pool-take cap on approximate path
+                            
+                            # Calculate slippage for fallback path
+                            slip_bps_val: int | None = None
+                            pool_take_bps_val: int | None = None
+                            
+                            # For mid-price approximation, we estimate slippage based on trade size impact
+                            # This is a conservative estimate assuming constant product AMM
+                            try:
+                                from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
+                                first_hop = [frm, to_token]
+                                cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
+                                if cached and cached.get("reserves"):
+                                    reserves = cached["reserves"]
+                                    # Determine which reserve corresponds to input/output tokens
+                                    if cached.get("token0", "").lower() == first_hop[0].lower():
+                                        input_reserve = reserves[0]
+                                        output_reserve = reserves[1]
+                                    else:
+                                        input_reserve = reserves[1]
+                                        output_reserve = reserves[0]
+                                    
+                                    if input_reserve > 0 and output_reserve > 0:
+                                        # Calculate pool take percentage
+                                        pool_take_bps_val = int(round((float(amt_in_units) / float(input_reserve)) * 10000))
+                                        
+                                        # Estimate execution price with constant product formula
+                                        # After swap: (input_reserve + amt_in) * (output_reserve - amt_out) = k
+                                        # This gives us the actual execution price
+                                        new_input_reserve = float(input_reserve) + float(amt_in_units)
+                                        new_output_reserve = float(output_reserve) - float(amt_out)
+                                        
+                                        # Execution price = amt_out / amt_in (in token units)
+                                        exec_price = amt_out_float / amt_in_float
+                                        
+                                        # Reference price = output_reserve / input_reserve (adjusted for decimals)
+                                        ref_price = (float(output_reserve) / float(10 ** int(do))) / (float(input_reserve) / float(10 ** int(di)))
+                                        
+                                        # Calculate slippage
+                                        if ref_price > 0:
+                                            # For buying output token: worse price means exec_price < ref_price
+                                            slip = max(0.0, (ref_price - exec_price) / ref_price * 10000.0)
+                                            slip_bps_val = int(round(slip))
+                                            
+                                            # Check against policy
+                                            chk = policy.check_slippage(exec_price, ref_price)
+                                            if not bool(chk.get("ok", True)):
+                                                max_slippage_bps = int(policy.slippage_bps_cap)
+                                                raise HTTPException(status_code=409, detail=f"estimated slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
+                            except HTTPException:
+                                raise
+                            except Exception:
+                                # If we can't calculate exact slippage, use a conservative estimate
+                                # based on trade size (typically 50% of pool take percentage)
+                                if pool_take_bps_val is not None:
+                                    slip_bps_val = int(pool_take_bps_val * 0.5)
+                            
+                            # Enforce pool-take cap
                             try:
                                 first_hop = [frm, to_token]
                                 cap_units = mdp.reserve_cap_units(first_hop)
                                 if cap_units is not None and int(amt_in_units) > int(cap_units):
-                                    raise HTTPException(status_code=409, detail="input exceeds pool take cap")
+                                    import os
+                                    max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                    if pool_take_bps_val is not None:
+                                        raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
+                                    else:
+                                        raise HTTPException(status_code=409, detail="input exceeds pool take cap")
                             except HTTPException:
                                 raise
                             except Exception:
                                 pass
+                            
                             return {
                                 "provider": None,
                                 "fromToken": frm,
@@ -2659,8 +2744,8 @@ try:
                                 "amountOut": int(amt_out),
                                 "expiresAt": int(time.time()) + 60,
                                 "approx": True,
-                                # Using mid-price approximation, slippage vs ref is ~0 by construction
-                                "slippageBps": 0,
+                                "slippageBps": slip_bps_val,
+                                "poolTakeBps": pool_take_bps_val,
                             }
                         except Exception as _e:  # noqa: BLE001
                             raise HTTPException(status_code=400, detail=f"no route: {_e}")
