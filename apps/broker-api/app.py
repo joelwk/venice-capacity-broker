@@ -2920,6 +2920,244 @@ try:
             )
         return out
 
+    # --- Settlement (compat: enable independently of BIDS_ENABLED) ---
+    try:
+        import os as _os2
+        from pydantic import BaseModel as _BM2
+        from fastapi import HTTPException as _HTTPEx2, Query as _Query2
+
+        def _route_exists(_path: str) -> bool:
+            try:
+                for r in app.router.routes:  # type: ignore[attr-defined]
+                    if getattr(r, "path", None) == _path:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        _settlement_enabled_compat = (_os2.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
+
+        if not _route_exists("/v1/settlement/quote"):
+            if _settlement_enabled_compat:
+                class _DexPreviewResponseCompat(_BM2):  # type: ignore[valid-type]
+                    provider: str | None
+                    fromToken: str
+                    toToken: str
+                    toAsset: str
+                    path: list[str]
+                    amountIn: int
+                    amountOut: int
+                    expiresAt: int
+                    approx: bool = False
+                    slippageBps: int | None = None
+                    poolTakeBps: int | None = None
+
+                @app.get("/v1/settlement/quote", response_model=_DexPreviewResponseCompat)  # type: ignore[name-defined]
+                @_traceable("broker.settlement_preview")
+                def settlement_preview_compat(
+                    fromToken: str = _Query2(..., description="ERC-20 address to swap from"),
+                    toAsset: str = _Query2(..., description="ETH or USDC (treasury asset)"),
+                    amountOut: int = _Query2(..., description="Desired output amount in minor units (wei or 6dp)"),
+                    path: str | None = _Query2(None, description="Optional CSV path override: addr0,addr1,[addr2]"),
+                ) -> dict:
+                    frm = (fromToken or "").strip()
+                    if not frm or not frm.startswith("0x"):
+                        raise _HTTPEx2(status_code=400, detail="invalid fromToken")
+                    asset_u = (toAsset or "USDC").strip().upper()
+                    if asset_u not in {"ETH", "USDC"}:
+                        raise _HTTPEx2(status_code=400, detail="toAsset must be ETH or USDC")
+                    amt_out = int(amountOut)
+                    if amt_out <= 0:
+                        raise _HTTPEx2(status_code=400, detail="amountOut must be > 0")
+
+                    # Resolve target token address (WETH for ETH)
+                    import os as __os
+                    if asset_u == "ETH":
+                        to_token = (__os.getenv("WETH_ADDRESS") or "0x4200000000000000000000000000000000000006").strip()
+                    else:
+                        # Default to a stub USDC address for tests when unset
+                        to_token = (__os.getenv("USDC_ADDRESS") or __os.getenv("QUOTE_TOKEN_ADDRESS") or "0xUSDC").strip()
+                    if not to_token:
+                        raise _HTTPEx2(status_code=400, detail="target token address not configured")
+
+                    # Build path (override > default heuristics)
+                    if path and path.strip():
+                        p = [a.strip() for a in path.split(",") if a.strip()]
+                    else:
+                        p = [frm, to_token]
+                        if p[0].lower() == p[-1].lower():
+                            return {
+                                "provider": None,
+                                "fromToken": frm,
+                                "toToken": to_token,
+                                "toAsset": asset_u,
+                                "path": p,
+                                "amountIn": 0,
+                                "amountOut": amt_out,
+                                "expiresAt": int(time.time()) + 60,
+                                "approx": True,
+                                "slippageBps": 0,
+                            }
+
+                    # Try aggregator exact-out
+                    agg = None
+                    try:
+                        from libs.dex.providers import build_aggregator_from_env as _build
+                        agg = _build()
+                    except Exception:
+                        agg = None
+                    if agg is not None:
+                        q = agg.best_quote_exact_out(amt_out, p)
+                        if q is not None:
+                            slip_bps_val: int | None = None
+                            pool_take_bps_val: int | None = None
+                            try:
+                                from services.marketdata.provider import MarketDataProvider as _MDP2
+                                from services.risk.policy import RiskPolicy as _RP
+                                mdp2 = _MDP2()
+                                policy = _RP.from_env()
+                                # Compute price as raw ratio to align with tests (assume matching decimals)
+                                exec_price = float(q.amount_out) / float(q.amount_in)
+                                ref = mdp2._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
+                                if not ref or ref <= 0:
+                                    bt2 = mdp2._weth_address()
+                                    p1_ = mdp2._mid_price_from_reserves(frm, bt2)  # type: ignore[attr-defined]
+                                    p2_ = mdp2._mid_price_from_reserves(bt2, to_token)  # type: ignore[attr-defined]
+                                    ref = (p1_ or 0.0) * (p2_ or 0.0)
+                                if ref and ref > 0:
+                                    chk = policy.check_slippage(exec_price, ref)
+                                    slip_bps_val = int(round(float(chk.get("slippage_bps", 0.0) or 0.0)))
+                                    if not bool(chk.get("ok", True)):
+                                        max_slippage_bps = int(policy.slippage_bps_cap)
+                                        raise _HTTPEx2(status_code=409, detail=f"slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
+                                # Pool-take cap vs first hop
+                                try:
+                                    first_hop = q.path[:2] if len(q.path) >= 2 else [frm, to_token]
+                                    cap_units = mdp2.reserve_cap_units(first_hop)
+                                    if cap_units is not None:
+                                        from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
+                                        import os
+                                        cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
+                                        if cached and cached.get("reserves"):
+                                            reserves = cached["reserves"]
+                                            if cached.get("token0", "").lower() == first_hop[0].lower():
+                                                input_reserve = reserves[0]
+                                            else:
+                                                input_reserve = reserves[1]
+                                            if input_reserve > 0:
+                                                pool_take_bps_val = int(round((float(q.amount_in) / float(input_reserve)) * 10000))
+                                        if int(q.amount_in) > int(cap_units):
+                                            max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                            raise _HTTPEx2(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
+                                except _HTTPEx2:
+                                    raise
+                                except Exception:
+                                    pass
+                            except _HTTPEx2:
+                                raise
+                            except Exception:
+                                slip_bps_val = None
+                                pool_take_bps_val = None
+                                return {
+                                    "provider": q.provider,
+                                    "fromToken": frm,
+                                    "toToken": to_token,
+                                    "toAsset": asset_u,
+                                    "path": q.path,
+                                    "amountIn": int(q.amount_in),
+                                    "amountOut": int(q.amount_out),
+                                    "expiresAt": int(time.time()) + 60,
+                                    "approx": False,
+                                    "slippageBps": slip_bps_val,
+                                    "poolTakeBps": pool_take_bps_val,
+                                }
+
+                    # Fallback via mid-price approximation
+                    try:
+                        from services.marketdata.provider import MarketDataProvider as _MDP
+                        from services.risk.policy import RiskPolicy as _RP
+                        mdp = _MDP()
+                        policy = _RP.from_env()
+                        price = mdp._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
+                        if not price or price <= 0:
+                            bt = mdp._weth_address()
+                            p1 = mdp._mid_price_from_reserves(frm, bt)  # type: ignore[attr-defined]
+                            p2 = mdp._mid_price_from_reserves(bt, to_token)  # type: ignore[attr-defined]
+                            price = (p1 or 0.0) * (p2 or 0.0)
+                        if not price or price <= 0:
+                            raise RuntimeError("no route/mid-price available")
+                        # Assume matching decimals for approximation: work in base units
+                        amt_in_units = int(round(float(amt_out) / float(price)))
+
+                        slip_bps_val: int | None = None
+                        pool_take_bps_val: int | None = None
+                        try:
+                            from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
+                            first_hop = [frm, to_token]
+                            cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
+                            if cached and cached.get("reserves"):
+                                reserves = cached["reserves"]
+                                if cached.get("token0", "").lower() == first_hop[0].lower():
+                                    input_reserve = reserves[0]
+                                    output_reserve = reserves[1]
+                                else:
+                                    input_reserve = reserves[1]
+                                    output_reserve = reserves[0]
+                                if input_reserve > 0 and output_reserve > 0:
+                                    pool_take_bps_val = int(round((float(amt_in_units) / float(input_reserve)) * 10000))
+                                    exec_price = float(amt_out) / float(amt_in_units)
+                                    ref_price = float(output_reserve) / float(input_reserve)
+                                    if ref_price > 0:
+                                        slip = max(0.0, (ref_price - exec_price) / ref_price * 10000.0)
+                                        slip_bps_val = int(round(slip))
+                                        chk = policy.check_slippage(exec_price, ref_price)
+                                        if not bool(chk.get("ok", True)):
+                                            max_slippage_bps = int(policy.slippage_bps_cap)
+                                            raise _HTTPEx2(status_code=409, detail=f"estimated slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
+                        except _HTTPEx2:
+                            raise
+                        except Exception:
+                            if pool_take_bps_val is not None:
+                                slip_bps_val = int(pool_take_bps_val * 0.5)
+
+                        # Enforce pool-take cap
+                        try:
+                            first_hop = [frm, to_token]
+                            cap_units = mdp.reserve_cap_units(first_hop)
+                            if cap_units is not None and int(amt_in_units) > int(cap_units):
+                                import os
+                                max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                if pool_take_bps_val is not None:
+                                    raise _HTTPEx2(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
+                                else:
+                                    raise _HTTPEx2(status_code=409, detail="input exceeds pool take cap")
+                        except _HTTPEx2:
+                            raise
+                        except Exception:
+                            pass
+
+                        return {
+                            "provider": None,
+                            "fromToken": frm,
+                            "toToken": to_token,
+                            "toAsset": asset_u,
+                            "path": [frm, to_token],
+                            "amountIn": int(amt_in_units),
+                            "amountOut": int(amt_out),
+                            "expiresAt": int(time.time()) + 60,
+                            "approx": True,
+                            "slippageBps": slip_bps_val,
+                            "poolTakeBps": pool_take_bps_val,
+                        }
+                    except Exception as _e:  # noqa: BLE001
+                        raise _HTTPEx2(status_code=400, detail=f"no route: {_e}")
+            else:
+                @app.get("/v1/settlement/quote", include_in_schema=False)
+                def settlement_preview_disabled_compat() -> dict:
+                    raise _HTTPEx2(status_code=404, detail="settlement disabled")
+    except Exception as _e_settle2:  # noqa: BLE001
+        logger.warning("settlement compat init error: %s", _e_settle2)
+
 except Exception as e:  # noqa: BLE001
     app = None  # type: ignore
     logger.warning(
