@@ -43,7 +43,7 @@ def mock_etherscan_data():
 
 def test_settlement_preview_with_slippage_and_pool_take(mock_dex_aggregator, mock_market_data, mock_etherscan_data):
     """Test that settlement preview returns slippageBps and poolTakeBps."""
-    with patch("apps.broker-api.app._is_settlement_enabled", return_value=True):
+    with patch("os.getenv", side_effect=lambda k, d=None: "true" if k == "SETTLEMENT_ENABLED" else d):
         with patch("libs.dex.providers.build_aggregator_from_env", return_value=mock_dex_aggregator):
             with patch("services.marketdata.provider.MarketDataProvider", return_value=mock_market_data):
                 with patch("services.marketdata.etherscan_verify.get_cached_pair_info_for_tokens", 
@@ -78,7 +78,7 @@ def test_settlement_preview_with_slippage_and_pool_take(mock_dex_aggregator, moc
 
 def test_settlement_preview_fallback_with_risk_hints(mock_market_data, mock_etherscan_data):
     """Test fallback path calculates slippage and pool take."""
-    with patch("apps.broker-api.app._is_settlement_enabled", return_value=True):
+    with patch("os.getenv", side_effect=lambda k, d=None: "true" if k == "SETTLEMENT_ENABLED" else d):
         # Mock aggregator to fail, triggering fallback
         mock_agg = Mock()
         mock_agg.best_quote_exact_out.return_value = None
@@ -117,7 +117,7 @@ def test_settlement_preview_fallback_with_risk_hints(mock_market_data, mock_ethe
 
 def test_settlement_preview_exceeds_slippage_cap(mock_market_data):
     """Test that quotes exceeding slippage cap are rejected with detailed error."""
-    with patch("apps.broker-api.app._is_settlement_enabled", return_value=True):
+    with patch("os.getenv", side_effect=lambda k, d=None: "true" if k == "SETTLEMENT_ENABLED" else d):
         # Mock aggregator with high slippage quote
         mock_agg = Mock()
         mock_agg.best_quote_exact_out.return_value = Mock(
@@ -155,7 +155,7 @@ def test_settlement_preview_exceeds_slippage_cap(mock_market_data):
 
 def test_settlement_preview_exceeds_pool_take_cap(mock_market_data, mock_etherscan_data):
     """Test that quotes exceeding pool take cap are rejected with detailed error."""
-    with patch("apps.broker-api.app._is_settlement_enabled", return_value=True):
+    with patch("os.getenv", side_effect=lambda k, d=None: "true" if k == "SETTLEMENT_ENABLED" else d):
         # Set small reserves to trigger pool take cap
         mock_etherscan_data["reserves"] = [1000000, 1000000]  # Small pool
         
