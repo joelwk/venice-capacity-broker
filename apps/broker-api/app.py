@@ -109,6 +109,15 @@ try:
             """
         )
 
+    # Basic probe endpoint for platform health checks
+    @app.get("/api", include_in_schema=False)
+    def api_probe_get() -> dict:
+        return {"ok": True, "service": "broker", "version": "0.1.0"}
+
+    @app.head("/api", include_in_schema=False)
+    def api_probe_head() -> PlainTextResponse:
+        return PlainTextResponse("", status_code=200)
+
     # Mount /admin static control panel if present
     try:
         _admin_dir = _Path2(__file__).resolve().parent.parent / "control-plane"
