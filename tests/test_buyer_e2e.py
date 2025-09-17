@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from types import ModuleType
 import pytest
 
-# Skip when SQLModel is unavailable (features require DB models)
+# Remove lightweight stubs so we can reload the real modules when available.
+for _mod in ("sqlmodel", "sqlalchemy", "db.session", "db.models"):
+    sys.modules.pop(_mod, None)
+
+# Skip when SQLModel is unavailable (features require DB models).
 pytest.importorskip("sqlmodel")
+
 
 
 def _load_broker_app_module() -> ModuleType:
@@ -25,6 +31,9 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
     # Minimal chain/payment config
     monkeypatch.setenv("BASE_RPC_URL", "http://localhost:8545")
     monkeypatch.setenv("TREASURY_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    # Provide a temporary SQLite database so SQLModel path is available even when
+    # Postgres/SQL_DATABASE_URL is not configured in CI environments.
+    monkeypatch.setenv("SQL_DATABASE_URL", "sqlite:///./test-buyer-e2e.db")
 
     mod = _load_broker_app_module()
 

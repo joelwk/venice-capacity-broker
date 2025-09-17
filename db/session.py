@@ -17,7 +17,9 @@ def _db_url() -> str:
         return url
     host = os.getenv("POSTGRES_HOST")
     if not host:
-        raise RuntimeError("SQL_DATABASE_URL/DATABASE_URL or POSTGRES_* envs must be set")
+        # Fall back to a local SQLite database when no Postgres configuration is
+        # provided (common in tests/CI environments).
+        return "sqlite:///./broker.db"
     user = os.getenv("POSTGRES_USER", "postgres")
     pwd = os.getenv("POSTGRES_PASSWORD", "")
     db = os.getenv("POSTGRES_DB", "postgres")
@@ -46,4 +48,3 @@ def get_session() -> Iterator[Session]:  # type: ignore[type-arg]
     engine = get_engine()
     with Session(engine) as session:  # type: ignore[call-arg]
         yield session
-
