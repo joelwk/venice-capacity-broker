@@ -38,16 +38,17 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
     mod = _load_broker_app_module()
 
     # Stub RPC calls to confirm ETH payment
+    tx_payload = {
+        "to": "0xabc0000000000000000000000000000000000001",
+        "from": "0xdef0000000000000000000000000000000000002",
+        "value": hex(5 * 10**15),  # placeholder; updated once quote is fetched
+    }
+
     def _fake_rpc(url: str, method: str, params: list):  # noqa: ANN001
         if method == "eth_getTransactionReceipt":
             return {"status": hex(1), "blockNumber": hex(12345), "logs": []}
         if method == "eth_getTransactionByHash":
-            # Return a tx to the configured treasury with sufficient value
-            return {
-                "to": "0xabc0000000000000000000000000000000000001",
-                "from": "0xdef0000000000000000000000000000000000002",
-                "value": hex(5 * 10**15),  # 0.005 ETH
-            }
+            return tx_payload
         raise AssertionError(f"unexpected rpc call: {method}")
 
     monkeypatch.setattr(mod, "_rpc_call", _fake_rpc, raising=True)
@@ -66,6 +67,7 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
     q = client.get("/v1/quotes", params={"units": 5, "asset": "ETH"})
     assert q.status_code == 200, q.text
     data = q.json()
+    tx_payload["value"] = hex(int(data["totalPrice"]))
     assert int(data["units"]) == 5 and data["asset"] == "ETH"
     # Verify purchase with a fake tx hash
     v = client.post(
