@@ -20,3 +20,28 @@ build/
 .idea/
 .vscode/
 
+# Databases & runtime state
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+apps/broker-api/tenants.json
+
+# Test & coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+coverage/
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Logs
+*.log

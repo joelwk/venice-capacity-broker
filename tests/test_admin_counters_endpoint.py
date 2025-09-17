@@ -18,6 +18,9 @@ def _make_fake_sql_stubs(rows):
     - db.models.Counter is patched so attribute comparisons yield ('eq', field, value)
     """
 
+    prev_sqlmodel = sys.modules.get("sqlmodel")
+    prev_sqlalchemy = sys.modules.get("sqlalchemy")
+
     # Pre-stub a minimal sqlmodel so db.models can import classes with table=True
     import sys as _sys
     from types import ModuleType as _ModuleType
@@ -134,6 +137,20 @@ def _make_fake_sql_stubs(rows):
     sqlm.Session = Session  # type: ignore[attr-defined]
     sqlm.select = select  # type: ignore[attr-defined]
 
+    def _restore():
+        if prev_sqlmodel is None:
+            sys.modules.pop("sqlmodel", None)
+        else:
+            sys.modules["sqlmodel"] = prev_sqlmodel
+        if prev_sqlalchemy is None:
+            sys.modules.pop("sqlalchemy", None)
+        else:
+            sys.modules["sqlalchemy"] = prev_sqlalchemy
+        for _mod in ("db.session", "db.models"):
+            sys.modules.pop(_mod, None)
+
+    return _restore
+
 
 def _load_app(module_name: str):
     app_path = Path("apps/broker-api/app.py").resolve()
@@ -168,24 +185,24 @@ def test_counters_requires_admin_token(monkeypatch, tmp_path):
             count=5,
         ),
     ]
-    _make_fake_sql_stubs(rows)
+    cleanup = _make_fake_sql_stubs(rows)
+    try:
+        # Patch DB engine fetch to avoid real SQL deps
+        import db.session as db_session
+        db_session.get_engine = lambda: object()  # type: ignore[assignment]
 
-    # Patch DB engine fetch to avoid real SQL deps
-    import db.session as db_session
-    db_session.get_engine = lambda: object()  # type: ignore[assignment]
+        broker_app = _load_app("broker_api_counters_auth")
+        _add_tenant(broker_app, "t1")
 
-    broker_app = _load_app("broker_api_counters_auth")
-    _add_tenant(broker_app, "t1")
+        from fastapi.testclient import TestClient
 
-    from fastapi.testclient import TestClient
+        client = TestClient(broker_app.app)
 
-    client = TestClient(broker_app.app)
-
-    # No auth -> 401
-    r = client.get("/v1/debug/counters", params={"tenant_id": "t1"})
-    assert r.status_code == 401
-
-
+        # No auth -> 401
+        r = client.get("/v1/debug/counters", params={"tenant_id": "t1"})
+        assert r.status_code == 401
+    finally:
+        cleanup()
 def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants2.json")
@@ -202,28 +219,29 @@ def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
             count=1,
         ),
     ]
-    _make_fake_sql_stubs(rows)
-    # Patch DB engine fetch to avoid real SQL deps
-    import db.session as db_session
-    db_session.get_engine = lambda: object()  # type: ignore[assignment]
+    cleanup = _make_fake_sql_stubs(rows)
+    try:
+        # Patch DB engine fetch to avoid real SQL deps
+        import db.session as db_session
+        db_session.get_engine = lambda: object()  # type: ignore[assignment]
 
-    broker_app = _load_app("broker_api_counters_validate")
-    _add_tenant(broker_app, "t1")
+        broker_app = _load_app("broker_api_counters_validate")
+        _add_tenant(broker_app, "t1")
 
-    from fastapi.testclient import TestClient
+        from fastapi.testclient import TestClient
 
-    client = TestClient(broker_app.app)
-    headers = {"Authorization": "Bearer adminkey"}
+        client = TestClient(broker_app.app)
+        headers = {"Authorization": "Bearer adminkey"}
 
-    # Missing tenant_id -> 400
-    r_missing = client.get("/v1/debug/counters", headers=headers)
-    assert r_missing.status_code == 400
+        # Missing tenant_id -> 400
+        r_missing = client.get("/v1/debug/counters", headers=headers)
+        assert r_missing.status_code == 400
 
-    # Invalid bucket_seconds -> 400
-    r_bad_bs = client.get("/v1/debug/counters", headers=headers, params={"tenant_id": "t1", "bucket_seconds": "abc"})
-    assert r_bad_bs.status_code == 400
-
-
+        # Invalid bucket_seconds -> 400
+        r_bad_bs = client.get("/v1/debug/counters", headers=headers, params={"tenant_id": "t1", "bucket_seconds": "abc"})
+        assert r_bad_bs.status_code == 400
+    finally:
+        cleanup()
 def test_counters_filters_limit_and_asc(tmp_path):
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants3.json")
@@ -239,33 +257,36 @@ def test_counters_filters_limit_and_asc(tmp_path):
         SimpleNamespace(tenant_id="t1", scope="signals", model=None, bucket_start=now - timedelta(minutes=1), bucket_seconds=300, count=5),
         SimpleNamespace(tenant_id="t2", scope="chat", model=None, bucket_start=now - timedelta(minutes=1), bucket_seconds=60, count=99),
     ]
-    _make_fake_sql_stubs(rows)
-    # Patch DB engine fetch to avoid real SQL deps
-    import db.session as db_session
-    db_session.get_engine = lambda: object()  # type: ignore[assignment]
+    cleanup = _make_fake_sql_stubs(rows)
+    try:
+        # Patch DB engine fetch to avoid real SQL deps
+        import db.session as db_session
+        db_session.get_engine = lambda: object()  # type: ignore[assignment]
 
-    broker_app = _load_app("broker_api_counters_filters")
-    _add_tenant(broker_app, "t1")
-    _add_tenant(broker_app, "t2")
+        broker_app = _load_app("broker_api_counters_filters")
+        _add_tenant(broker_app, "t1")
+        _add_tenant(broker_app, "t2")
 
-    from fastapi.testclient import TestClient
+        from fastapi.testclient import TestClient
 
-    client = TestClient(broker_app.app)
-    headers = {"Authorization": "Bearer adminkey"}
+        client = TestClient(broker_app.app)
+        headers = {"Authorization": "Bearer adminkey"}
 
-    # Filter to t1 + scope=chat + bucket_seconds=60; asc + limit=2
-    params = {"tenant_id": "t1", "scope": "chat", "bucket_seconds": "60", "asc": "1", "limit": "2"}
-    r = client.get("/v1/debug/counters", headers=headers, params=params)
-    assert r.status_code == 200, r.text
-    data = r.json()
-    assert isinstance(data, list)
-    assert len(data) == 2
-    # Shape
-    for item in data:
-        assert set(["tenant_id", "scope", "model", "bucket_start", "bucket_seconds", "count"]).issubset(item.keys())
-        assert item["tenant_id"] == "t1"
-        assert item["scope"] == "chat"
-        assert item["bucket_seconds"] == 60
-    # Ascending by bucket_start
-    ts = [item["bucket_start"] for item in data]
-    assert ts == sorted(ts)
+        # Filter to t1 + scope=chat + bucket_seconds=60; asc + limit=2
+        params = {"tenant_id": "t1", "scope": "chat", "bucket_seconds": "60", "asc": "1", "limit": "2"}
+        r = client.get("/v1/debug/counters", headers=headers, params=params)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) == 2
+        # Shape
+        for item in data:
+            assert set(["tenant_id", "scope", "model", "bucket_start", "bucket_seconds", "count"]).issubset(item.keys())
+            assert item["tenant_id"] == "t1"
+            assert item["scope"] == "chat"
+            assert item["bucket_seconds"] == 60
+        # Ascending by bucket_start
+        ts = [item["bucket_start"] for item in data]
+        assert ts == sorted(ts)
+    finally:
+        cleanup()
