@@ -251,6 +251,7 @@ class ArbiDiem:
             "fair_per_day": float(fair),
             "threshold_mult": float(threshold_mult),
             "premium": (float(market_price / fair) if fair > 0 else None),
+            "mint_rate": float(mint_rate),
             "desired_units": None,
             "suggested_units": None,
             "exec_price_preview": None,

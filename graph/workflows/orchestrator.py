@@ -36,12 +36,22 @@ class Orchestrator:
         utilization_ratio: float | None = None
         vol_bps: float | None = None
 
+        effective_mint_rate = float(mint_rate)
+        mint_rate_source = "param"
+
         if dry_run:
             try:
                 px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
             except Exception:
                 px = 1.0
             prices: Dict[str, float] = {"DIEM": px}
+            try:
+                fake_rate = os.getenv("DIEM_FAKE_MINT_RATE") or os.getenv("DIEM_MINT_RATE")
+                if fake_rate:
+                    effective_mint_rate = float(fake_rate)
+                    mint_rate_source = "env_dry_run"
+            except Exception:
+                pass
         else:
             # Warm minimal market signals and caches (best-effort)
             try:
@@ -60,6 +70,15 @@ class Orchestrator:
                 pass
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
+            try:
+                mint_info = self.market.diem_mint_rate(ttl_s=60)
+                if isinstance(mint_info, dict):
+                    candidate = mint_info.get("tokens_per_diem")
+                    if candidate not in (None, 0):
+                        effective_mint_rate = float(candidate)  # type: ignore[arg-type]
+                        mint_rate_source = str(mint_info.get("source", "market"))
+            except Exception:
+                pass
             # Append to history and compute simple realized volatility
             try:
                 hist = getattr(self, "_px_hist", [])
@@ -125,7 +144,7 @@ class Orchestrator:
                 if "simulate" in params and "corr_id" in params:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                         px,
-                        mint_rate=mint_rate,
+                        mint_rate=effective_mint_rate,
                         desired_units=None,
                         current_inventory_usd=None,
                         corr_id=corr,
@@ -136,7 +155,7 @@ class Orchestrator:
                 elif "simulate" in params:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                         px,
-                        mint_rate=mint_rate,
+                        mint_rate=effective_mint_rate,
                         desired_units=None,
                         current_inventory_usd=None,
                         simulate=True,
@@ -146,7 +165,7 @@ class Orchestrator:
                 else:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                         px,
-                        mint_rate=mint_rate,
+                        mint_rate=effective_mint_rate,
                         desired_units=None,
                         current_inventory_usd=None,
                         utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
@@ -163,7 +182,7 @@ class Orchestrator:
                 if "corr_id" in params:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                         px,
-                        mint_rate=mint_rate,
+                        mint_rate=effective_mint_rate,
                         desired_units=None,
                         current_inventory_usd=current_inventory_usd,
                         corr_id=corr,
@@ -173,7 +192,7 @@ class Orchestrator:
                 else:
                     decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
                         px,
-                        mint_rate=mint_rate,
+                        mint_rate=effective_mint_rate,
                         desired_units=None,
                         current_inventory_usd=current_inventory_usd,
                         utilization_ratio=utilization_ratio if "utilization_ratio" in params else None,
@@ -181,7 +200,7 @@ class Orchestrator:
                     )
             except Exception:
                 decision = self.arbi.evaluate_and_maybe_mint(  # type: ignore[attr-defined]
-                    px, mint_rate=mint_rate, desired_units=None, current_inventory_usd=current_inventory_usd
+                    px, mint_rate=effective_mint_rate, desired_units=None, current_inventory_usd=current_inventory_usd
                 )
         # Prefer agent-provided decision label when available
         last_why = getattr(self.arbi, "_last_rationale", None)
@@ -201,6 +220,8 @@ class Orchestrator:
             "dry_run": dry_run,
             "correlationId": corr,
             "ts": time.time(),
+            "mintRate": effective_mint_rate,
+            "mintRateSource": mint_rate_source,
             "limits": {
                 "slippage_bps_cap": getattr(self.arbi.risk, "slippage_bps_cap", None),
                 "max_trade_usd": getattr(self.arbi.risk, "max_trade_usd", None),

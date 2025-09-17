@@ -81,6 +81,7 @@ class DIEMACTIONS:
       - TRADE_PATH (comma-separated addresses, e.g., DIEM,USDC)
       - SLIPPAGE_BPS (default 100 = 1%)
       - ABI files: abi/diem.json (protocol), if mint/burn exist on DIEM contract
+      - Optional DIEM_STAKING_ADDRESS + ABI for stake_diem_for_api flows
     """
 
     def __init__(self) -> None:
@@ -97,6 +98,19 @@ class DIEMACTIONS:
             self.diem = None  # optional; raise at call time if used
         # Router is optional unless trade() is used
         self.router = get_contract(self.w3, self.router_addr, "uniswap_v2_router.json") if self.router_addr else None
+        self.diem_staking_addr = os.getenv("DIEM_STAKING_ADDRESS")
+        self.diem_staking = None
+        if self.diem_staking_addr:
+            try:
+                staking_addr = Web3.to_checksum_address(self.diem_staking_addr)
+                staking_abi = os.getenv("DIEM_STAKING_ABI", "diem_staking.json")
+                try:
+                    self.diem_staking = get_contract(self.w3, staking_addr, staking_abi)
+                except FileNotFoundError:
+                    # Fallback to reuse diem.json if dedicated ABI unavailable
+                    self.diem_staking = get_contract(self.w3, staking_addr, "diem.json")
+            except Exception:
+                self.diem_staking = None
 
     def mint(self, amount: int) -> Dict[str, Any]:
         if not self.diem:
@@ -170,6 +184,22 @@ class DIEMACTIONS:
         data = target.encode_abi(fn_name=fn, args=[int(amount)])
         tx_hash = send_tx(target_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "unlock_svvv", "tx_hash": tx_hash}
+
+    def _resolve_stake_target(self) -> tuple[Any, str]:
+        from web3 import Web3  # type: ignore
+
+        if self.diem_staking is not None and self.diem_staking_addr:
+            return self.diem_staking, Web3.to_checksum_address(self.diem_staking_addr)
+        if self.diem is not None and self.diem_addr:
+            return self.diem, Web3.to_checksum_address(self.diem_addr)
+        raise FileNotFoundError("No DIEM staking contract configured")
+
+    def stake_for_api(self, amount: int) -> Dict[str, Any]:
+        target, addr = self._resolve_stake_target()
+        fn = os.getenv("DIEM_STAKE_FN", "stake")
+        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        tx_hash = send_tx(addr, bytes.fromhex(data[2:]))
+        return {"status": "sent", "action": "stake_diem", "tx_hash": tx_hash}
 
     def trade(self, side: str, amount: int) -> Dict[str, Any]:
         if not self.router:

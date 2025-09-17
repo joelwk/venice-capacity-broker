@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from libs.agentkit_ext.actions import VVVActions
 from libs.agentkit_ext.agentkit_wallet import get_address
@@ -58,11 +60,8 @@ class StakingService:
 
         addr_arg = bytes.fromhex(wallet[2:])
         # Try common reward fn names
-        staked = 0
-        rewards = 0
-        # balanceOf(address)
         staked = _call_int(_encode_call("balanceOf(address)", [addr_arg]))
-        # Try a few reward selectors in order
+        rewards = 0
         for sig in [
             "earned(address)",
             "claimable(address)",
@@ -73,6 +72,34 @@ class StakingService:
             if rewards:
                 break
 
+        cooldown_seconds = int(os.getenv("VVV_COOLDOWN_SECONDS", str(7 * 24 * 60 * 60)))
+
+        def _call_timestamp(signatures: list[str]) -> Optional[int]:
+            for sig in signatures:
+                try:
+                    ts = _call_int(_encode_call(sig, [addr_arg]))
+                    if ts and ts > 0:
+                        # Guard against obviously invalid outputs (e.g., struct packing)
+                        # Accept values that look like unix timestamps within +/- 10 years.
+                        if 0 < ts < 10_000_000_000:
+                            return ts
+                except Exception:
+                    continue
+            return None
+
+        cooldown_end = _call_timestamp([
+            "cooldownEndsAt(address)",
+            "withdrawableTimestamp(address)",
+            "cooldowns(address)",
+        ])
+        now = int(time.time())
+        cooldown_remaining = None
+        if cooldown_end and cooldown_end > now:
+            cooldown_remaining = cooldown_end - now
+
+        min_active = int(os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
+        active_staker = bool(staked > max(0, min_active))
+
         return {
             "status": "ok",
             "chain_id": w3.eth.chain_id,
@@ -80,4 +107,21 @@ class StakingService:
             "staking_contract": staking_addr,
             "staked": staked,
             "rewards": rewards,
+            "active_staker": active_staker,
+            "min_active_stake": min_active,
+            "cooldown": {
+                "configured_seconds": cooldown_seconds,
+                "ends_at": cooldown_end,
+                "seconds_remaining": cooldown_remaining,
+            },
         }
+
+    def is_active_staker(self, status: Optional[Dict[str, Any]] = None) -> bool:
+        """Return True when staking position qualifies as active for Venice rewards."""
+
+        snapshot = status or self.status()
+        if snapshot.get("status") != "ok":
+            return False
+        staked = int(snapshot.get("staked") or 0)
+        min_active = int(snapshot.get("min_active_stake") or os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
+        return staked > max(0, int(min_active))

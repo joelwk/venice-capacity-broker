@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -85,6 +86,66 @@ class MarketDataProvider:
 
         agg = build_aggregator_from_env()
         return agg.quote_all(amount_in, path)
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:  # noqa: ANN401
+        try:
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str) and value.strip():
+                return float(value.strip())
+        except Exception:
+            return None
+        return None
+
+    def _deep_find(self, obj: Any, keys: List[str]) -> Optional[Any]:
+        stack: List[Any] = [obj]
+        seen = set()
+        while stack:
+            item = stack.pop()
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    if k in keys:
+                        return v
+                    stack.append(v)
+            elif isinstance(item, list):
+                stack.extend(item)
+        return None
+
+    def _diem_svvv_decimals(self) -> tuple[int, int]:
+        try:
+            diem_dec = int(os.getenv("DIEM_DECIMALS") or 0)
+        except Exception:
+            diem_dec = 0
+        try:
+            svvv_dec = int(os.getenv("SVVV_DECIMALS") or os.getenv("VVV_DECIMALS") or 0)
+        except Exception:
+            svvv_dec = 0
+        if diem_dec <= 0:
+            try:
+                diem_addr = self._address_for_symbol("DIEM")
+                if diem_addr:
+                    diem_dec = self._erc20_decimals(diem_addr)
+            except Exception:
+                diem_dec = 18
+        if diem_dec <= 0:
+            diem_dec = 18
+        if svvv_dec <= 0:
+            try:
+                vvv_addr = self._address_for_symbol("VVV")
+                if vvv_addr:
+                    svvv_dec = self._erc20_decimals(vvv_addr)
+            except Exception:
+                svvv_dec = 18
+        if svvv_dec <= 0:
+            svvv_dec = 18
+        return int(diem_dec), int(svvv_dec)
+
+    def _ratio_units_to_tokens(self, units: int, diem_decimals: int, svvv_decimals: int) -> float:
+        return float(units) * (10 ** diem_decimals) / float(10 ** svvv_decimals)
 
     def best_price(self, path: List[str], amount_in_decimal: float = 1.0) -> Dict[str, Any]:
         """Compute best price for path given a decimal input amount.
@@ -467,77 +528,18 @@ class MarketDataProvider:
                         out[sym] = 1.0
             else:
                 out[sym] = 1.0
-        # Normalize prices - handle various edge cases from DEX/AMM pricing
         normalized_out: Dict[str, float] = {}
-        
-        # First pass - collect all prices
         for sym, price in out.items():
-            normalized_out[sym] = price
-        
-        # Special case: if we have extreme price disparities, apply corrections
-        # This handles cases where prices might be inverted or in base units
-        if all(sym in normalized_out for sym in ["VVV", "DIEM", "USDC"]):
-            vvv_price = normalized_out.get("VVV", 0)
-            diem_price = normalized_out.get("DIEM", 0)
-            usdc_price = normalized_out.get("USDC", 1)
-            
-            # Check if prices look like base units or inverted prices
-            # Expected rough ranges (as of late 2024):
-            # VVV: $1-10, DIEM: $100-500, ETH: $2000-5000
-            
-            # If DIEM price is extremely small (< $0.01), it's likely in base units
-            if diem_price > 0 and diem_price < 0.01:
-                # Try different corrections
-                corrections = [
-                    # Possibility 1: Price is in base units (wei)
-                    (diem_price * 1e18, "base units"),
-                    # Possibility 2: Price is inverted (DIEM per USDC) in base units
-                    (1 / (diem_price * 1e18) if diem_price * 1e18 > 0 else 0, "inverted base units"),
-                    # Possibility 3: Price needs specific DIEM scaling
-                    # Based on analysis, DIEM needs ~2.21e14 scaling
-                    (diem_price * 2.21e14, "DIEM-specific scaling"),
-                ]
-                
-                for corrected_price, desc in corrections:
-                    if 50 <= corrected_price <= 500:  # Expected DIEM range
-                        normalized_out["DIEM"] = corrected_price
-                        try:
-                            from libs.telemetry.logger import get_logger
-                            logger = get_logger(__name__)
-                            logger.info(f"Corrected DIEM price from {diem_price:.2e} to ${corrected_price:.2f} ({desc})")
-                        except:
-                            pass
-                        break
-            
-            # Similar check for VVV
-            if vvv_price > 0 and vvv_price < 0.01:
-                # VVV scaling based on analysis needs ~2.19e5
-                corrections = [
-                    (vvv_price * 2.19e5, "VVV-specific scaling"),
-                    (vvv_price * 1e18, "base units"),
-                    (vvv_price * 1e6, "million units"),
-                ]
-                
-                for corrected_price, desc in corrections:
-                    if 0.5 <= corrected_price <= 10:  # Expected VVV range
-                        normalized_out["VVV"] = corrected_price
-                        try:
-                            from libs.telemetry.logger import get_logger
-                            logger = get_logger(__name__)
-                            logger.info(f"Corrected VVV price from {vvv_price:.2e} to ${corrected_price:.2f} ({desc})")
-                        except:
-                            pass
-                        break
-        
-        # Validate ETH price - should be in thousands
-        eth_price = normalized_out.get("ETH", 0)
-        if eth_price > 0 and eth_price < 100:
-            # ETH price too low, might need scaling
-            if eth_price * 1e18 > 1000:  # Likely in base units
-                normalized_out["ETH"] = eth_price * 1e18
-            elif eth_price * 1e3 > 1000:  # Might be in thousands
-                normalized_out["ETH"] = eth_price * 1e3
-        
+            try:
+                val = float(price)
+            except Exception:
+                val = 0.0
+            if sym.upper() == "USDC":
+                val = 1.0
+            if val <= 0:
+                val = 1.0 if sym.upper() == "USDC" else val
+            normalized_out[sym] = val
+
         # Emit centralized signal for prices (best-effort)
         try:
             from libs.telemetry.events import emit as _emit
@@ -551,6 +553,8 @@ class MarketDataProvider:
     _vvv_metrics_cache_t: float = 0.0
     _diem_balance_cache: Optional[Dict[str, Any]] = None
     _diem_balance_cache_t: float = 0.0
+    _mint_rate_cache: Optional[Dict[str, Any]] = None
+    _mint_rate_cache_t: float = 0.0
 
     def vvv_metrics(self, ttl_s: int = 30, retries: int = 2, backoff_s: float = 0.5) -> Dict[str, Any]:
         """Fetch VVV metrics (circulating supply, utilization, staking_yield) with cache and retry."""
@@ -641,6 +645,86 @@ class MarketDataProvider:
         except Exception:
             pass
         return data
+
+    def _compute_mint_rate(self) -> Dict[str, Any]:
+        diem_dec, svvv_dec = self._diem_svvv_decimals()
+        env_rate = os.getenv("DIEM_MINT_RATE")
+        if env_rate:
+            try:
+                rate = float(env_rate)
+                return {"tokens_per_diem": rate, "svvv_units_per_diem": None, "source": "env_float"}
+            except Exception:
+                pass
+        env_units = os.getenv("DIEM_MINT_RATE_SVVV_PER_DIEM")
+        if env_units:
+            try:
+                units_val = int(env_units)
+                tokens = self._ratio_units_to_tokens(units_val, diem_dec, svvv_dec)
+                return {
+                    "tokens_per_diem": tokens,
+                    "svvv_units_per_diem": units_val,
+                    "source": "env_units",
+                }
+            except Exception:
+                pass
+
+        metrics: Optional[Dict[str, Any]] = None
+        try:
+            metrics = self.vvv_metrics(ttl_s=60)
+        except Exception:
+            metrics = None
+
+        if isinstance(metrics, dict):
+            rate_candidate = self._deep_find(metrics, [
+                "diemMintRate",
+                "diem_mint_rate",
+                "mintRate",
+                "mint_rate",
+                "mintRateTokens",
+            ])
+            rate_float = self._to_float(rate_candidate)
+            units_candidate = self._deep_find(metrics, [
+                "mintRateSvvvPerDiem",
+                "mint_rate_svvv_per_diem",
+                "mintRateUnits",
+            ])
+            units_val = None
+            try:
+                if units_candidate is not None:
+                    units_val = int(units_candidate)
+            except Exception:
+                units_val = None
+
+            if units_val is not None and units_val > 0:
+                tokens = self._ratio_units_to_tokens(units_val, diem_dec, svvv_dec)
+                return {
+                    "tokens_per_diem": tokens,
+                    "svvv_units_per_diem": units_val,
+                    "source": "vvv_metrics",
+                }
+            if rate_float is not None and rate_float > 0:
+                return {
+                    "tokens_per_diem": rate_float,
+                    "svvv_units_per_diem": None,
+                    "source": "vvv_metrics",
+                }
+
+        return {"tokens_per_diem": None, "svvv_units_per_diem": None, "source": "unknown"}
+
+    def diem_mint_rate(self, ttl_s: int = 120) -> Dict[str, Any]:
+        now = time.time()
+        if self._mint_rate_cache and (now - self._mint_rate_cache_t) < ttl_s:
+            return dict(self._mint_rate_cache)
+        info = self._compute_mint_rate()
+        self._mint_rate_cache = dict(info)
+        self._mint_rate_cache_t = now
+        try:
+            from libs.telemetry.events import emit as _emit
+
+            _emit("signal.market.diem_mint_rate", {**info, "ts": int(now)})
+        except Exception:
+            pass
+        return info
 
     # --- Etherscan v2 discovery helpers ---
     def discover_trade_path(self, path: List[str]) -> Dict[str, Any]:

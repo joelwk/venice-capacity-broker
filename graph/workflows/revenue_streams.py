@@ -20,10 +20,21 @@ class DiemMintSellWorkflow:
 
     def run_once(self, mint_rate: float = 1.0, dry_run: bool = True) -> bool:
         px = self.market.prices(["DIEM"]).get("DIEM", 1.0)
-        fair_day = fair_value_per_diem(self.discount_rate_apy) * mint_rate / 365.0
+        effective_mint_rate = float(mint_rate)
+        try:
+            info = self.market.diem_mint_rate(ttl_s=60)
+            if isinstance(info, dict):
+                candidate = info.get("tokens_per_diem")
+                if candidate not in (None, 0):
+                    effective_mint_rate = float(candidate)  # type: ignore[arg-type]
+        except Exception:
+            pass
+        fair_day = fair_value_per_diem(self.discount_rate_apy) * effective_mint_rate / 365.0
         decision = "mint_sell" if px > fair_day * 1.05 else "hold"
-        logger.info(f"Decision={decision} (market={px:.4f}, fair/day={fair_day:.4f})")
+        logger.info(
+            f"Decision={decision} (market={px:.4f}, fair/day={fair_day:.4f}, mint_rate={effective_mint_rate:.4f})"
+        )
         if decision == "mint_sell" and not dry_run:
-            return self.arbi.evaluate_and_maybe_mint(px, mint_rate)
+            return self.arbi.evaluate_and_maybe_mint(px, effective_mint_rate)
         return decision == "mint_sell"
 

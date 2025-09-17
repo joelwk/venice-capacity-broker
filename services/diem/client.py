@@ -27,6 +27,7 @@ class DIEMService:
         # Simple in-memory state tracking for observability/testing
         self._last_mint: Optional[Dict[str, Any]] = None
         self._last_burn: Optional[Dict[str, Any]] = None
+        self._last_stake: Optional[Dict[str, Any]] = None
         self._totals = {"minted": 0, "burned": 0}
         # local lock schedule (best-effort metadata only; on-chain source of truth prevails)
         self._lock_log: List[Dict[str, Any]] = []
@@ -109,6 +110,23 @@ class DIEMService:
                 return int(ratio)
             except Exception:
                 return None
+        # Fall back to market data mint rate if available
+        try:
+            from services.marketdata.provider import MarketDataProvider  # lazy import
+
+            info = MarketDataProvider().diem_mint_rate(ttl_s=120)
+            if isinstance(info, dict):
+                units = info.get("svvv_units_per_diem")
+                if units not in (None, 0):
+                    return int(units)  # type: ignore[arg-type]
+                tokens = info.get("tokens_per_diem")
+                if tokens not in (None, 0):
+                    rate_tokens = float(tokens)  # type: ignore[arg-type]
+                    d_dec, s_dec = self._decimals_pair()
+                    ratio = rate_tokens * (10 ** s_dec) / float(10 ** d_dec)
+                    return int(ratio)
+        except Exception:
+            pass
         return None
 
     def _check_capacity_for_mint(self, amount: int) -> Dict[str, Any]:
@@ -331,6 +349,56 @@ class DIEMService:
         self._last_burn = dict({"amount": int(amount)}, **dict(res))
         return res
 
+    def stake_for_api(
+        self,
+        amount: int,
+        *,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Stake DIEM to realize daily API credits (\$1/day per token)."""
+
+        if dry_run:
+            return {"status": "dry_run", "action": "stake_diem", "amount": int(amount)}
+        if idem_key:
+            _idem_attr = getattr(self, "_idem", None)
+            if _idem_attr is None:
+                setattr(self, "_idem", set())
+                _idem_attr = getattr(self, "_idem")
+            if idem_key in _idem_attr:
+                return {"status": "skipped", "action": "stake_diem", "idempotent": True}
+            _idem_attr.add(idem_key)
+        try:
+            act = self._get_actions()
+            if not hasattr(act, "stake_for_api"):
+                raise NotImplementedError("stake_for_api not implemented in DIEMACTIONS")
+            res = act.stake_for_api(int(amount))  # type: ignore[attr-defined]
+        except Exception as e:  # noqa: BLE001
+            err = {"status": "error", "action": "stake_diem", "error": str(e)}
+            try:
+                payload = {"amount": int(amount), **dict(err)}
+                if corr_id:
+                    payload["correlationId"] = str(corr_id)
+                _emit_event("diem.stake.error", payload)
+            except Exception:
+                pass
+            self._last_stake = dict(err)
+            return err
+        try:
+            payload = {"amount": int(amount), **dict(res)}
+            if corr_id:
+                payload["correlationId"] = str(corr_id)
+            _emit_event("diem.stake", payload)
+        except Exception:
+            pass
+        try:
+            self._totals["staked"] = int(self._totals.get("staked", 0)) + int(amount)
+        except Exception:
+            pass
+        self._last_stake = dict({"amount": int(amount)}, **dict(res))
+        return res
+
     def _path_from_env(self) -> List[str]:
         import os
 
@@ -396,10 +464,28 @@ class DIEMService:
 
     # --- state accessors ---
     def last_results(self) -> Dict[str, Any]:
-        return {"mint": self._last_mint, "burn": self._last_burn}
+        return {"mint": self._last_mint, "burn": self._last_burn, "stake": self._last_stake}
+
+    def calc_mint_rate(self, ttl_s: int = 120) -> Dict[str, Any]:
+        """Return a summary of the current DIEM mint rate (sVVV per DIEM)."""
+
+        from services.marketdata.provider import MarketDataProvider
+
+        try:
+            info = MarketDataProvider().diem_mint_rate(ttl_s=ttl_s)
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "error": str(exc)}
+
+        tokens = info.get("tokens_per_diem") if isinstance(info, dict) else None
+        status = "ok" if tokens not in (None, 0) else "unknown"
+        return {"status": status, **(info if isinstance(info, dict) else {})}
 
     def totals(self) -> Dict[str, int]:
-        return {"minted": int(self._totals.get("minted", 0)), "burned": int(self._totals.get("burned", 0))}
+        return {
+            "minted": int(self._totals.get("minted", 0)),
+            "burned": int(self._totals.get("burned", 0)),
+            "staked": int(self._totals.get("staked", 0)),
+        }
 
     def quote(self, side: str, amount: int) -> Dict[str, Any]:
         try:
