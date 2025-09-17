@@ -33,39 +33,13 @@ Homepage = "private"
 Source = "private"
 
 [project.optional-dependencies]
-# Convenience set for running the Broker API in SQL-backed mode
-broker = [
-  "sqlmodel>=0.0.14",
-  "psycopg2-binary>=2.9",
-]
-db = [
-  "sqlmodel>=0.0.14",
-  "psycopg2-binary>=2.9",
-]
-kv = [
-  "redis>=5.0",
-]
-tracing = [
-  "langsmith>=0.1.38",
-]
-graph = [
-  "langchain",
-  "langgraph",
-]
-web3 = [
-  "web3>=6.15",
-  "eth-account>=0.10",
-]
-agentkit = [
-  "coinbase-agentkit>=0.3",
-  "cdp-sdk>=0.10",
-]
-dev = [
-  "pytest",
-  "pytest-asyncio",
-  "httpx",
-  "alembic>=1.12",
-]
+db = ["sqlmodel>=0.0.14", "psycopg2-binary>=2.9"]
+kv = ["redis>=5.0"]
+tracing = ["langsmith>=0.1.38"]
+graph = ["langchain", "langgraph"]
+web3 = ["web3>=6.15", "eth-account>=0.10"]
+agentkit = ["coinbase-agentkit>=0.3", "cdp-sdk>=0.10"]
+dev = ["pytest", "pytest-asyncio", "httpx", "alembic>=1.12"]
 
 [tool.uv]
 # uv configuration (no editable flag needed; uv installs project in editable mode for the workspace root).

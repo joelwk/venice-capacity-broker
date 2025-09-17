@@ -14,7 +14,7 @@ Overview
    - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
    - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
-   - Optional CDP Smart Wallet: `WALLET_PROVIDER=smart_wallet`, `NETWORK_ID=base-mainnet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
+ - Optional CDP Smart Wallet: `WALLET_PROVIDER=smart_wallet`, `NETWORK_ID=base-mainnet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
  - DEX aggregator (for on-chain pricing in token watcher):
      - `QUOTE_TOKEN_ADDRESS` (e.g., Base USDC)
      - `DEX_PROVIDERS=uniswap_v2,aerodrome`
@@ -26,6 +26,15 @@ Overview
     - `RISK_MAX_DIEM_INVENTORY_USD` (default 100000)
     - `RISK_MAX_DIEM_TRADE_UNITS` (optional hard cap per trade)
     - `DIEM_DECIMALS` (optional override to avoid on-chain reads)
+  - DIEM staking/mint hooks (optional):
+    - `DIEM_STAKING_ADDRESS`, `DIEM_STAKING_ABI`, `DIEM_STAKE_FN`
+    - `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`
+  - StakeMaster heartbeat:
+    - `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48)
+    - `STAKEMASTER_HEARTBEAT_DISABLE` to turn it off
+    - `STAKEMASTER_HEARTBEAT_PROMPT`
+    - `VENICE_HEARTBEAT_MODEL` or fallback `VENICE_DEFAULT_MODEL`
+    - `VVV_ACTIVE_MIN_STAKE_UNITS`, `VVV_COOLDOWN_SECONDS`
 3. Click Run. The app binds to `0.0.0.0:$PORT` and serves `GET /health`.
 4. Deployments panel → Create Web Service (auto-detects run command from `.replit`).
 5. Verify health: open the webview → `/health` returns `{ "status": "ok" }`.
@@ -65,7 +74,9 @@ Risk-aware ArbiDiem (optional operators)
 - Set `ARBI_DIEM_MINT_UNITS` to your desired mint lot size (in token units). The risk policy will reduce it as needed using the live DIEM price.
 - Slippage cap via `RISK_MAX_SLIPPAGE_BPS` (default 150 bps).
 - Portfolio-cap wiring in orchestrator (env-gated): `RISK_ENABLE_PORTFOLIO_CAP=true` and set `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`.
- - DIEM on-chain actions (live): ensure `DIEM_TOKEN_ADDRESS` and `abi/diem.json` are present; use CLI `diem:mint` and `diem:burn` for direct actions (honors sVVV capacity gate when enabled).
+- DIEM on-chain actions (live): ensure `DIEM_TOKEN_ADDRESS` and `abi/diem.json` are present; use CLI `diem:mint` and `diem:burn` for direct actions (honors sVVV capacity gate when enabled).
+- DIEM staking (optional): configure `DIEM_STAKING_ADDRESS` (and `DIEM_STAKE_FN`/`DIEM_STAKING_ABI` when needed) so workflows can call `DIEMService.stake_for_api` to park DIEM for API credits.
+- Dry runs: set `DIEM_FAKE_PRICE` and `DIEM_FAKE_MINT_RATE` to simulate market/mint conditions without hitting Venice or Web3.
 
 DEX trading modes (Base)
 - Providers: set `DEX_PROVIDERS=uniswap_v2,aerodrome`, router envs (`UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, optional `AERODROME_STABLE`).
@@ -190,6 +201,7 @@ Venice alignment (runbook)
 - Prefer explicit VVV metrics endpoints; override paths if your deployment differs:
   - `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`, `VENICE_VVV_UTIL_PATH=/vvv/utilization`, `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
   - Legacy aggregate if needed: `VENICE_VVV_PATH=/vvv`
+- The orchestrator consumes the mint rate reported by these endpoints when available; ensure Venice metrics remain reachable in production.
 - Probe and print recommended env via CLI:
   - `uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai`
 - DIEM balances/usage come from `GET /api_keys/rate_limits` (no DIEM signals endpoint).

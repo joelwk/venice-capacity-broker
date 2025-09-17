@@ -93,7 +93,14 @@ DIEM on-chain actions (live):
 - Mint/burn via CLI using DIEMService and AgentKit actions. Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`.
   - Mint: `python apps/cli/main.py diem:mint <amountBaseUnits> [--dry-run] [--idem-key K] [--corr-id ID]`
   - Burn: `python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run] [--idem-key K] [--corr-id ID]`
+- Stake DIEM for daily API credits via the new `DIEMService.stake_for_api` helper. Configure `DIEM_STAKING_ADDRESS` (or allow it to fall back to `DIEM_TOKEN_ADDRESS`), optional `DIEM_STAKING_ABI`, and `DIEM_STAKE_FN` when the staking function name differs.
 - Optional sVVV capacity gate and lock/unlock hooks can be enabled via env (see DIEM mint/burn gate below).
+
+StakeMaster heartbeat (Venice allocation):
+- The staking agent keeps an active-staker heartbeat by issuing small inference calls on a configurable interval.
+  - Interval and controls: `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48), `STAKEMASTER_HEARTBEAT_DISABLE=1` to turn it off, `STAKEMASTER_HEARTBEAT_PROMPT` to customize the ping message.
+  - Model selection: set `VENICE_HEARTBEAT_MODEL` (falls back to `VENICE_DEFAULT_MODEL`, default `venice-pro`). The heartbeat uses `VENICE_API_KEY` (or the default Venice client configuration) and emits `staking.heartbeat` events.
+  - Active-staker thresholds: configure `VVV_ACTIVE_MIN_STAKE_UNITS` (base units) and optional `VVV_COOLDOWN_SECONDS` so the agent can surface cooldown countdowns in telemetry.
 
 Buy/burn on discount:
 - When market price falls sufficiently below fair value, ArbiDiem can buy DIEM on the reversed `TRADE_PATH` (e.g., `USDC -> WETH -> DIEM`) using exact‑out quotes and then burn those units, honoring the same risk and slippage caps.
@@ -117,6 +124,8 @@ DIEM mint/burn gate (optional):
 - `DIEM_MINT_RATE`: float sVVV tokens per 1 DIEM token (decimals-aware)
 - `DIEM_SVVV_AVAILABLE_UNITS`: override available sVVV (base units)
 - `DIEM_DECIMALS`, `SVVV_DECIMALS` (or `VVV_DECIMALS`): defaults 18
+- `DIEM_STAKING_ADDRESS`, `DIEM_STAKING_ABI`, `DIEM_STAKE_FN`: configure DIEM staking target when it differs from the token contract
+- `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`: enable automatic lock/unlock hooks and cooldown metadata around mint/burn
 
 Risk utilization/volatility (optional):
 - `RISK_UTIL_ALPHA`: multiplier = `1 + alpha * utilization` (default 0.5)
@@ -141,7 +150,7 @@ python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 1
 ```
 
 Dry-run notes:
-- Dry-run mode avoids initializing Web3/DEX and uses `DIEM_FAKE_PRICE` (or default 1.0) for decisions. Set `DIEM_FAKE_PRICE=1.5` to simulate premium conditions without RPC.
+- Dry-run mode avoids initializing Web3/DEX and uses `DIEM_FAKE_PRICE` (or default 1.0) for decisions. Set `DIEM_FAKE_PRICE=1.5` to simulate premium conditions without RPC. Provide `DIEM_FAKE_MINT_RATE` when you also want to mock the mint-rate premium without hitting Venice metrics.
 
 Broker API (requires FastAPI + Uvicorn):
 
@@ -301,7 +310,7 @@ Environment tips:
 Ensure Venice API is aligned and ready in your environment:
 
 - Base URL must include `/api/v1` (e.g., `VENICE_API_BASE_URL=https://api.venice.ai/api/v1`).
-- Prefer explicit VVV metrics endpoints and override when deployments differ:
+- Prefer explicit VVV metrics endpoints and override when deployments differ. The orchestrator reads the DIEM mint rate from these endpoints when available:
   - `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`
   - `VENICE_VVV_UTIL_PATH=/vvv/utilization`
   - `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`

@@ -39,9 +39,22 @@ This document describes the production v1 agents, their responsibilities, depend
   - `DIEM_MINT_RATE` (float): sVVV tokens per 1 DIEM token (decimals-aware)
   - `DIEM_SVVV_AVAILABLE_UNITS` (int): override available sVVV units for locking
   - `DIEM_DECIMALS`, `SVVV_DECIMALS` (or `VVV_DECIMALS`) defaults 18
+- DIEM staking helpers (optional):
+  - `DIEM_STAKING_ADDRESS` (defaults to `DIEM_TOKEN_ADDRESS` when unset)
+  - `DIEM_STAKING_ABI` (defaults to `diem.json`)
+  - `DIEM_STAKE_FN` (defaults to `stake`)
+  - `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`
 - Risk sizing modifiers (optional):
   - `RISK_UTIL_ALPHA` (float, default 0.5): multiplier = `1 + alpha * utilization`
   - `RISK_MAX_VOLATILITY_BPS` (float, default disabled): caps units when realized vol exceeds cap
+
+### StakeMaster heartbeat
+- `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48)
+- `STAKEMASTER_HEARTBEAT_DISABLE` (set truthy to disable)
+- `STAKEMASTER_HEARTBEAT_PROMPT` (custom inference prompt)
+- `VENICE_HEARTBEAT_MODEL` (falls back to `VENICE_DEFAULT_MODEL`)
+- `VVV_ACTIVE_MIN_STAKE_UNITS` (base units regarded as “active”)
+- `VVV_COOLDOWN_SECONDS` (informational default when contract lacks a timestamp helper)
 
 ### Libraries and services
 - Venice SDK client: `libs/venice_sdk/client.py`
@@ -53,9 +66,10 @@ This document describes the production v1 agents, their responsibilities, depend
 ## Agent overview (v1)
 
 - StakeMaster
-  - Purpose: Maintain “active staker” status and claim rewards; ensure periodic heartbeat.
+  - Purpose: Maintain “active staker” status, surface cooldown telemetry, and claim rewards; now issues an automated Venice heartbeat on a configurable cadence so allocations stay fresh.
   - Key files: `agents/stake_master/agent.py`, `services/staking/client.py`, `libs/agentkit_ext/actions.py`
   - Dependencies: Base RPC, staking/vvv contract ABIs, Venice heartbeat (light inference usage acceptable)
+  - Heartbeat notes: respects `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS`, `STAKEMASTER_HEARTBEAT_DISABLE`, `STAKEMASTER_HEARTBEAT_PROMPT`, and `VENICE_HEARTBEAT_MODEL`; emits `staking.heartbeat` events and marks cooldown countdown when staking contracts expose `cooldownEndsAt`.
   - Run:
     ```bash
     uv run python apps/cli/main.py run:stakemaster --enable-live   # live on-chain claims
@@ -63,7 +77,7 @@ This document describes the production v1 agents, their responsibilities, depend
     ```
 
 - ArbiDiem
-  - Purpose: Risk-gated DIEM mint/sell workflow using DEX quotes and slippage guards.
+  - Purpose: Risk-gated DIEM mint/sell workflow using DEX quotes and slippage guards while consuming live mint-rate signals from Venice when available.
   - Key files: `agents/arbi_diem/agent.py`, `services/diem/client.py`, `libs/dex/providers.py`
   - Dependencies: DEX routers, DIEM token address, pricing via `MarketDataProvider`
   - Run (single decision):
@@ -77,6 +91,7 @@ This document describes the production v1 agents, their responsibilities, depend
     ```
     Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`. Optional sVVV capacity gate and lock/unlock hooks via env.
   - Discount handling: When price is sufficiently below fair value, ArbiDiem can buy DIEM (exact‑out on the reversed TRADE_PATH) and burn it, with the same risk and slippage guards applied.
+  - Mint-rate inputs: falls back to `DIEM_MINT_RATE`/`DIEM_MINT_RATE_SVVV_PER_DIEM` but prefers live values supplied by `MarketDataProvider.diem_mint_rate`; dry-run support includes `DIEM_FAKE_MINT_RATE`.
 
 - CapacityBroker (minimal issuance)
   - Purpose: Issue scoped sub-keys with `consumptionLimit` and `expiresAt` for tenants; supports multi-tenant resale through Broker API.
@@ -152,6 +167,7 @@ uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venic
   - DIEM service paths: `tests/test_diem_service.py`, `tests/test_diem_buy_path.py`, `tests/test_diem_mint_burn_dryrun.py`
   - Risk policy sizing: `tests/test_risk_policy.py`, `tests/test_arbi_diem_risk_integration.py`
   - Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`
+  - Market data normalization: `tests/test_marketdata_prices.py`
 - Orchestrator wiring: `tests/test_orchestrator_portfolio_cap.py`
 
 Run examples:
