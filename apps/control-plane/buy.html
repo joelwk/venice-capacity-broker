@@ -569,42 +569,34 @@
         qs('budgetMsg').textContent = '';
       }
 
-      function estimateUnitsFromBudget(){
-        try{
-          const asset = (qs('asset').value || 'USDC').toUpperCase();
-          const budget = parseFloat(qs('budget').value || '0');
-          if (!lastPrices || !isFinite(budget) || budget <= 0){ return null; }
-          const diemUsd = Number(lastPrices['DIEM']);
-          if (!diemUsd || !isFinite(diemUsd) || diemUsd <= 0){ return null; }
-          let usd = 0;
-          if (asset === 'USDC') { usd = budget; }
-          else if (asset === 'ETH') {
-            const ethUsd = Number(lastPrices['ETH']);
-            if (!ethUsd || !isFinite(ethUsd) || ethUsd <= 0) return null;
-            usd = budget * ethUsd;
-          } else { return null; }
-          const units = usd / diemUsd;
-          return units>0 ? units : null;
-        } catch { return null; }
-      }
-
       async function getQuote() {
         qs('quoteMsg').textContent = '';
         qs('quoteOut').textContent = '';
         qs('quoteTtl').textContent = '';
         stopQuoteTimer();
-        let units = parseFloat(qs('units').value || '0');
+        try { qs('budgetMsg').textContent = ''; } catch {}
         const asset = qs('asset').value;
-        if (tabMode === 'budget'){
-          const est = estimateUnitsFromBudget();
-          if (est == null){ qs('budgetMsg').textContent = 'Cannot estimate units from budget (missing prices or invalid input).'; return; }
-          units = est;
-          // Reflect estimate back into the units input for transparency
-          try { qs('units').value = String(units.toFixed(6)); } catch {}
-          qs('budgetMsg').textContent = `Estimated units: ${units.toFixed(6)} (based on DIEM and ${asset} prices)`;
+        const params = new URLSearchParams();
+        params.append('asset', asset);
+        let budgetVal = null;
+        if (tabMode === 'budget') {
+          const raw = parseFloat(qs('budget').value || '0');
+          if (!isFinite(raw) || raw <= 0) {
+            qs('budgetMsg').textContent = 'Enter a positive budget amount.';
+            return;
+          }
+          budgetVal = raw;
+          params.append('budget', String(raw));
+        } else {
+          const units = parseFloat(qs('units').value || '0');
+          if (!isFinite(units) || units <= 0) {
+            qs('quoteMsg').textContent = 'Enter a valid DIEM amount.';
+            return;
+          }
+          params.append('units', String(units));
         }
         try {
-          const res = await fetch(`/v1/quotes?units=${units}&asset=${encodeURIComponent(asset)}`);
+          const res = await fetch(`/v1/quotes?${params.toString()}`);
           if (!res.ok) { throw new Error(await res.text()); }
           quote = await res.json();
           qs('quoteOut').textContent = JSON.stringify(quote, null, 2);
@@ -616,6 +608,25 @@
             if (u && typeof quote.acceptedMax !== 'undefined' && quote.acceptedMax !== null) { u.max = String(quote.acceptedMax); }
             if (quote.acceptedMin != null && quote.acceptedMax != null) {
               qs('quoteMsg').textContent = `Accepted units: ${quote.acceptedMin} – ${quote.acceptedMax}`;
+            }
+            if (tabMode === 'budget') {
+              let msg = `Server sized ${Number(quote.units).toFixed(6)} DIEM for your budget.`;
+              try {
+                const diemUsd = lastPrices && Number(lastPrices['DIEM']);
+                if (diemUsd && isFinite(diemUsd)) {
+                  const estUsd = Number(quote.units) * diemUsd;
+                  msg += ` (~$${estUsd.toFixed(2)} at current price)`;
+                  if (budgetVal && isFinite(budgetVal)) {
+                    const delta = estUsd - budgetVal;
+                    if (Math.abs(delta) > 0.01) {
+                      msg += ` (${delta > 0 ? '+' : '-'}$${Math.abs(delta).toFixed(2)} vs. budget)`;
+                    }
+                  }
+                }
+              } catch {}
+              qs('budgetMsg').textContent = msg;
+            } else {
+              qs('budgetMsg').textContent = '';
             }
           } catch {}
           startQuoteTimer();

@@ -1788,11 +1788,16 @@ try:
 
             @app.get("/v1/quotes", response_model=QuoteResponse)
             def get_quote(
-                units: float = Query(..., gt=0),
+                units: float | None = Query(default=None, gt=0),
                 asset: str = Query(..., description="ETH or USDC"),
+                budget: float | None = Query(default=None, gt=0, description="Budget in USD"),
             ) -> dict:
+                if units is None and budget is None:
+                    raise HTTPException(status_code=400, detail="specify units or budget")
+                if units is not None and budget is not None:
+                    raise HTTPException(status_code=400, detail="provide either units or budget, not both")
                 try:
-                    return _pricing.get_quote(units=units, asset=asset)
+                    return _pricing.get_quote(units=units, asset=asset, budget_usd=budget)
                 except Exception as e:  # noqa: BLE001
                     raise HTTPException(status_code=400, detail=str(e))
 

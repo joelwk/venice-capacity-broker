@@ -33,6 +33,13 @@ Homepage = "private"
 Source = "private"
 
 [project.optional-dependencies]
+broker = [
+  "sqlmodel>=0.0.14",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
+  "langsmith>=0.1.38",
+  "alembic>=1.12",
+]
 db = ["sqlmodel>=0.0.14", "psycopg2-binary>=2.9"]
 kv = ["redis>=5.0"]
 tracing = ["langsmith>=0.1.38"]

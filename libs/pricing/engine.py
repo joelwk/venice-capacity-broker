@@ -71,6 +71,14 @@ class StaticPricingEngine:
             expires_at_epoch=now + self._ttl,
         )
 
+    def price_from_budget(self, budget_usd: float, asset: str) -> QuoteDraft:
+        """Budget-aware pricing is unsupported in static mode.
+
+        Static pricing lacks USD context for ETH quotes, so we surface a clear
+        error for callers; the API layer translates this into a 400 response.
+        """
+        raise ValueError("budget-based quotes require PRICE_ENGINE=market")
+
 
 class MarketPricingEngine:
     """Market-driven pricing with cached updates and DIEM-aware units.
@@ -115,6 +123,21 @@ class MarketPricingEngine:
         except (TypeError, ValueError):
             return False
         return 1e-6 < v < 1e6
+
+    def price_from_budget(self, budget_usd: float, asset: str) -> QuoteDraft:
+        try:
+            budget = float(budget_usd)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("invalid budget") from exc
+        if not self._valid_price(budget):
+            raise ValueError("budget must be greater than zero")
+        base_unit_usd, _, _ = self._resolve_prices()
+        if not self._valid_price(base_unit_usd):
+            raise ValueError("DIEM pricing unavailable for budget sizing")
+        target_units = budget / float(base_unit_usd)
+        if target_units <= 0:
+            raise ValueError("budget too small for minimum unit size")
+        return self.price(target_units, asset)
 
     def _resolve_prices(self) -> Tuple[float, float, float]:
         """Return tuple (base_unit_usd, diem_usd, eth_usd).

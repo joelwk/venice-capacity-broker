@@ -26,6 +26,7 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
     # Enable features and static pricing for ETH
     monkeypatch.setenv("QUOTES_ENABLED", "true")
     monkeypatch.setenv("PURCHASES_ENABLED", "true")
+    monkeypatch.setenv("PRICE_ENGINE", "static")
     monkeypatch.setenv("PRICE_UNIT_ETH_WEI", str(10**15))  # 0.001 ETH per unit
     monkeypatch.setenv("PRICE_QUOTE_TTL_SECONDS", "120")
     # Minimal chain/payment config
@@ -84,3 +85,34 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch):
     # If fulfilled, subkey must be present
     if out["status"] == "fulfilled":
         assert out["subkey"] == "sk-test-123"
+
+
+def test_budget_quote_path(monkeypatch):
+    monkeypatch.setenv("QUOTES_ENABLED", "true")
+    monkeypatch.setenv("PRICE_ENGINE", "market")
+    monkeypatch.setenv("PURCHASE_UNITS_KIND", "diem")
+    monkeypatch.setenv("BASE_RPC_URL", "http://localhost:8545")
+    monkeypatch.setenv("TREASURY_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("SQL_DATABASE_URL", "sqlite:///./test-buyer-e2e.db")
+
+    mod = _load_broker_app_module()
+
+    # Force deterministic pricing without on-chain calls.
+    engine = mod._pricing.engine
+
+    def _fake_prices() -> tuple[float, float, float]:
+        # base_unit_usd, diem_usd, eth_usd
+        return (200.0, 200.0, 4000.0)
+
+    monkeypatch.setattr(engine, "_resolve_prices", _fake_prices, raising=True)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(mod.app)
+    resp = client.get("/v1/quotes", params={"budget": 10, "asset": "ETH"})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["asset"] == "ETH"
+    assert pytest.approx(payload["units"], rel=1e-6) == 0.05
+    eth_amount = payload["totalPrice"] / 1e18
+    assert pytest.approx(eth_amount, rel=1e-6) == 0.0025

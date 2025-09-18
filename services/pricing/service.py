@@ -58,8 +58,20 @@ class PricingService:
     def _is_sqlmodel(model):
         return model is not None and hasattr(model, "model_fields")
 
-    def get_quote(self, units: float, asset: str) -> Dict[str, object]:
-        draft = self.engine.price(float(units), asset)
+    def get_quote(
+        self,
+        units: Optional[float],
+        asset: str,
+        budget_usd: Optional[float] = None,
+    ) -> Dict[str, object]:
+        if units is not None and budget_usd is not None:
+            raise ValueError("provide either units or budget, not both")
+        if budget_usd is not None:
+            draft = self.engine.price_from_budget(float(budget_usd), asset)  # type: ignore[attr-defined]
+        else:
+            if units is None:
+                raise ValueError("units must be greater than zero")
+            draft = self.engine.price(float(units), asset)
         # Utilization-aware adjustment
         util = self._utilization_ratio()
         alpha = float(os.getenv("PRICE_UTIL_ALPHA", "0.5") or 0.5)

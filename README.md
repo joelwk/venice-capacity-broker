@@ -67,13 +67,16 @@ pip install -r requirements.txt
 Optional dependencies (install via extras as you go):
 
 ```
-# Database + KV + tracing
+# Broker API default stack (db + kv + tracing + migrations)
+uv sync --extra broker
+# Database + KV + tracing (legacy split)
 uv sync --extra db --extra kv --extra tracing
 # Web3 + AgentKit
 uv sync --extra web3 --extra agentkit
-# LangGraph/LangChain
+# LangGraph / LangChain helpers
 uv sync --extra graph
 ```
+
 On-chain and wallets:
 - Coinbase CDP Smart Wallet (recommended) and ETH account are supported via `coinbase-agentkit` + `cdp-sdk`.
 - Configure one of:
@@ -180,7 +183,7 @@ Admin Control Panel:
 - Chat probe requires a model: set `BROKER_DEFAULT_MODEL` (or provide a model field in the form).
 
 Buyer Flow (flag‑gated):
-- Baseline: enable `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`, set `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and (for USDC) `USDC_ADDRESS`. Open `/admin/buy.html` → Connect Wallet → Get Quote (ETH/USDC) → Pay → Paste Tx → Key issued. Purchases also support SSE streaming of status.
+  - Baseline: enable `QUOTES_ENABLED=true` and `PURCHASES_ENABLED=true`, set `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and (for USDC) `USDC_ADDRESS`. Open `/admin/buy.html` → Connect Wallet → pick “By Units” or “By Budget” → Get Quote → Pay → Paste Tx → Key issued. Purchases also support SSE streaming of status.
 - Clearing Price (optional): set `CLEARING_ENABLED=true`. Endpoints: `GET /v1/pricing/clearing_price` and SSE `GET /v1/pricing/clearing_price/stream`. Response includes an optional `change24h` when token snapshots are available.
 - Bids (optional): set `BIDS_ENABLED=true` and configure EIP‑712 domain: `SIGN_DOMAIN_NAME`, `SIGN_DOMAIN_VERSION`, `CHAIN_ID`. Endpoints: `POST /v1/bids`, `GET /v1/bids?buyer=0x...`, `GET /v1/bids/{bidId}`, and SSE `GET /v1/bids/{bidId}/stream`.
 - Settlement v1 (optional): set `SETTLEMENT_ENABLED=true`. Endpoint: `POST /v1/bids/{bidId}/settle` (returns a server quote for Pay & Verify). DEX preview endpoint: `GET /v1/settlement/quote?fromToken=<addr>&toAsset=<ETH|USDC>&amountOut=<minor>[&path=...]` (UniswapV2 only; Aerodrome exact‑out is disabled; falls back to mid‑price with `approx=true`). Preview includes `slippageBps` when derivable and enforces risk caps.
@@ -580,8 +583,8 @@ This prints quotes from Uniswap V2 and Aerodrome (if both routers are set) and h
   - `BROKER_ADMIN_TOKEN` = strong random
   - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`)
   - On-chain (optional): `BASE_RPC_URL`, `NETWORK_ID` (base-sepolia|base-mainnet); for Smart Wallet also set `WALLET_PROVIDER=smart_wallet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`, `OWNER`.
-- Optional extras: set `UV_EXTRAS` to space-separated extras before first run, e.g. `UV_EXTRAS="dev db kv"` or `UV_EXTRAS="web3 agentkit"`.
-  - Under the hood, the runner executes `uv sync --extra <each>` then starts Uvicorn via `uv run`.
+  - Optional extras: set `UV_EXTRAS` to space-separated extras before first run, e.g. `UV_EXTRAS="broker"`, `UV_EXTRAS="broker dev"`, or `UV_EXTRAS="web3 agentkit"`.
+    - Under the hood, the runner executes `uv sync --extra <each>` then starts Uvicorn via `uv run`.
 - Deployments: create a Web Service from the Deployments panel (details in `infra/replit/README.md`).
   - For Replit Cloud Services: SQL Database, set `SQL_DATABASE_URL` or `DATABASE_URL` from the service credentials. For KV, set `REPLIT_DB_URL`.
  
@@ -617,14 +620,17 @@ Idempotency
 ## Buyer Flow (Quotes + Purchases)
 
 - Feature flags (off by default): set in env and restart broker
-  - `QUOTES_ENABLED=true` to enable `GET /v1/quotes`
-  - `PURCHASES_ENABLED=true` to enable `POST /v1/purchases/verify` and `GET /v1/purchases/{id}`
-  - `CORS_ENABLED=true` and `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
- - Pricing (Static engine)
-   - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
-   - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`
-   - Notes on units/multipliers:
-     - USDC uses 6 decimals. 1 USDC = 1,000,000 minor units (`10^6`).
+    - `QUOTES_ENABLED=true` to enable `GET /v1/quotes`
+    - `PURCHASES_ENABLED=true` to enable `POST /v1/purchases/verify` and `GET /v1/purchases/{id}`
+    - `CORS_ENABLED=true` and `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
+  - Quotes API
+    - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`
+    - `GET /v1/quotes?budget=<usd>&asset=<ETH|USDC>` → same shape as above; requires `PRICE_ENGINE=market` so the server can derive DIEM/USD and ETH/USD; send either `units` or `budget`, not both
+  - Pricing (Static engine)
+    - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
+    - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`
+    - Notes on units/multipliers:
+      - USDC uses 6 decimals. 1 USDC = 1,000,000 minor units (`10^6`).
      - ETH uses wei. 1 ETH = 1,000,000,000,000,000,000 wei (`10^18`).
      - For proportions, DeFi conventions use 18‑decimals fixed point (aka WAD = `10^18`); basis points (`10^4`) are also common for simple slippage/fees.
 - Payments
@@ -636,7 +642,6 @@ Idempotency
   - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) is required to mint subkeys on successful verify
 
 Endpoints
-- `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`
 - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }` → verifies on Base and issues a subkey
 - `GET /v1/purchases/{purchaseId}` → returns status and (if fulfilled) key metadata
  - `GET /v1/purchases/{purchaseId}/stream` → SSE stream of purchase status transitions (e.g., confirmed → fulfilled)

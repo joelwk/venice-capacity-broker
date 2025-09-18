@@ -115,6 +115,10 @@ This document describes the production v1 agents, their responsibilities, depend
       - `windowSeconds`: may increase only (more restrictive). Decreases require admin.
       - `maxRequests`: may decrease only. Increases require admin.
       - `label`: must start with `self:` when set by tenants.
+  - Buyer quotes:
+    - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` returns unit-based pricing.
+    - `GET /v1/quotes?budget=<usd>&asset=<ETH|USDC>` lets the UI size DIEM units from a USD budget using live DIEM/USD and ETH/USD.
+    - Budget sizing requires `PRICE_ENGINE=market`. Static pricing emits a friendly error when a budget is supplied.
 
 - Orchestrator (loop)
   - Purpose: Single-agent loop coordinating market observation and ArbiDiem decisions with persistence and backoff.
