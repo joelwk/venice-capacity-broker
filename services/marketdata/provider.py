@@ -77,6 +77,101 @@ class MarketDataProvider:
             return (os.getenv("VVV_TOKEN_ADDRESS") or "").strip() or None
         return None
 
+    @staticmethod
+    def _valid_price(value: Optional[float]) -> bool:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return False
+        return 1e-6 < v < 1e6
+
+    def _collect_trade_paths(self) -> List[List[str]]:
+        paths: List[List[str]] = []
+        for key in ("TRADE_PATH", "TRADE_PATH_2"):
+            raw = os.getenv(key)
+            if not raw:
+                continue
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            if len(parts) >= 2:
+                paths.append(parts)
+        return paths
+
+    def _try_path_direct(self, path: List[str]) -> Optional[float]:
+        tokens = [p for p in path if p]
+        if len(tokens) < 2:
+            return None
+        try:
+            bp = self.best_price(tokens, amount_in_decimal=1.0)
+            price = float(bp.get("price") or 0.0)
+            return price if self._valid_price(price) else None
+        except Exception:
+            return None
+
+    def _hop_price(self, token_in: str, token_out: str, *, allow_inverse: bool = True) -> Optional[float]:
+        token_in = (token_in or "").strip()
+        token_out = (token_out or "").strip()
+        if not token_in or not token_out:
+            return None
+        if token_in.lower() == token_out.lower():
+            return 1.0
+
+        attempts: List[Optional[float]] = []
+        # Direct aggregator quote (best effort)
+        try:
+            bp = self.best_price([token_in, token_out], amount_in_decimal=1.0)
+            attempts.append(float(bp.get("price") or 0.0))
+        except Exception:
+            attempts.append(None)
+
+        # Scan smaller sizes when pools are thin
+        try:
+            attempts.append(self._best_price_scan([token_in, token_out], start=1.0, min_amount=1e-12, factor=10.0))
+        except Exception:
+            attempts.append(None)
+
+        # Mid-price from reserves
+        attempts.append(self._mid_price_from_reserves(token_in, token_out))
+
+        for price in attempts:
+            if self._valid_price(price):
+                return float(price)
+
+        # Bridge via WETH when direct liquidity is missing
+        bridge = self._weth_address()
+        if bridge and bridge.lower() not in {token_in.lower(), token_out.lower()}:
+            try:
+                bp_bridge = self.best_price([token_in, bridge, token_out], amount_in_decimal=1.0)
+                price_bridge = float(bp_bridge.get("price") or 0.0)
+                if self._valid_price(price_bridge):
+                    return price_bridge
+            except Exception:
+                pass
+            first = self._hop_price(token_in, bridge, allow_inverse=False)
+            second = self._hop_price(bridge, token_out, allow_inverse=False) if self._valid_price(first) else None
+            if self._valid_price(first) and self._valid_price(second):
+                return float(first) * float(second)
+
+        if allow_inverse:
+            inv = self._hop_price(token_out, token_in, allow_inverse=False)
+            if self._valid_price(inv):
+                try:
+                    return 1.0 / float(inv)
+                except ZeroDivisionError:
+                    return None
+        return None
+
+    def _price_via_segments(self, path: List[str]) -> Optional[float]:
+        tokens = [p for p in path if p]
+        if len(tokens) < 2:
+            return None
+        total = 1.0
+        for a, b in zip(tokens, tokens[1:]):
+            hop = self._hop_price(a, b)
+            if not self._valid_price(hop):
+                return None
+            total *= float(hop)
+        return total
+
     def quote_all(self, amount_in: int, path: List[str]) -> List[Any]:
         """Return quotes across all configured providers for path.
 
@@ -380,79 +475,84 @@ class MarketDataProvider:
         return None
 
     def diem_price_with_fallback(self) -> Optional[float]:
-        """Return DIEM price in QUOTE token using aggregator, then mid-price fallbacks.
+        """Return DIEM price quoted in the configured QUOTE asset.
 
-        Strategy:
-        1) Try aggregator best price for TRADE_PATH (multi-hop)
-        2) If unavailable and path is DIEM->WETH->QUOTE (or addresses resolvable), compute
-           price = bestPrice(DIEM->WETH) * bestPrice(WETH->QUOTE)
-           Fallback to mid(DIEM->WETH) and/or mid(WETH->QUOTE) when router quotes fail
+        Supports multi-venue paths by multiplying hop prices when routers do not
+        share liquidity (e.g., Aerodrome for DIEM/VVV followed by Uniswap for
+        VVV/WETH→USDC).
         """
         try:
-            path = self._path_from_env()
-        except Exception:
-            path = []
-        if len(path) >= 2:
-            try:
-                bp = self.best_price(path, amount_in_decimal=1.0)
-                return float(bp.get("price") or 0.0)
-            except Exception:
-                pass
-        # Fallback only meaningful for 3-hop DIEM->WETH->QUOTE
-        try:
-            if len(path) == 3:
-                diem = path[0]
-                weth = path[1]
-                quote = path[2]
-            else:
-                diem = (self._address_for_symbol("DIEM") or "").strip()
-                weth = self._weth_address()
-                quote = self._quote_token_address()
-            if not diem or not weth or not quote:
-                return None
-            # Prefer mid-price for DIEM->WETH to avoid size-dependent distortion on tiny pools
-            px_dw = self._mid_price_from_reserves(diem, weth) or 0.0
-            if px_dw <= 0:
-                # Try router quotes with scanning down to very small inputs
-                px_dw = self._best_price_scan([diem, weth], start=1.0, min_amount=1e-18, factor=10.0) or 0.0
-                if px_dw <= 0:
-                    # Try a single router quote (1.0) as a last resort
-                    try:
-                        b1 = self.best_price([diem, weth], amount_in_decimal=1.0)
-                        px_dw = float(b1.get("price") or 0.0)
-                    except Exception:
-                        px_dw = 0.0
-            if px_dw <= 0:
-                # Try the inverse direction if DIEM->WETH cannot be priced directly
-                try:
-                    r = self._best_price_scan([weth, diem], start=1.0, min_amount=1e-12, factor=10.0) or 0.0
-                    if r <= 0:
-                        b1r = self.best_price([weth, diem], amount_in_decimal=1.0)
-                        r = float(b1r.get("price") or 0.0)
-                    if r > 0:
-                        px_dw = 1.0 / r
-                except Exception:
-                    try:
-                        rmid = self._mid_price_from_reserves(weth, diem) or 0.0
-                        if rmid > 0:
-                            px_dw = 1.0 / float(rmid)
-                    except Exception:
-                        pass
-            if px_dw <= 0:
-                return None
-            # Resolve WETH->QUOTE via scan/quote/mid as needed
-            px_wq = self._best_price_scan([weth, quote], start=1.0, min_amount=1e-9, factor=10.0) or 0.0
-            if px_wq <= 0:
-                try:
-                    b2 = self.best_price([weth, quote], amount_in_decimal=1.0)
-                    px_wq = float(b2.get("price") or 0.0)
-                except Exception:
-                    px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
-            if px_wq <= 0:
-                return None
-            return float(px_dw * px_wq)
+            diem = (self._address_for_symbol("DIEM") or "").strip()
+            quote = self._quote_token_address().strip()
         except Exception:
             return None
+        if not diem or not quote:
+            return None
+
+        paths = self._collect_trade_paths()
+        if not paths:
+            paths = [[diem, quote]]
+        else:
+            has_diem_path = any(p and p[0].strip().lower() == diem.lower() for p in paths)
+            if not has_diem_path:
+                paths.insert(0, [diem, quote])
+
+        seen: set[tuple[str, ...]] = set()
+        for raw in paths:
+            tokens = [t.strip() for t in raw if t.strip()]
+            if not tokens or tokens[0].lower() != diem.lower():
+                continue
+            key = tuple(t.lower() for t in tokens)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            price = self._try_path_direct(tokens)
+            if price is None:
+                price = self._price_via_segments(tokens)
+            if not self._valid_price(price):
+                continue
+
+            total = float(price)
+            final_token = tokens[-1]
+            if final_token.lower() != quote.lower():
+                tail = self._hop_price(final_token, quote)
+                if not self._valid_price(tail):
+                    continue
+                total *= float(tail)
+            if self._valid_price(total):
+                return total
+
+        vvv = (self._address_for_symbol("VVV") or "").strip()
+        if vvv:
+            diem_to_vvv = self._hop_price(diem, vvv)
+            if self._valid_price(diem_to_vvv):
+                v_paths = [p for p in paths if p and p[0].strip().lower() == vvv.lower()]
+                for raw in v_paths:
+                    tokens = [t.strip() for t in raw if t.strip()]
+                    price_tail = self._price_via_segments(tokens)
+                    if not self._valid_price(price_tail):
+                        continue
+                    total_tail = float(price_tail)
+                    last_token = tokens[-1]
+                    if last_token.lower() != quote.lower():
+                        extra = self._hop_price(last_token, quote)
+                        if not self._valid_price(extra):
+                            continue
+                        total_tail *= float(extra)
+                    combined = float(diem_to_vvv) * total_tail
+                    if self._valid_price(combined):
+                        return combined
+                vvv_to_quote = self._hop_price(vvv, quote)
+                if self._valid_price(vvv_to_quote):
+                    combined = float(diem_to_vvv) * float(vvv_to_quote)
+                    if self._valid_price(combined):
+                        return combined
+
+        direct = self._hop_price(diem, quote)
+        if self._valid_price(direct):
+            return float(direct)
+        return None
 
     def prices(self, symbols: List[str]) -> Dict[str, float]:
         """Return prices for requested symbols.
@@ -469,7 +569,7 @@ class MarketDataProvider:
                 # Prefer robust fallback composition to avoid size distortion on thin pools
                 try:
                     px_fb = self.diem_price_with_fallback()
-                    if px_fb and px_fb > 0:
+                    if self._valid_price(px_fb):
                         out[sym] = float(px_fb)
                         continue
                 except Exception:
@@ -478,9 +578,10 @@ class MarketDataProvider:
                 try:
                     path = self._path_from_env()
                     bp = self.best_price(path, amount_in_decimal=1.0)
-                    out[sym] = float(bp["price"])  # execution price for 1 DIEM
+                    price = float(bp.get("price") or 0.0)
+                    out[sym] = price if self._valid_price(price) else 0.0
                 except Exception:
-                    out[sym] = 1.0
+                    out[sym] = 0.0
             elif SU == "VVV":
                 # Resolve VVV price vs QUOTE. Prefer direct pair; fall back to WETH bridge or mid-price.
                 try:
@@ -491,43 +592,47 @@ class MarketDataProvider:
                     # Try direct route first
                     try:
                         bp = self.best_price([token, quote], amount_in_decimal=1.0)
-                        out[sym] = float(bp["price"])  # VVV per QUOTE
+                        price = float(bp.get("price") or 0.0)
+                        out[sym] = price if self._valid_price(price) else 0.0
                     except Exception:
                         # Bridge via WETH when direct pool is illiquid/missing
                         try:
                             weth = self._weth_address()
                             bp2 = self.best_price([token, weth, quote], amount_in_decimal=1.0)
-                            out[sym] = float(bp2["price"])  # VVV per QUOTE via bridge
+                            price = float(bp2.get("price") or 0.0)
+                            out[sym] = price if self._valid_price(price) else 0.0
                         except Exception:
                             # Last resort: multiply infinitesimal mids if available
                             try:
                                 weth = self._weth_address()
                                 px_tw = self._mid_price_from_reserves(token, weth) or 0.0
                                 px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
-                                out[sym] = float(px_tw * px_wq) if (px_tw > 0 and px_wq > 0) else 1.0
+                                combo = float(px_tw * px_wq) if (px_tw > 0 and px_wq > 0) else 0.0
+                                out[sym] = combo if self._valid_price(combo) else 0.0
                             except Exception:
-                                out[sym] = 1.0
+                                out[sym] = 0.0
                 except Exception:
                     # Any unexpected failure resolving VVV price
-                    out[sym] = 1.0
+                    out[sym] = 0.0
             elif SU == "ETH":
                 # Resolve ETH price using WETH->QUOTE path
                 try:
                     weth = self._weth_address()
                     quote = self._quote_token_address()
                     bp = self.best_price([weth, quote], amount_in_decimal=1.0)
-                    out[sym] = float(bp["price"])  # ETH per USDC
+                    price = float(bp.get("price") or 0.0)
+                    out[sym] = price if self._valid_price(price) else 0.0
                 except Exception:
                     # Fallback to mid price from reserves
                     try:
                         weth = self._weth_address()
                         quote = self._quote_token_address()
                         px = self._mid_price_from_reserves(weth, quote)
-                        out[sym] = float(px) if px else 1.0
+                        out[sym] = float(px) if self._valid_price(px) else 0.0
                     except Exception:
-                        out[sym] = 1.0
+                        out[sym] = 0.0
             else:
-                out[sym] = 1.0
+                out[sym] = 0.0
         normalized_out: Dict[str, float] = {}
         for sym, price in out.items():
             try:
@@ -536,8 +641,8 @@ class MarketDataProvider:
                 val = 0.0
             if sym.upper() == "USDC":
                 val = 1.0
-            if val <= 0:
-                val = 1.0 if sym.upper() == "USDC" else val
+            elif not self._valid_price(val):
+                val = 0.0
             normalized_out[sym] = val
 
         # Emit centralized signal for prices (best-effort)

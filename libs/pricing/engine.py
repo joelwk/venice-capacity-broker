@@ -108,6 +108,14 @@ class MarketPricingEngine:
         except Exception:
             self._max_u = 1_000_000.0
 
+    @staticmethod
+    def _valid_price(value: Optional[float]) -> bool:
+        try:
+            v = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+        return 1e-6 < v < 1e6
+
     def _resolve_prices(self) -> Tuple[float, float, float]:
         """Return tuple (base_unit_usd, diem_usd, eth_usd).
 
@@ -125,24 +133,32 @@ class MarketPricingEngine:
             px = mdp.prices(["DIEM", "ETH", "USDC"]) or {}
             # Prices are in QUOTE token (USDC); USDC≈1 USD
             if isinstance(px, dict):
-                diem_usd = float(px.get("DIEM") or 0.0)
-                eth_usd = float(px.get("ETH") or 0.0)
+                if self._valid_price(px.get("DIEM")):
+                    diem_usd = float(px.get("DIEM") or 0.0)
+                if self._valid_price(px.get("ETH")):
+                    eth_usd = float(px.get("ETH") or 0.0)
             # Sanity: reject clearly invalid DIEM prices (too small/large) and try robust fallback
-            if not (diem_usd and 1e-6 < diem_usd < 1e6):
+            if not self._valid_price(diem_usd):
                 try:
                     alt = mdp.diem_price_with_fallback()
-                    if alt and 1e-6 < float(alt) < 1e6:
+                    if self._valid_price(alt):
                         diem_usd = float(alt)
+                    else:
+                        diem_usd = 0.0
                 except Exception:
-                    pass
+                    diem_usd = 0.0
         except Exception:
             diem_usd = 0.0
+            eth_usd = 0.0
+        if not self._valid_price(diem_usd):
+            diem_usd = 0.0
+        if not self._valid_price(eth_usd):
             eth_usd = 0.0
         # Units kind mapping
         uk = str(self._units_kind or "").lower()
         if uk == "diem":
             # 1 unit == 1 DIEM
-            if diem_usd and diem_usd > 0:
+            if self._valid_price(diem_usd):
                 base_unit_usd = float(diem_usd)
         elif uk == "vvv":
             # 1 unit == 1 VVV (rare); use hint if provided, otherwise fall back to default base
