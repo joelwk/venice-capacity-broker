@@ -3080,10 +3080,6 @@ agentkit = [
     { name = "cdp-sdk" },
     { name = "coinbase-agentkit" },
 ]
-broker = [
-    { name = "psycopg2-binary" },
-    { name = "sqlmodel" },
-]
 db = [
     { name = "psycopg2-binary" },
     { name = "sqlmodel" },
@@ -3120,7 +3116,6 @@ requires-dist = [
     { name = "langchain", marker = "extra == 'graph'" },
     { name = "langgraph", marker = "extra == 'graph'" },
     { name = "langsmith", marker = "extra == 'tracing'", specifier = ">=0.1.38" },
-    { name = "psycopg2-binary", marker = "extra == 'broker'", specifier = ">=2.9" },
     { name = "psycopg2-binary", marker = "extra == 'db'", specifier = ">=2.9" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'" },
@@ -3128,12 +3123,11 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "redis", marker = "extra == 'kv'", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.31" },
-    { name = "sqlmodel", marker = "extra == 'broker'", specifier = ">=0.0.14" },
     { name = "sqlmodel", marker = "extra == 'db'", specifier = ">=0.0.14" },
     { name = "uvicorn" },
     { name = "web3", marker = "extra == 'web3'", specifier = ">=6.15" },
 ]
-provides-extras = ["broker", "db", "kv", "tracing", "graph", "web3", "agentkit", "dev"]
+provides-extras = ["db", "kv", "tracing", "graph", "web3", "agentkit", "dev"]
 
 [[package]]
 name = "watchfiles"
