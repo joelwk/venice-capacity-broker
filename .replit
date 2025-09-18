@@ -23,7 +23,7 @@ localPort = 5000
 externalPort = 80
 
 [workflows]
-runButton = "Run Venice Broker API"
+runButton = "Project"
 
 [[workflows.workflow]]
 name = "Run Venice Broker API"
@@ -47,13 +47,13 @@ args = "broker-api"
 name = "broker-api"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; /home/runner/workspace/.local/bin/uv sync --extra broker --extra web3 --extra agentkit && /home/runner/workspace/.local/bin/uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
-waitForPort = 5000
-
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; /home/runner/workspace/.local/bin/uv sync --extra web3 --extra agentkit --extra db && /home/runner/workspace/.local/bin/uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+waitForPort = 5000
 
 [agent]
 expertMode = true
