@@ -162,6 +162,7 @@ Run with uv (recommended):
 ```
 uv run uvicorn app:app --app-dir apps/broker-api --reload --host 0.0.0.0 --port 8000
 ```
+See docs/control-plane-smoke-checklist.md for the manual smoke checklist.
 
 Run with pip/venv:
 
@@ -246,6 +247,10 @@ export REDIS_URL=redis://127.0.0.1:6379/0
 
 # Run tests against services
 uv run pytest -q
+
+# Control-plane UI regression
+uv run playwright install chromium
+uv run pytest tests/ui/test_control_plane_buy_flow.py -q
 
 # Or run the API
 uv run uvicorn app:app --app-dir apps/broker-api --reload
@@ -678,3 +683,4 @@ Buyer UI
 Notes
 - CLI compaction (`make db-compact`) may find no keys if KV is in-memory; use `make server-db-compact` in that case.
 - Some Venice deployments do not expose `/openapi.json`; if `venice:probe-openapi` fails, set paths directly if needed (e.g., `VENICE_CREATE_SUBKEY_PATH=/api_keys`).
+
