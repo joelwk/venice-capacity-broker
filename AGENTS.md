@@ -118,7 +118,7 @@ This document describes the production v1 agents, their responsibilities, depend
   - Buyer quotes:
     - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` returns unit-based pricing.
     - `GET /v1/quotes?budget=<usd>&asset=<ETH|USDC>` lets the UI size DIEM units from a USD budget using live DIEM/USD and ETH/USD.
-    - Budget sizing requires `PRICE_ENGINE=market`. Static pricing emits a friendly error when a budget is supplied.
+    - Budget sizing requires `PRICE_ENGINE=market` and the budget must cover at least the minimum quote size (`PRICE_ACCEPTED_MIN_UNITS`, default 0.01 DIEM). Static pricing emits a friendly error when a budget is supplied.
 
 - Orchestrator (loop)
   - Purpose: Single-agent loop coordinating market observation and ArbiDiem decisions with persistence and backoff.

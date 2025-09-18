@@ -116,3 +116,7 @@ def test_budget_quote_path(monkeypatch):
     assert pytest.approx(payload["units"], rel=1e-6) == 0.05
     eth_amount = payload["totalPrice"] / 1e18
     assert pytest.approx(eth_amount, rel=1e-6) == 0.0025
+
+    too_small = client.get("/v1/quotes", params={"budget": 0.1, "asset": "ETH"})
+    assert too_small.status_code == 400
+    assert "at least" in too_small.json()["detail"].lower()

@@ -626,6 +626,7 @@ Idempotency
   - Quotes API
     - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`
     - `GET /v1/quotes?budget=<usd>&asset=<ETH|USDC>` → same shape as above; requires `PRICE_ENGINE=market` so the server can derive DIEM/USD and ETH/USD; send either `units` or `budget`, not both
+    - Budgets must cover the minimum quote size (`PRICE_ACCEPTED_MIN_UNITS`, default `0.01` DIEM). Smaller budgets receive a 400 with a helpful error.
   - Pricing (Static engine)
     - `PRICE_UNIT_USDC` (minor units) and/or `PRICE_UNIT_ETH_WEI` (wei) per unit
     - Optional: `PRICE_ACCEPTED_MIN_UNITS`, `PRICE_ACCEPTED_MAX_UNITS`, `PRICE_QUOTE_TTL_SECONDS`

@@ -137,6 +137,9 @@ class MarketPricingEngine:
         target_units = budget / float(base_unit_usd)
         if target_units <= 0:
             raise ValueError("budget too small for minimum unit size")
+        min_units = float(self._min_u)
+        if target_units < min_units:
+            raise ValueError(f"budget must cover at least {min_units} DIEM (current min quote size)")
         return self.price(target_units, asset)
 
     def _resolve_prices(self) -> Tuple[float, float, float]:
