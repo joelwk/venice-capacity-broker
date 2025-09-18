@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import expect, sync_playwright  # type: ignore  # noqa: E402
+from playwright.sync_api import Error as PlaywrightError, expect, sync_playwright  # type: ignore  # noqa: E402
 
 CONTROL_PLANE_DIR = Path(__file__).resolve().parents[2] / "apps" / "control-plane"
 TREASURY_ADDRESS = "0xCAFEBABE00000000000000000000000000000001"
@@ -122,7 +122,10 @@ def serve_control_plane() -> str:
 def test_quote_to_key_happy_path():
     with serve_control_plane() as base_url:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            try:
+                browser = p.chromium.launch()
+            except PlaywrightError as exc:
+                pytest.skip(f"Playwright browser launch failed: {exc}")
             try:
                 page = browser.new_page()
                 page.add_init_script(
