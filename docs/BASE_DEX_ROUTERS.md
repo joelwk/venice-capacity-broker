@@ -12,6 +12,11 @@ The correct Aerodrome router address on Base is `0xcF77a3Ba9A5CA399B7c97c74d54e5
 - **Address**: `0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24`
 - **Type**: Router02 (supports multi-hop)
 
+### Uniswap V3 Router + Quoter
+- **SwapRouter (exactIn/exactOut)**: `0xE592427A0AEce92De3Edee1F18E0157C05861564`
+- **QuoterV2 (read-only quotes)**: `0x61fFE014bA17989E743c5F6cB21bF9697530B21e`
+- **Common fee tiers**: 500 (stable), 1000, 3000, 10000 bps
+
 ### Important Token Addresses on Base
 - **WETH**: `0x4200000000000000000000000000000000000006`
 - **USDC**: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
@@ -36,10 +41,18 @@ QUOTE_TOKEN_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913    # USDC
 BRIDGE_TOKEN_ADDRESS=0x4200000000000000000000000000000000000006  # WETH
 
 # DEX routers
-DEX_PROVIDERS=uniswap_v2,aerodrome
+# Keep legacy list or switch to JSON to enable Uniswap V3 alongside Aerodrome/V2
+DEX_PROVIDERS=[
+  {"name": "uniswap_v3", "router": "0xE592427A0AEce92De3Edee1F18E0157C05861564", "quoter": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e", "default_fee": 3000},
+  {"name": "aerodrome"},
+  {"name": "uniswap_v2"}
+]
 UNISWAP_V2_ROUTER_ADDRESS=0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24
 AERODROME_ROUTER_ADDRESS=0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43  # (CORRECT ADDRESS)
 AERODROME_STABLE=false  # Most pairs are volatile; code tries both
+UNISWAP_V3_ROUTER_ADDRESS=0xE592427A0AEce92De3Edee1F18E0157C05861564
+UNISWAP_V3_QUOTER_ADDRESS=0x61fFE014bA17989E743c5F6cB21bF9697530B21e
+UNISWAP_V3_DEFAULT_FEE=3000
 
 # Token addresses for tracking
 VVV_TOKEN_ADDRESS=0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf
@@ -50,9 +63,9 @@ TOKEN_WATCH_ENABLE_HOLDERS=1
 TOKEN_WATCH_MAX_EVENTS=1000  # Increase from default 200 for accurate counts
 
 # Pricing path for DIEM (used by MarketDataProvider.prices):
-# Set TRADE_PATH so the first token is DIEM and the second is USDC to yield a price in USDC per DIEM.
-# Example:
-TRADE_PATH=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+# Routes now support Uniswap V3 fee tiers via address@fee notation per hop.
+# Example (DIEM -> WETH -> USDC using 30bps then 5bps pools):
+TRADE_PATH=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024@3000,0x4200000000000000000000000000000000000006@500,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ```
 
 ## Troubleshooting DIEM Pricing

@@ -60,7 +60,8 @@ For the system to work properly, ensure these environment variables are set:
 VVV_TOKEN_ADDRESS=0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf
 DIEM_TOKEN_ADDRESS=0xF4d861575ecc9493420A3f5a14F85B13f0b50EB3
 QUOTE_TOKEN_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-TRADE_PATH=<appropriate path for your DEX liquidity>
+TRADE_PATH=<token0@fee0,token1@fee1,...>
+TRADE_PATH_2=<optional secondary route using address@fee format>
 BASE_RPC_URL=<your Base RPC endpoint>
 ```
 
