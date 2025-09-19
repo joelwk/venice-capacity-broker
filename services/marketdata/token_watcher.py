@@ -46,13 +46,17 @@ DEFAULT_BRIDGE_TOKEN_BY_CHAIN: Dict[int, str] = {
 }
 
 # In-memory cache for successful pricing paths per token
-# Keyed by "<token_addr.lower()>-><quote_addr.lower()>" → (path, timestamp)
-_PRICE_PATH_CACHE: Dict[str, Tuple[List[str], float]] = {}
+# Keyed by "<token_addr.lower()>-><quote_addr.lower()>" → (RoutePlan, timestamp)
+from libs.dex.routes import RoutePlan, make_route
+
+_PRICE_PATH_CACHE: Dict[str, Tuple[RoutePlan, float]] = {}
+
 
 def _cache_key(token: str, quote: str) -> str:
     return f"{token.lower()}->{quote.lower()}"
 
-def _cache_get_path(token: str, quote: str) -> Optional[List[str]]:
+
+def _cache_get_path(token: str, quote: str) -> Optional[RoutePlan]:
     try:
         ttl = int(os.getenv("PRICE_PATH_CACHE_TTL_SECONDS") or "1800")
     except Exception:
@@ -61,13 +65,14 @@ def _cache_get_path(token: str, quote: str) -> Optional[List[str]]:
     ent = _PRICE_PATH_CACHE.get(key)
     if not ent:
         return None
-    path, ts = ent
+    route, ts = ent
     if (time.time() - ts) > ttl:
         _PRICE_PATH_CACHE.pop(key, None)
         return None
-    return list(path)
+    return route
 
-def _cache_set_path(token: str, quote: str, path: List[str]) -> None:
+
+def _cache_set_path(token: str, quote: str, route: RoutePlan) -> None:
     key = _cache_key(token, quote)
     try:
         max_entries = int(os.getenv("PRICE_PATH_CACHE_MAX") or "256")
@@ -80,7 +85,8 @@ def _cache_set_path(token: str, quote: str, path: List[str]) -> None:
             _PRICE_PATH_CACHE.pop(oldest_key, None)
         except Exception:
             _PRICE_PATH_CACHE.clear()
-    _PRICE_PATH_CACHE[key] = (list(path), float(time.time()))
+    _PRICE_PATH_CACHE[key] = (route, float(time.time()))
+
 
 def _cache_delete(token: str, quote: str) -> None:
     _PRICE_PATH_CACHE.pop(_cache_key(token, quote), None)
@@ -321,133 +327,144 @@ def _price_via_dex(address: str) -> Optional[float]:
             return 1.0
 
         md = MarketDataProvider()
-        provider_name: Optional[str] = None
-        price: Optional[float] = None
+
+        def _route_from_tokens(tokens: List[str], fees: Optional[List[Optional[int]]] = None) -> Optional[RoutePlan]:
+            try:
+                return make_route(tokens, fees)
+            except Exception as exc:
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(
+                        f"[token-watcher][debug] Unable to build route for {tokens} fees={fees}: {type(exc).__name__}: {exc}"
+                    )
+                return None
+
+        def _try_route(route: RoutePlan, label: str) -> Optional[Tuple[float, str]]:
+            try:
+                best = md.best_price(route, amount_in_decimal=1.0)
+                price_val = float(best.get("price") or 0.0)
+                if price_val <= 0:
+                    return None
+                provider_val = str(best.get("provider") or "")
+                _cache_set_path(address, quote, route)
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(
+                        f"[token-watcher][debug] {label} route success via {provider_val}: {_format_price(price_val)}"
+                    )
+                return price_val, provider_val
+            except Exception as exc:
+                if _truthy_env("TOKEN_WATCH_DEBUG"):
+                    print(
+                        f"[token-watcher][debug] {label} route failed: {type(exc).__name__}: {exc}"
+                    )
+                return None
 
         # Try cached successful path first
         cached = _cache_get_path(address, quote)
         if cached:
-            try:
-                best0 = md.best_price(cached, amount_in_decimal=1.0)
-                price = float(best0["price"])
-                provider_name = str(best0.get("provider") or "")
-                if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(f"[token-watcher][debug] Using cached price path {cached} from {provider_name}: {_format_price(price)}")
-                return price
-            except Exception as e:
-                if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(f"[token-watcher][debug] Cached path failed; evicting. {type(e).__name__}: {e}")
-                _cache_delete(address, quote)
+            cached_res = _try_route(cached, "cached")
+            if cached_res is not None:
+                return cached_res[0]
+            _cache_delete(address, quote)
 
-        # First try direct pair [address, quote]
+        price: Optional[float] = None
+
+        # Prefer explicitly configured trade paths (TRADE_PATH, TRADE_PATH_2, ...)
         try:
-            path1 = [address, quote]
-            best = md.best_price(path1, amount_in_decimal=1.0)
-            price = float(best["price"])
-            provider_name = str(best.get("provider") or "")
-            _cache_set_path(address, quote, path1)
-        except Exception as e:
-            if _truthy_env("TOKEN_WATCH_DEBUG"):
-                print(
-                    f"[token-watcher][debug] Direct DEX price failed: {type(e).__name__}: {e}"
-                )
+            configured_routes = md._collect_trade_paths()
+        except Exception:
+            configured_routes = []
 
-        # If no direct quote, try configured/default bridge token (e.g., WETH): [address, bridge, quote]
+        for route in configured_routes:
+            tokens = getattr(route, "tokens", [])
+            if tokens and tokens[0].lower() == address.lower():
+                cfg = _try_route(route, "configured")
+                if cfg is not None:
+                    price, _ = cfg
+                    break
+
+        # Try direct pair using common fee tiers
+        if price is None:
+            direct_fees: List[Optional[int]] = [None, 500, 1000, 3000, 10000]
+            for fee in direct_fees:
+                route = _route_from_tokens([address, quote], [fee] if fee is not None else None)
+                if not route:
+                    continue
+                direct_res = _try_route(route, "direct")
+                if direct_res is not None:
+                    price, _ = direct_res
+                    break
+
+        # Try bridge token (e.g., WETH)
         if price is None:
             try:
                 bridge_env = os.getenv("DEX_BRIDGE_TOKEN_ADDRESS")
                 try:
-                    chain_id = int(
-                        os.getenv("ETHERSCAN_CHAIN_ID")
-                        or os.getenv("BASE_CHAIN_ID")
-                        or 8453
-                    )
+                    chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
                 except Exception:
                     chain_id = 8453
                 bridge_default = DEFAULT_BRIDGE_TOKEN_BY_CHAIN.get(chain_id)
                 bridge = bridge_env or bridge_default
-                if bridge and bridge.lower() not in {address.lower(), quote.lower()}:
-                    if _truthy_env("TOKEN_WATCH_DEBUG"):
-                        print(
-                            f"[token-watcher][debug] Trying bridge route via {bridge}"
-                        )
-                    path2 = [address, bridge, quote]
-                    best2 = md.best_price(path2, amount_in_decimal=1.0)
-                    price = float(best2["price"])
-                    provider_name = str(best2.get("provider") or "")
-                    _cache_set_path(address, quote, path2)
-            except Exception as e:
-                if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(
-                        f"[token-watcher][debug] Bridge DEX price failed: {type(e).__name__}: {e}"
-                    )
+            except Exception:
+                bridge = None
 
-        # If still no price, try VVV as an alternate bridge when available
+            if bridge and bridge.lower() not in {address.lower(), quote.lower()}:
+                for fee_in in (500, 1000, 3000):
+                    for fee_out in (500, 1000, 3000):
+                        route = _route_from_tokens([address, bridge, quote], [fee_in, fee_out])
+                        if not route:
+                            continue
+                        bridge_res = _try_route(route, "bridge")
+                        if bridge_res is not None:
+                            price, _ = bridge_res
+                            break
+                    if price is not None:
+                        break
+
+        # Try VVV as alternate intermediate hop
         if price is None:
-            try:
-                vvv_addr = (
-                    os.getenv("VVV_TOKEN_ADDRESS")
-                    or next(
-                        (
-                            addr
-                            for addr, meta in KNOWN_TOKENS.items()
-                            if str(meta.get("symbol", "")).upper() == "VVV"
-                        ),
-                        None,
-                    )
-                )
-                if vvv_addr and vvv_addr.lower() not in {
-                    address.lower(),
-                    quote.lower(),
-                }:
-                    if _truthy_env("TOKEN_WATCH_DEBUG"):
-                        print(
-                            f"[token-watcher][debug] Trying VVV bridge route via {vvv_addr}"
-                        )
-                    # Prefer shortest path [address, VVV, quote]
+            vvv_addr = (
+                os.getenv("VVV_TOKEN_ADDRESS")
+                or next((addr for addr, meta in KNOWN_TOKENS.items() if str(meta.get("symbol", "")).upper() == "VVV"), None)
+            )
+            if vvv_addr and vvv_addr.lower() not in {address.lower(), quote.lower()}:
+                # Shortest path first
+                route = _route_from_tokens([address, vvv_addr, quote])
+                if route:
+                    vvv_res = _try_route(route, "vvv bridge")
+                    if vvv_res is not None:
+                        price, _ = vvv_res
+
+                if price is None:
                     try:
-                        path3 = [address, vvv_addr, quote]
-                        best3 = md.best_price(path3, amount_in_decimal=1.0)
-                        price = float(best3["price"])
-                        provider_name = str(best3.get("provider") or "")
-                        _cache_set_path(address, quote, path3)
-                    except Exception:
-                        # If VVV->QUOTE direct pool not available, try [address, VVV, bridge, quote]
                         bridge_env = os.getenv("DEX_BRIDGE_TOKEN_ADDRESS")
                         try:
-                            chain_id = int(
-                                os.getenv("ETHERSCAN_CHAIN_ID")
-                                or os.getenv("BASE_CHAIN_ID")
-                                or 8453
-                            )
+                            chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
                         except Exception:
                             chain_id = 8453
                         bridge_default = DEFAULT_BRIDGE_TOKEN_BY_CHAIN.get(chain_id)
                         bridge = bridge_env or bridge_default
-                        if (
-                            bridge
-                            and bridge.lower()
-                            not in {address.lower(), vvv_addr.lower(), quote.lower()}
-                        ):
-                            path4 = [address, vvv_addr, bridge, quote]
-                            best4 = md.best_price(path4, amount_in_decimal=1.0)
-                            price = float(best4["price"])
-                            provider_name = str(best4.get("provider") or "")
-                            _cache_set_path(address, quote, path4)
-            except Exception as e:
-                if _truthy_env("TOKEN_WATCH_DEBUG"):
-                    print(
-                        f"[token-watcher][debug] VVV bridge DEX price failed: {type(e).__name__}: {e}"
-                    )
+                    except Exception:
+                        bridge = None
 
-        if price is None:
-            return None
-
-        if _truthy_env("TOKEN_WATCH_DEBUG"):
-            src = provider_name or "unknown"
-            print(
-                f"[token-watcher][debug] DEX price success from {src}: {_format_price(price)}"
-            )
+                    if bridge and bridge.lower() not in {address.lower(), vvv_addr.lower(), quote.lower()}:
+                        fee_candidates = [500, 1000, 3000]
+                        for fee_in in fee_candidates:
+                            for fee_mid in fee_candidates:
+                                for fee_out in fee_candidates:
+                                    route = _route_from_tokens(
+                                        [address, vvv_addr, bridge, quote],
+                                        [fee_in, fee_mid, fee_out],
+                                    )
+                                    if not route:
+                                        continue
+                                    res = _try_route(route, "vvv bridge+")
+                                    if res is not None:
+                                        price, _ = res
+                                        break
+                                if price is not None:
+                                    break
+                            if price is not None:
+                                break
 
         return price
     except Exception as e:

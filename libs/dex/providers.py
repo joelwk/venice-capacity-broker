@@ -5,10 +5,11 @@ import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
+import inspect
 
 from libs.agentkit_ext.agentkit_wallet import get_address, send_tx
 from libs.agentkit_ext.web3_utils import get_contract, get_web3
-from libs.dex.routes import RouteLike, RoutePlan, as_route_plan
+from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
 
 try:
     from libs.telemetry.logger import get_logger  # type: ignore
@@ -67,11 +68,25 @@ class Quote:
     provider: str
     amount_in: int
     amount_out: int
-    route: RoutePlan
+    route: Optional[RoutePlan] = None
+    path: Optional[List[Address]] = None
 
-    @property
-    def path(self) -> List[Address]:
-        return list(self.route.tokens)
+    def __post_init__(self) -> None:
+        if self.route is None:
+            if self.path is None:
+                raise ValueError("Quote requires either route or path")
+            route = make_route(self.path)
+            object.__setattr__(self, "route", route)
+            object.__setattr__(self, "path", list(route.tokens))
+        else:
+            if self.path is None:
+                object.__setattr__(self, "path", list(self.route.tokens))
+            else:
+                object.__setattr__(self, "path", list(self.path))
+
+    def as_route(self) -> RoutePlan:
+        assert self.route is not None
+        return self.route
 
 
 class DexProvider:
@@ -510,6 +525,30 @@ class DexAggregator:
         self._circ_cool = int((os.getenv("DEX_CIRCUIT_COOL_OFF_SECONDS") or "60").strip() or 60)
         self._circ: Dict[str, Dict[str, float | int]] = {}
 
+    @staticmethod
+    def _invoke_provider(provider: DexProvider, method: str, route: RoutePlan, *args):
+        fn = getattr(provider, method)
+        try:
+            params = list(inspect.signature(fn).parameters)
+            wants_route = bool(params and params[-1] in {"route", "route_plan", "plan"})
+        except (ValueError, TypeError):
+            wants_route = False
+        arg = route if wants_route else list(route.tokens)
+        return fn(*args, arg)  # type: ignore[misc]
+
+    @staticmethod
+    def _supports_exact_out(provider: DexProvider) -> bool:
+        if provider.name == "aerodrome":
+            return False
+        if provider.supports_exact_out:
+            return True
+        # Detect overrides of quote_exact_out
+        try:
+            base_impl = DexProvider.quote_exact_out
+            return provider.__class__.quote_exact_out is not base_impl
+        except AttributeError:
+            return False
+
     def _circ_is_open(self, provider: str) -> bool:
         st = self._circ.get(provider)
         if not st:
@@ -538,11 +577,13 @@ class DexAggregator:
                 _metrics_inc("dex_circuit_skips_total", labels={"provider": provider.name})
                 continue
             try:
-                quote = provider.quote(amount_in, route_plan)
+                quote = self._invoke_provider(provider, "quote", route_plan, amount_in)
             except Exception:
                 self._circ_on_failure(provider.name)
                 quote = None
             if quote is not None:
+                if quote.route is None:
+                    object.__setattr__(quote, "route", route_plan)
                 quotes.append(quote)
         return quotes
 
@@ -555,14 +596,19 @@ class DexAggregator:
         _metrics_inc("dex_agg_selected_total", labels={"provider": best.provider})
         return best
 
-    def trade_best(self, amount_in: int, min_out_bps: int, route: RouteLike) -> Dict[str, str]:
+    def trade_best(self, amount_in: int, min_out_bps: int, route: RouteLike | None = None, **kwargs) -> Dict[str, str]:
+        route = kwargs.get("route", route)
+        if route is None and "path" in kwargs:
+            route = kwargs["path"]
+        if route is None:
+            raise ValueError("route/path is required")
         quote = self.best_quote(amount_in, route)
         if quote is None:
             raise RuntimeError("No quotes available from configured DEX providers")
         min_out = quote.amount_out * (10_000 - min_out_bps) // 10_000
         provider = next(p for p in self.providers if p.name == quote.provider)
         try:
-            result = provider.trade(amount_in, min_out, quote.route)
+            result = self._invoke_provider(provider, "trade", quote.as_route(), amount_in, min_out)
             self._circ_on_success(provider.name)
             return result
         except Exception as exc:  # noqa: BLE001
@@ -574,17 +620,19 @@ class DexAggregator:
         route_plan = as_route_plan(route)
         quotes: List[Quote] = []
         for provider in self.providers:
-            if not provider.supports_exact_out:
+            if not self._supports_exact_out(provider):
                 continue
             if self._circ_is_open(provider.name):
                 _metrics_inc("dex_circuit_skips_total", labels={"provider": provider.name})
                 continue
             try:
-                quote = provider.quote_exact_out(amount_out, route_plan)
+                quote = self._invoke_provider(provider, "quote_exact_out", route_plan, amount_out)
             except Exception:
                 self._circ_on_failure(provider.name)
                 quote = None
             if quote is not None:
+                if quote.route is None:
+                    object.__setattr__(quote, "route", route_plan)
                 quotes.append(quote)
         return quotes
 
@@ -597,14 +645,19 @@ class DexAggregator:
         _metrics_inc("dex_agg_selected_total", labels={"provider": best.provider, "mode": "exact_out"})
         return best
 
-    def trade_best_exact_out(self, amount_out: int, max_in_bps: int, route: RouteLike) -> Dict[str, str]:
+    def trade_best_exact_out(self, amount_out: int, max_in_bps: int, route: RouteLike | None = None, **kwargs) -> Dict[str, str]:
+        route = kwargs.get("route", route)
+        if route is None and "path" in kwargs:
+            route = kwargs["path"]
+        if route is None:
+            raise ValueError("route/path is required")
         quote = self.best_quote_exact_out(amount_out, route)
         if quote is None:
             raise RuntimeError("No exact-out quotes available from configured DEX providers")
         max_in = quote.amount_in * (10_000 + max_in_bps) // 10_000
         provider = next(p for p in self.providers if p.name == quote.provider)
         try:
-            result = provider.trade_exact_out(amount_out, max_in, quote.route)
+            result = self._invoke_provider(provider, "trade_exact_out", quote.as_route(), amount_out, max_in)
             self._circ_on_success(provider.name)
             _metrics_inc("dex_agg_trade_total", labels={"provider": quote.provider, "mode": "exact_out"})
             return result
