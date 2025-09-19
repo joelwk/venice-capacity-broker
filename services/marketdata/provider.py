@@ -909,7 +909,7 @@ class MarketDataProvider:
 
         return verify_trade_path(path)
 
-    def reserve_cap_units(self, path: List[str], take_bps: Optional[int] = None) -> Optional[int]:
+    def reserve_cap_units(self, path: RouteLike, take_bps: Optional[int] = None) -> Optional[int]:
         """Estimate a conservative max input units based on pool reserves.
 
         - Only applies for direct 2-token path (path[0] -> path[1]) on UniswapV2-like pools.
@@ -917,7 +917,9 @@ class MarketDataProvider:
         - Env override RISK_MAX_POOL_TAKE_BPS if take_bps not provided (default 100 = 1%).
         Returns None when discovery or reserves unavailable.
         """
-        if len(path) < 2:
+        route = as_route_plan(path)
+        tokens = route.tokens
+        if len(tokens) < 2:
             return None
         try:
             from services.marketdata.etherscan_verify import (
@@ -944,7 +946,7 @@ class MarketDataProvider:
         t0 = None
         t1 = None
         try:
-            cached = get_cached_pair_info_for_tokens(path[0], path[1])
+            cached = get_cached_pair_info_for_tokens(tokens[0], tokens[1])
             if isinstance(cached, dict):
                 pair = cached.get("pair")
                 rez = cached.get("reserves")
@@ -953,7 +955,7 @@ class MarketDataProvider:
         except Exception:
             pass
         if not pair:
-            disc = verify_trade_path(path)
+            disc = verify_trade_path(tokens)
             if not disc or not isinstance(disc, dict):
                 return None
             hops = disc.get("hops") or []
@@ -980,7 +982,7 @@ class MarketDataProvider:
 
             t0_n = _norm(str(t0))
             t1_n = _norm(str(t1))
-            inp_n = _norm(path[0])
+            inp_n = _norm(tokens[0])
             if inp_n == t0_n:
                 reserve_in = int(rez[0])
             elif inp_n == t1_n:
