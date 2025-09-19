@@ -33,13 +33,20 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     def fake_best_price(route, amount_in_decimal: float = 1.0):  # type: ignore[override]
         plan = as_route_plan(route)
         tokens = [p.lower() for p in plan.tokens]
-        if tokens == [vvv_addr.lower(), quote_addr.lower()]:
+        shortcut = [vvv_addr.lower(), quote_addr.lower()]
+        via_weth = [vvv_addr.lower(), weth_addr.lower(), quote_addr.lower()]
+        weth_quote = [weth_addr.lower(), quote_addr.lower()]
+        if tokens == shortcut or tokens == via_weth:
             return {"provider": "stub", "price": 2.63}
-        if tokens == [weth_addr.lower(), quote_addr.lower()]:
+        if tokens == weth_quote:
             return {"provider": "stub", "price": 3200.0}
         raise RuntimeError(f"Unexpected path {plan.tokens}")
 
     monkeypatch.setattr(md, "best_price", fake_best_price)
+    monkeypatch.setenv(
+        "VVV_PRICE_PATH",
+        f"{vvv_addr}@3000,{weth_addr}@500,{quote_addr}",
+    )
 
     prices = md.prices(["VVV", "DIEM", "ETH", "USDC"])
 

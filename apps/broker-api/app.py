@@ -266,6 +266,7 @@ try:
             diem_token = (_os.getenv("DIEM_TOKEN_ADDRESS") or "").strip()
             vvv_token = (_os.getenv("VVV_TOKEN_ADDRESS") or "").strip()
             trade_path = (_os.getenv("TRADE_PATH") or "").strip()
+            vvv_trade_path = (_os.getenv("VVV_PRICE_PATH") or _os.getenv("VVV_TRADE_PATH") or "").strip()
 
             # ABI presence
             try:
@@ -305,6 +306,7 @@ try:
                     "diem_token": (diem_token or None),
                     "vvv_token": (vvv_token or None),
                     "trade_path": (trade_path or None),
+                    "vvv_trade_path": (vvv_trade_path or None),
                 },
                 "abi": abi,
             }

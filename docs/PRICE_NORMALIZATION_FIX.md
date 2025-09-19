@@ -62,6 +62,7 @@ DIEM_TOKEN_ADDRESS=0xF4d861575ecc9493420A3f5a14F85B13f0b50EB3
 QUOTE_TOKEN_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 TRADE_PATH=<token0@fee0,token1@fee1,...>
 TRADE_PATH_2=<optional secondary route using address@fee format>
+VVV_PRICE_PATH=<vvv@fee0,weth@fee1,quote>
 BASE_RPC_URL=<your Base RPC endpoint>
 ```
 

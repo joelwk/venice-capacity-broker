@@ -62,10 +62,12 @@ DIEM_TOKEN_ADDRESS=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024
 TOKEN_WATCH_ENABLE_HOLDERS=1
 TOKEN_WATCH_MAX_EVENTS=1000  # Increase from default 200 for accurate counts
 
-# Pricing path for DIEM (used by MarketDataProvider.prices):
-# Routes now support Uniswap V3 fee tiers via address@fee notation per hop.
-# Example (DIEM -> WETH -> USDC using 30bps then 5bps pools):
+# Pricing paths (used by MarketDataProvider.prices):
+# Routes support Uniswap V3 fee tiers via address@fee notation per hop.
+# DIEM example (DIEM -> WETH -> USDC using 30 bps then 5 bps pools):
 TRADE_PATH=0xF4d97F2da56e8c3098f3a8D538DB630A2606a024@3000,0x4200000000000000000000000000000000000006@500,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+# VVV example (VVV -> WETH -> USDC using 30 bps then 5 bps pools):
+VVV_PRICE_PATH=0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf@3000,0x4200000000000000000000000000000000000006@500,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 ```
 
 ## Troubleshooting DIEM Pricing

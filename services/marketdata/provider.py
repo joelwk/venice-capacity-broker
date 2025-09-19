@@ -81,6 +81,15 @@ class MarketDataProvider:
             raise EnvironmentError(f"{key} must be set for pricing routes")
         return self._parse_route_spec(path_env)
 
+    def _route_optional_from_env(self, key: str) -> Optional[RoutePlan]:
+        raw = os.getenv(key)
+        if not raw:
+            return None
+        try:
+            return self._parse_route_spec(raw)
+        except Exception:
+            return None
+
     def _quote_token_address(self) -> str:
         import os
 
@@ -657,6 +666,15 @@ class MarketDataProvider:
                     quote = self._quote_token_address()
                     if not token or not quote:
                         raise ValueError("VVV or QUOTE token address missing")
+                    route_override = self._route_optional_from_env("VVV_PRICE_PATH") or self._route_optional_from_env("VVV_TRADE_PATH")
+                    if route_override:
+                        try:
+                            bp = self.best_price(route_override, amount_in_decimal=1.0)
+                            price = float(bp.get("price") or 0.0)
+                            out[sym] = price if self._valid_price(price) else 0.0
+                            continue
+                        except Exception:
+                            pass
                     # Try direct route first
                     try:
                         bp = self.best_price(make_route([token, quote]), amount_in_decimal=1.0)
