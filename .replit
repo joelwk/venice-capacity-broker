@@ -1,4 +1,4 @@
-run = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker --extra web3 --extra agentkit\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+run = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker --extra web3 --extra agentkit --extra db\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
 language = "python3"
 entrypoint = "apps/broker-api/app.py"
 modules = ["python-3.10"]

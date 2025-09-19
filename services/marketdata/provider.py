@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+
+from libs.dex.providers import build_aggregator_from_env
+from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
 
 
 class MarketDataProvider:
@@ -22,13 +26,60 @@ class MarketDataProvider:
         erc20 = get_contract(w3, Web3.to_checksum_address(address), "erc20.json")
         return int(erc20.functions.decimals().call())
 
-    def _path_from_env(self) -> List[str]:
-        import os
+    def _parse_route_spec(self, raw: str) -> RoutePlan:
+        spec = raw.strip()
+        if not spec:
+            raise ValueError("route specification must be non-empty")
+        if spec[0] in "[{":
+            data = json.loads(spec)
+            if isinstance(data, dict):
+                tokens = data.get("tokens") or data.get("path")
+                fees = data.get("fees") or data.get("fee_tiers")
+                if not isinstance(tokens, Sequence):
+                    raise ValueError("route JSON must include 'tokens' array")
+                if fees is not None and not isinstance(fees, Sequence):
+                    raise ValueError("route JSON 'fees' must be an array when provided")
+                return make_route(list(tokens), list(fees) if fees is not None else None)
+            if isinstance(data, list):
+                tokens = []
+                fees: List[Optional[int]] = []
+                for idx, item in enumerate(data):
+                    if isinstance(item, dict):
+                        addr = item.get("token") or item.get("address")
+                        fee = item.get("fee")
+                        if not addr:
+                            raise ValueError("route hop missing token address")
+                        tokens.append(str(addr))
+                        if idx < len(data) - 1:
+                            fees.append(int(fee) if fee is not None else None)
+                    else:
+                        tokens.append(str(item))
+                        if idx < len(data) - 1:
+                            fees.append(None)
+                return make_route(tokens, fees)
+            raise ValueError("unsupported route JSON format")
+        parts = [p.strip() for p in spec.split(",") if p.strip()]
+        tokens: List[str] = []
+        fees: List[Optional[int]] = []
+        for idx, part in enumerate(parts):
+            if "@" in part:
+                addr, fee_str = part.split("@", 1)
+                tokens.append(addr.strip())
+                if idx < len(parts) - 1:
+                    fees.append(int(fee_str.strip()))
+            else:
+                tokens.append(part)
+                if idx < len(parts) - 1:
+                    fees.append(None)
+        if len(tokens) < 2:
+            raise ValueError("route must include at least two addresses")
+        return make_route(tokens, fees)
 
-        path_env = os.getenv("TRADE_PATH")
+    def _route_from_env(self, key: str = "TRADE_PATH") -> RoutePlan:
+        path_env = os.getenv(key)
         if not path_env:
-            raise EnvironmentError("TRADE_PATH must be set: comma-separated token addresses (in,out)")
-        return [p.strip() for p in path_env.split(",")]
+            raise EnvironmentError(f"{key} must be set for pricing routes")
+        return self._parse_route_spec(path_env)
 
     def _quote_token_address(self) -> str:
         import os
@@ -85,23 +136,21 @@ class MarketDataProvider:
             return False
         return 1e-6 < v < 1e6
 
-    def _collect_trade_paths(self) -> List[List[str]]:
-        paths: List[List[str]] = []
+    def _collect_trade_paths(self) -> List[RoutePlan]:
+        paths: List[RoutePlan] = []
         for key in ("TRADE_PATH", "TRADE_PATH_2"):
             raw = os.getenv(key)
             if not raw:
                 continue
-            parts = [p.strip() for p in raw.split(",") if p.strip()]
-            if len(parts) >= 2:
-                paths.append(parts)
+            try:
+                paths.append(self._parse_route_spec(raw))
+            except Exception:
+                continue
         return paths
 
-    def _try_path_direct(self, path: List[str]) -> Optional[float]:
-        tokens = [p for p in path if p]
-        if len(tokens) < 2:
-            return None
+    def _try_path_direct(self, route: RoutePlan) -> Optional[float]:
         try:
-            bp = self.best_price(tokens, amount_in_decimal=1.0)
+            bp = self.best_price(route, amount_in_decimal=1.0)
             price = float(bp.get("price") or 0.0)
             return price if self._valid_price(price) else None
         except Exception:
@@ -118,14 +167,14 @@ class MarketDataProvider:
         attempts: List[Optional[float]] = []
         # Direct aggregator quote (best effort)
         try:
-            bp = self.best_price([token_in, token_out], amount_in_decimal=1.0)
+            bp = self.best_price(make_route([token_in, token_out]), amount_in_decimal=1.0)
             attempts.append(float(bp.get("price") or 0.0))
         except Exception:
             attempts.append(None)
 
         # Scan smaller sizes when pools are thin
         try:
-            attempts.append(self._best_price_scan([token_in, token_out], start=1.0, min_amount=1e-12, factor=10.0))
+            attempts.append(self._best_price_scan(make_route([token_in, token_out]), start=1.0, min_amount=1e-12, factor=10.0))
         except Exception:
             attempts.append(None)
 
@@ -140,7 +189,7 @@ class MarketDataProvider:
         bridge = self._weth_address()
         if bridge and bridge.lower() not in {token_in.lower(), token_out.lower()}:
             try:
-                bp_bridge = self.best_price([token_in, bridge, token_out], amount_in_decimal=1.0)
+                bp_bridge = self.best_price(make_route([token_in, bridge, token_out]), amount_in_decimal=1.0)
                 price_bridge = float(bp_bridge.get("price") or 0.0)
                 if self._valid_price(price_bridge):
                     return price_bridge
@@ -160,8 +209,8 @@ class MarketDataProvider:
                     return None
         return None
 
-    def _price_via_segments(self, path: List[str]) -> Optional[float]:
-        tokens = [p for p in path if p]
+    def _price_via_segments(self, route: RoutePlan) -> Optional[float]:
+        tokens = route.tokens
         if len(tokens) < 2:
             return None
         total = 1.0
@@ -242,77 +291,93 @@ class MarketDataProvider:
     def _ratio_units_to_tokens(self, units: int, diem_decimals: int, svvv_decimals: int) -> float:
         return float(units) * (10 ** diem_decimals) / float(10 ** svvv_decimals)
 
-    def best_price(self, path: List[str], amount_in_decimal: float = 1.0) -> Dict[str, Any]:
-        """Compute best price for path given a decimal input amount.
+    def best_price(self, route: RouteLike, amount_in_decimal: float = 1.0) -> Dict[str, Any]:
+        """Compute best price for the supplied route given a decimal input amount."""
 
-        Returns dict with provider, amount_in/out (units), decimals, and price.
-        """
-        if len(path) < 2:
-            raise ValueError("path must include at least [token_in, token_out]")
-        dec_in = self._erc20_decimals(path[0])
-        dec_out = self._erc20_decimals(path[-1])
+        plan = as_route_plan(route)
+        tokens = plan.tokens
+        if len(tokens) < 2:
+            raise ValueError("route must include at least [token_in, token_out]")
+        dec_in = self._erc20_decimals(tokens[0])
+        dec_out = self._erc20_decimals(tokens[-1])
         amount_in_units = int(amount_in_decimal * (10 ** dec_in))
-        from libs.dex.providers import build_aggregator_from_env
 
         agg = build_aggregator_from_env()
-        q = agg.best_quote(amount_in_units, path)
-        # Fallback: if no direct quotes and path is a simple pair, try bridge token (e.g., WETH)
-        if q is None and len(path) == 2:
-            bt = self._bridge_token_address()
-            if bt and bt.lower() not in {path[0].lower(), path[-1].lower()}:
-                alt_path = [path[0], bt, path[-1]]
+        supports_reserve = any(getattr(p, "supports_reserve_math", False) for p in getattr(agg, "providers", []))
+
+        quote = agg.best_quote(amount_in_units, plan)
+        used_route = plan
+
+        if quote is None and len(tokens) == 2:
+            bridge = self._bridge_token_address()
+            if bridge and bridge.lower() not in {tokens[0].lower(), tokens[-1].lower()}:
+                alt_route = make_route([tokens[0], bridge, tokens[-1]])
                 try:
-                    q = agg.best_quote(amount_in_units, alt_path)
-                    if q is not None:
-                        path = alt_path  # report the path actually used
+                    quote = agg.best_quote(amount_in_units, alt_route)
+                    if quote is not None:
+                        used_route = quote.route
                 except Exception:
-                    q = None
-        # Final fallback: approximate price via AMM reserves when quotes are unavailable
-        if q is None:
-            approx = self.approx_exec_price(amount_in_units, path)
+                    quote = None
+
+        if quote is not None:
+            used_route = quote.route
+            price = (quote.amount_out / (10 ** dec_out)) / (quote.amount_in / (10 ** dec_in))
+            return {
+                "provider": quote.provider,
+                "amount_in": quote.amount_in,
+                "amount_out": quote.amount_out,
+                "decimals": {"in": dec_in, "out": dec_out},
+                "price": price,
+                "path": used_route.tokens,
+            }
+
+        if supports_reserve:
+            approx = self.approx_exec_price(amount_in_units, plan)
             if approx and approx > 0:
                 price = float(approx)
+                if dec_out >= dec_in:
+                    amount_out_units = int(price * amount_in_units * (10 ** (dec_out - dec_in)))
+                else:
+                    amount_out_units = int(price * amount_in_units / (10 ** (dec_in - dec_out)))
                 return {
                     "provider": "approx",
                     "amount_in": amount_in_units,
-                    "amount_out": int(price * amount_in_units * (10 ** (dec_out - dec_in))) if dec_out >= dec_in else int(price * amount_in_units / (10 ** (dec_in - dec_out))),
+                    "amount_out": amount_out_units,
                     "decimals": {"in": dec_in, "out": dec_out},
                     "price": price,
-                    "path": path,
+                    "path": plan.tokens,
                 }
-        if q is None:
-            raise RuntimeError("No quotes available for provided path")
-        price = (q.amount_out / (10 ** dec_out)) / (q.amount_in / (10 ** dec_in))
-        return {
-            "provider": q.provider,
-            "amount_in": q.amount_in,
-            "amount_out": q.amount_out,
-            "decimals": {"in": dec_in, "out": dec_out},
-            "price": price,
-            "path": path,
-        }
 
-    def _best_price_scan(self, path: List[str], start: float = 1.0, min_amount: float = 1e-12, factor: float = 10.0) -> Optional[float]:
+        raise RuntimeError("No quotes available for provided route")
+
+    def _best_price_scan(
+        self,
+        route: RouteLike,
+        start: float = 1.0,
+        min_amount: float = 1e-12,
+        factor: float = 10.0,
+    ) -> Optional[float]:
         """Scan progressively smaller input amounts until a quote is found; return price.
 
         Uses router quotes only (no reserve math) to avoid dependence on external explorers.
         """
-        if len(path) < 2:
+        plan = as_route_plan(route)
+        tokens = plan.tokens
+        if len(tokens) < 2:
             return None
         try:
-            dec_in = self._erc20_decimals(path[0])
-            dec_out = self._erc20_decimals(path[-1])
+            dec_in = self._erc20_decimals(tokens[0])
+            dec_out = self._erc20_decimals(tokens[-1])
         except Exception:
             return None
         amt = float(start)
         if factor <= 1.0:
             factor = 10.0
-        from libs.dex.providers import build_aggregator_from_env
         agg = build_aggregator_from_env()
         while amt >= float(min_amount):
             try:
                 amount_in_units = int(amt * (10 ** dec_in))
-                q = agg.best_quote(amount_in_units, path)
+                q = agg.best_quote(amount_in_units, plan)
                 if q is not None and q.amount_in > 0 and q.amount_out > 0:
                     price = (q.amount_out / (10 ** dec_out)) / (q.amount_in / (10 ** dec_in))
                     if price > 0:
@@ -337,14 +402,16 @@ class MarketDataProvider:
         except Exception:
             return 0
 
-    def approx_quote_exact_in(self, amount_in: int, path: List[str], fee_bps_per_hop: int = 30) -> Optional[int]:
+    def approx_quote_exact_in(self, amount_in: int, route: RoutePlan, fee_bps_per_hop: int = 30) -> Optional[int]:
         """Approximate multi-hop exact-in output using UniswapV2 constant-product math.
 
         Uses Etherscan v2 discovery/cache for UniswapV2 reserves and token mapping.
         Returns None when reserves are unavailable for any hop.
         """
         try:
-            if not isinstance(path, list) or len(path) < 2 or amount_in <= 0:
+            route.ensure_v2()
+            tokens = route.tokens
+            if len(tokens) < 2 or amount_in <= 0:
                 return None
             try:
                 from services.marketdata.etherscan_verify import (
@@ -354,9 +421,9 @@ class MarketDataProvider:
             except Exception:
                 return None
             amt = int(amount_in)
-            for i in range(len(path) - 1):
-                a = str(path[i])
-                b = str(path[i + 1])
+            for i in range(len(tokens) - 1):
+                a = str(tokens[i])
+                b = str(tokens[i + 1])
                 info = get_cached_pair_info_for_tokens(a, b)
                 if not info:
                     # Try to warm cache for this hop
@@ -391,19 +458,21 @@ class MarketDataProvider:
         except Exception:
             return None
 
-    def approx_exec_price(self, amount_in: int, path: List[str], fee_bps_per_hop: int = 30) -> Optional[float]:
+    def approx_exec_price(self, amount_in: int, route: RoutePlan, fee_bps_per_hop: int = 30) -> Optional[float]:
         """Return approximate execution price (out/in) using AMM fallback for given input units.
 
         Price is normalized to token decimals along the path ends (path[0] -> path[-1]).
         """
         try:
-            if len(path) < 2 or amount_in <= 0:
+            route.ensure_v2()
+            tokens = route.tokens
+            if len(tokens) < 2 or amount_in <= 0:
                 return None
-            out_units = self.approx_quote_exact_in(amount_in, path, fee_bps_per_hop=fee_bps_per_hop)
+            out_units = self.approx_quote_exact_in(amount_in, route, fee_bps_per_hop=fee_bps_per_hop)
             if out_units is None or out_units <= 0:
                 return None
-            dec_in = self._erc20_decimals(path[0])
-            dec_out = self._erc20_decimals(path[-1])
+            dec_in = self._erc20_decimals(tokens[0])
+            dec_out = self._erc20_decimals(tokens[-1])
             amt_in = float(amount_in) / float(10 ** int(dec_in))
             amt_out = float(out_units) / float(10 ** int(dec_out))
             if amt_in <= 0:
@@ -489,17 +558,17 @@ class MarketDataProvider:
         if not diem or not quote:
             return None
 
-        paths = self._collect_trade_paths()
-        if not paths:
-            paths = [[diem, quote]]
+        routes = self._collect_trade_paths()
+        if not routes:
+            routes = [make_route([diem, quote])]
         else:
-            has_diem_path = any(p and p[0].strip().lower() == diem.lower() for p in paths)
+            has_diem_path = any(r.tokens and r.tokens[0].lower() == diem.lower() for r in routes)
             if not has_diem_path:
-                paths.insert(0, [diem, quote])
+                routes.insert(0, make_route([diem, quote]))
 
         seen: set[tuple[str, ...]] = set()
-        for raw in paths:
-            tokens = [t.strip() for t in raw if t.strip()]
+        for route in routes:
+            tokens = [t.strip() for t in route.tokens if t.strip()]
             if not tokens or tokens[0].lower() != diem.lower():
                 continue
             key = tuple(t.lower() for t in tokens)
@@ -507,9 +576,9 @@ class MarketDataProvider:
                 continue
             seen.add(key)
 
-            price = self._try_path_direct(tokens)
+            price = self._try_path_direct(route)
             if price is None:
-                price = self._price_via_segments(tokens)
+                price = self._price_via_segments(route)
             if not self._valid_price(price):
                 continue
 
@@ -527,14 +596,13 @@ class MarketDataProvider:
         if vvv:
             diem_to_vvv = self._hop_price(diem, vvv)
             if self._valid_price(diem_to_vvv):
-                v_paths = [p for p in paths if p and p[0].strip().lower() == vvv.lower()]
-                for raw in v_paths:
-                    tokens = [t.strip() for t in raw if t.strip()]
-                    price_tail = self._price_via_segments(tokens)
+                v_routes = [r for r in routes if r.tokens and r.tokens[0].lower() == vvv.lower()]
+                for v_route in v_routes:
+                    price_tail = self._price_via_segments(v_route)
                     if not self._valid_price(price_tail):
                         continue
                     total_tail = float(price_tail)
-                    last_token = tokens[-1]
+                    last_token = v_route.tokens[-1]
                     if last_token.lower() != quote.lower():
                         extra = self._hop_price(last_token, quote)
                         if not self._valid_price(extra):
@@ -576,8 +644,8 @@ class MarketDataProvider:
                     pass
                 # Last resort: attempt direct best price on the full path
                 try:
-                    path = self._path_from_env()
-                    bp = self.best_price(path, amount_in_decimal=1.0)
+                    route = self._route_from_env()
+                    bp = self.best_price(route, amount_in_decimal=1.0)
                     price = float(bp.get("price") or 0.0)
                     out[sym] = price if self._valid_price(price) else 0.0
                 except Exception:
@@ -591,14 +659,14 @@ class MarketDataProvider:
                         raise ValueError("VVV or QUOTE token address missing")
                     # Try direct route first
                     try:
-                        bp = self.best_price([token, quote], amount_in_decimal=1.0)
+                        bp = self.best_price(make_route([token, quote]), amount_in_decimal=1.0)
                         price = float(bp.get("price") or 0.0)
                         out[sym] = price if self._valid_price(price) else 0.0
                     except Exception:
                         # Bridge via WETH when direct pool is illiquid/missing
                         try:
                             weth = self._weth_address()
-                            bp2 = self.best_price([token, weth, quote], amount_in_decimal=1.0)
+                            bp2 = self.best_price(make_route([token, weth, quote]), amount_in_decimal=1.0)
                             price = float(bp2.get("price") or 0.0)
                             out[sym] = price if self._valid_price(price) else 0.0
                         except Exception:
@@ -619,7 +687,7 @@ class MarketDataProvider:
                 try:
                     weth = self._weth_address()
                     quote = self._quote_token_address()
-                    bp = self.best_price([weth, quote], amount_in_decimal=1.0)
+                    bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0)
                     price = float(bp.get("price") or 0.0)
                     out[sym] = price if self._valid_price(price) else 0.0
                 except Exception:

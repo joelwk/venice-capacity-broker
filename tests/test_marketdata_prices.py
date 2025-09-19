@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from libs.dex.routes import as_route_plan
+
 
 def test_prices_normalized_without_heuristics(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
@@ -28,12 +30,14 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     monkeypatch.setattr(md, "_erc20_decimals", fake_decimals)
     monkeypatch.setattr(md, "diem_price_with_fallback", lambda: 227.25)
 
-    def fake_best_price(path, amount_in_decimal: float = 1.0):  # type: ignore[override]
-        if [p.lower() for p in path] == [vvv_addr.lower(), quote_addr.lower()]:
+    def fake_best_price(route, amount_in_decimal: float = 1.0):  # type: ignore[override]
+        plan = as_route_plan(route)
+        tokens = [p.lower() for p in plan.tokens]
+        if tokens == [vvv_addr.lower(), quote_addr.lower()]:
             return {"provider": "stub", "price": 2.63}
-        if [p.lower() for p in path] == [weth_addr.lower(), quote_addr.lower()]:
+        if tokens == [weth_addr.lower(), quote_addr.lower()]:
             return {"provider": "stub", "price": 3200.0}
-        raise RuntimeError(f"Unexpected path {path}")
+        raise RuntimeError(f"Unexpected path {plan.tokens}")
 
     monkeypatch.setattr(md, "best_price", fake_best_price)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from importlib import import_module
+import types
+import sys
 
 
 def test_uniswap_v2_trade_falls_back_to_fot(monkeypatch):
@@ -39,7 +41,11 @@ def test_uniswap_v2_trade_falls_back_to_fot(monkeypatch):
 
     monkeypatch.setattr(prov_mod, "send_tx", fake_send_tx, raising=True)
 
-    out = prov_mod.UniswapV2DexProvider.trade(provider, 100, 90, ["0xdiem", "0xusdc"])  # type: ignore[arg-type]
+    fake_module = types.SimpleNamespace(Web3=types.SimpleNamespace(to_checksum_address=lambda x: x))
+    monkeypatch.setitem(sys.modules, "web3", fake_module)
+
+    from libs.dex.routes import make_route
+
+    out = prov_mod.UniswapV2DexProvider.trade(provider, 100, 90, make_route(["0xdiem", "0xusdc"]))  # type: ignore[arg-type]
     assert out["tx_hash"] == "0xok"
     assert out.get("fot_fallback") == "true"
-

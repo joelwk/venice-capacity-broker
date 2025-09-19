@@ -713,11 +713,17 @@ def cmd_probe_limits(args: argparse.Namespace) -> None:
     )
     print(_json.dumps(summary, separators=(",", ":")))
 
-def _require_trade_path() -> list[str]:
+def _require_trade_path():
+    from services.marketdata.provider import MarketDataProvider
+
     path_env = os.getenv("TRADE_PATH")
     if not path_env:
-        raise SystemExit("TRADE_PATH must be set: comma-separated token addresses (in,out)")
-    return [p.strip() for p in path_env.split(",")]
+        raise SystemExit("TRADE_PATH must be set for quoting")
+    md = MarketDataProvider()
+    try:
+        return md._parse_route_spec(path_env)  # type: ignore[attr-defined]
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"invalid TRADE_PATH: {exc}") from exc
 
 
 def cmd_quotes_compare(args: argparse.Namespace) -> None:
