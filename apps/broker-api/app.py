@@ -234,7 +234,28 @@ try:
             chain_id = (_os.getenv("BASE_CHAIN_ID") or "").strip()
 
             # DEX providers and router addresses
-            dex_providers = [p.strip().lower() for p in (_os.getenv("DEX_PROVIDERS") or "uniswap_v2,aerodrome").split(",") if p.strip()]
+            dex_raw = (_os.getenv("DEX_PROVIDERS") or "uniswap_v2,aerodrome").strip()
+            dex_providers: list[str] = []
+            try:
+                from libs.dex.providers import _parse_providers_spec  # type: ignore
+
+                spec_entries = _parse_providers_spec(dex_raw)
+                for entry in spec_entries:
+                    if isinstance(entry, dict):
+                        name = str(entry.get("name", "")).strip().lower()
+                        if name:
+                            dex_providers.append(name)
+                    elif entry is not None:
+                        dex_providers.append(str(entry).strip().lower())
+                if not dex_providers:
+                    raise ValueError("empty dex provider spec")
+            except Exception:
+                dex_providers = [p.strip().lower() for p in dex_raw.split(",") if p.strip()]
+
+            uni_v3_router = (_os.getenv("UNISWAP_V3_ROUTER_ADDRESS") or "").strip()
+            uni_v3_quoter = (_os.getenv("UNISWAP_V3_QUOTER_ADDRESS") or "").strip()
+            uni_v3_fee = (_os.getenv("UNISWAP_V3_DEFAULT_FEE") or "").strip()
+
             uni_router = (_os.getenv("UNISWAP_V2_ROUTER_ADDRESS") or _os.getenv("ROUTER_ADDRESS") or "").strip()
             aero_router = (_os.getenv("AERODROME_ROUTER_ADDRESS") or "").strip()
             aero_stable_raw = (_os.getenv("AERODROME_STABLE") or "true").strip().lower()
@@ -270,6 +291,12 @@ try:
                 "web3": {"rpc_configured": bool(rpc), "chain_id_set": bool(chain_id)},
                 "dex": {
                     "providers": dex_providers,
+                    "uniswap_v3": {
+                        "configured": bool(uni_v3_router and uni_v3_quoter),
+                        "router": (uni_v3_router or None),
+                        "quoter": (uni_v3_quoter or None),
+                        "default_fee": (uni_v3_fee or None),
+                    },
                     "uniswap_v2": {"configured": bool(uni_router), "router": (uni_router or None)},
                     "aerodrome": {"configured": bool(aero_router), "router": (aero_router or None), "stable": bool(aero_stable)},
                 },
@@ -298,8 +325,10 @@ try:
             _snap.get("web3", {}).get("chain_id_set"),
         )
         logger.info(
-            "env.dex providers=%s uniswap.router=%s aerodrome.router=%s stable=%s",
+            "env.dex providers=%s v3.router=%s v3.quoter=%s uniswap_v2.router=%s aerodrome.router=%s stable=%s",
             ",".join(_snap.get("dex", {}).get("providers", []) or []),
+            (_snap.get("dex", {}).get("uniswap_v3", {}) or {}).get("router"),
+            (_snap.get("dex", {}).get("uniswap_v3", {}) or {}).get("quoter"),
             (_snap.get("dex", {}).get("uniswap_v2", {}) or {}).get("router"),
             (_snap.get("dex", {}).get("aerodrome", {}) or {}).get("router"),
             (_snap.get("dex", {}).get("aerodrome", {}) or {}).get("stable"),
