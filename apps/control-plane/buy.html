@@ -130,6 +130,7 @@
                 </select>
                 <button id="getQuoteBtn">Get Quote</button>
                 <div id="quoteMsg" class="status"></div>
+                <div id="quoteSummary" class="status"></div>
                 <button id="quoteAdvanceBtn" type="button" class="hide">Continue to Pay & Verify</button>
               </div>
               <pre id="quoteOut" class="mono"></pre>
@@ -760,6 +761,8 @@
         if (flow) flow.classList.add('hide');
         setPayIntro(PAY_INTRO_DEFAULT);
         setPayStatus('');
+        const summaryEl = qs('quoteSummary');
+        if (summaryEl) summaryEl.textContent = '';
         const ttl = qs('quoteTtl');
         if (ttl) ttl.textContent = '';
         const tx = qs('txHash');
@@ -833,6 +836,8 @@
       async function getQuote() {
         const reopen = payCardOpen;
         qs('quoteMsg').textContent = '';
+        const summaryEl = qs('quoteSummary');
+        if (summaryEl) summaryEl.textContent = '';
         qs('quoteOut').textContent = '';
         const ttlEl = qs('quoteTtl');
         if (ttlEl) ttlEl.textContent = '';
@@ -903,7 +908,71 @@
           }
         } catch (e) {
           qs('quoteMsg').textContent = 'Quote failed: ' + e;
+          const summaryEl = qs('quoteSummary');
+          if (summaryEl) summaryEl.textContent = '';
           setPayIntro('Quote failed. Try again in a moment.');
+        }
+      }
+
+
+      function renderQuoteSummary(q, asset){
+        const summaryEl = qs('quoteSummary');
+        if (!summaryEl) return;
+        try {
+          const units = Number((q && q.units) ?? 0);
+          if (!units || !Number.isFinite(units)) {
+            summaryEl.textContent = '';
+            return;
+          }
+          const payAsset = String(asset || (q && q.asset) || '').toUpperCase();
+          const totalMinor = Number((q && (q.totalPrice ?? q.total_price)) ?? 0);
+          let ethAmount = Number.NaN;
+          let usdAmount = Number.NaN;
+          const diemUsd = lastPrices && Number(lastPrices['DIEM']);
+          const ethUsd = lastPrices && Number(lastPrices['ETH']);
+          const vvvUsd = lastPrices && Number(lastPrices['VVV']);
+          if (payAsset === 'ETH') {
+            if (totalMinor) {
+              ethAmount = totalMinor / 1e18;
+            }
+            if (Number.isFinite(ethAmount) && ethUsd) {
+              usdAmount = ethAmount * ethUsd;
+            }
+          } else if (payAsset === 'USDC') {
+            if (totalMinor) {
+              usdAmount = totalMinor / 1e6;
+            }
+            if (Number.isFinite(usdAmount) && ethUsd) {
+              ethAmount = usdAmount / ethUsd;
+            }
+          }
+          if (!Number.isFinite(usdAmount) && diemUsd) {
+            usdAmount = units * diemUsd;
+          }
+          let vvvAmount = Number.NaN;
+          if (diemUsd && vvvUsd && vvvUsd > 0) {
+            vvvAmount = units * (diemUsd / vvvUsd);
+          }
+          const parts = [];
+          parts.push(units.toFixed(4) + ' DIEM');
+          if (Number.isFinite(ethAmount)) {
+            parts.push(ethAmount.toFixed(6) + ' ETH');
+          }
+          if (Number.isFinite(usdAmount)) {
+            parts.push('$' + usdAmount.toFixed(2) + ' USD');
+          }
+          if (Number.isFinite(vvvAmount)) {
+            const vvvLabel = Math.round(vvvAmount).toLocaleString('en-US');
+            parts.push(vvvLabel + ' VVV');
+          }
+          if (parts.length > 1) {
+            const summaryText = parts[0] + ' ≈ ' + parts.slice(1).join(' · ');
+            summaryEl.textContent = summaryText;
+          } else {
+            summaryEl.textContent = '';
+          }
+        } catch (err) {
+          summaryEl.textContent = '';
         }
       }
 
@@ -917,6 +986,8 @@
             qs('quoteMsg').textContent = 'Set TREASURY_ADDRESS on server.';
             payDetails = null;
             updatePaySummary();
+            const summaryEl = qs('quoteSummary');
+            if (summaryEl) summaryEl.textContent = '';
             updateQuoteAdvanceButton();
             return;
           }
@@ -929,6 +1000,7 @@
           setPayStatus('');
           setKeyResult(null);
           updatePaySummary();
+          renderQuoteSummary(q, payAsset);
           setPayIntro('Quote ready. Continue below to pay and verify.');
           stopQuoteTimer();
           startQuoteTimer();
@@ -939,6 +1011,8 @@
           } catch {}
         }catch(e){
           qs('quoteMsg').textContent = 'Apply quote failed: ' + e;
+          const summaryEl = qs('quoteSummary');
+          if (summaryEl) summaryEl.textContent = '';
           setPayIntro('Quote failed. Try again in a moment.');
         }
       }
