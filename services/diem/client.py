@@ -78,7 +78,8 @@ class DIEMService:
             svc = StakingService(VVVActions())
             st = svc.status() or {}
             staked = int(st.get("staked") or 0)
-            # We do not know the currently locked portion; conservatively return staked as available
+            if staked <= 0:
+                return None
             return staked
         except Exception:
             return None
