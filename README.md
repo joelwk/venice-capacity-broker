@@ -42,6 +42,109 @@ config/
 tests/               # Minimal import sanity tests
 ```
 
+## Current Capability Snapshot
+
+StakeMaster keeps the staker heartbeat alive and claims rewards when you pass `--enable-live`.
+
+It runs through `agents/stake_master/agent.py` together with `services/staking/client.py`.
+
+ArbiDiem uses `services/marketdata/provider.py`, `services/risk/policy.py`, and the configured DEX aggregator to size DIEM mints, sells, buys, and burns.
+
+Every decision stores rationale so you can inspect `self._last_rationale` in telemetry.
+
+The Orchestrator in `graph/workflows/orchestrator.py` combines MarketDataProvider with ArbiDiem to emit structured decision records and optional SQL persistence.
+
+CapacityBroker reuses `services/venice_keys/manager.py` to mint scoped Venice sub-keys for tenants through the Broker API.
+
+Running `make watch-tokens` starts `services/marketdata/token_watcher.py` to persist Base token metrics and route discovery data.
+
+LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallback remains the default path when LangGraph is not installed.
+
+## Operational Runbooks
+
+### Fresh Deployment
+
+1. Install dependencies with `uv sync --extra dev` or use the pip fallback.
+
+   Keep Python 3.10 or newer.
+
+2. Copy `.env.example` to `.env` and populate the required secrets.
+
+   The Broker API, RiskPolicy, MarketDataProvider, and DIEM service read from this file on startup.
+
+3. Apply database migrations once the environment variables are in place.
+
+   Run `uv run alembic upgrade head` or `make db-migrate`.
+
+4. Start the Broker API.
+
+   The usual command is `uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 8000`.
+
+   `make run-broker` wraps the same command.
+
+5. Warm market data and confirm router wiring.
+
+   Execute `uv run python apps/cli/main.py startup:probe` and review the printed reserves and cached paths.
+
+6. Seed an operator tenant and confirm limiter wiring.
+
+   Use `make rotate-probe TENANT=t1` to rotate or seed a tenant, send the admin chat probe, and compact counters.
+
+7. Start the automation supervisor so the helpers boot with the API.
+
+   Run `make run-stack` to launch the Broker API, the orchestrator loop (dry-run by default), the StakeMaster heartbeat loop, and the token watcher in one terminal.
+
+   Set `AUTOSTART_ORCHESTRATOR_LIVE=1` or `AUTOSTART_STAKEMASTER_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`.
+
+   Keep `make run-broker` around when you only want the API without the helpers.
+
+8. Verify health before moving to live execution.
+
+   `curl http://127.0.0.1:8000/health`, `make env-status`, and the `/v1/env` endpoint should reflect ready status, live Venice signals, and any enabled features.
+
+### Restart Checklist
+
+1. Confirm secrets and environment variables are still loaded.
+
+   Call `make env-status` to compare the running Broker snapshot with the local `.env`.
+
+2. Apply pending database migrations if the codebase moved forward while the system was offline.
+
+   Run `uv run alembic upgrade head` just in case.
+
+3. Restart the Broker API using the same command or supervisor configuration you use in production.
+
+   Check `/health` and `/metrics` once it boots.
+
+4. Restart long-running helpers with `make run-stack` so they come up alongside the API, or launch them individually when you are debugging.
+
+   - Relaunch the orchestrator loop with `uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0`.
+   - Restart StakeMaster with `uv run python apps/cli/main.py run:stakemaster --enable-live`.
+   - Resume the token watcher via `make watch-tokens` or its one-shot variant when you only need a single update.
+
+5. Validate live Venice connectivity and DEX pricing.
+
+   Run `uv run python apps/cli/main.py venice:signals` and `uv run python apps/cli/main.py quotes:preview --units 100` for a quick smoke test.
+
+6. Resume live mint or burn operations only after telemetry shows healthy heartbeats and limiter buckets.
+
+   Use the CLI `diem:mint` and `diem:burn` commands in dry-run mode first, then flip to live once satisfied.
+
+## Implementation Plan Alignment
+
+The v1 scope keeps the single-agent orchestrator instead of the quorum-based topology that the plan described.
+
+`graph/workflows/orchestrator.py` owns the end-to-end DIEM decision and no weighted voting layer is wired in yet.
+
+`agents/ai_treasurer/agent.py` remains a lightweight helper that returns a delta without executing treasury transactions, so the richer treasury automation from the plan is still pending.
+
+LangGraph execution is optional and falls back to the sequential runner in `graph/langgraph/graph.py`, so true LangGraph-native graph orchestration will require additional work before it matches the plan.
+
+Capacity resale is limited to scoped sub-key issuance.
+
+Dynamic DIEM rentals, marketplace pricing strategies, and quorum-governed allocation changes are out of scope for this v1 cut even though the plan earmarked them for later sprints.
+
+
 ## Quickstart
 
 - Python 3.10+

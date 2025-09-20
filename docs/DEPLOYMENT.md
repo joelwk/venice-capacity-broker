@@ -6,6 +6,80 @@ Overview
 - This repo is private and proprietary. Keep it private on GitHub and Replit.
 - Recommended path: deploy the Broker API as a Replit Web Service using the provided `.replit` and `replit.nix`.
 
+## Fresh Deployment Checklist
+
+1. Install dependencies with `uv sync --extra dev` or run the pip fallback in a virtual environment.
+
+   The CLI loads `.env` on startup, so complete this step before booting any agents.
+
+2. Copy `.env.example` to `.env` and set the Broker, Venice, Base RPC, and DIEM variables that your environment requires.
+
+   Confirm the values with `uv run python apps/cli/main.py env:status` before going live.
+
+3. Run database migrations so counters, purchases, and token snapshots have the expected schema.
+
+   `uv run alembic upgrade head` matches what `make db-migrate` wraps.
+
+4. Launch the Broker API with `uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 8000`.
+
+   Keep an eye on `/health`, `/metrics`, and `/v1/env` while the service warms up.
+
+5. Warm the DEX discovery cache and verify the configured trade path.
+
+   Invoke `uv run python apps/cli/main.py startup:probe` and review the printed hops, reserves, and cached entries.
+
+6. Seed an operator tenant and confirm limiter buckets.
+
+   `make rotate-probe TENANT=t1` rotates or creates the tenant, sends the admin chat probe, compacts counters, and prints the latest window.
+
+7. Start the automation supervisor so helpers stay up with the API.
+
+   Run `make run-stack` to boot the Broker API, orchestrator (dry-run by default), StakeMaster loop, and token watcher in one command.
+
+   Export `AUTOSTART_ORCHESTRATOR_LIVE=1` or `AUTOSTART_STAKEMASTER_LIVE=1` before the command when you are ready for on-chain execution, or disable any component with `AUTOSTART_<NAME>=0`.
+
+   Keep `make run-broker` around for API-only sessions.
+
+8. When you are ready for on-chain transactions, switch the orchestrator to live mode and remove the dry-run guard on DIEM CLI verbs.
+
+   Always run one dry-run cycle first, then monitor `vvv_agent_decisions_total` and `staking.heartbeat` events.
+
+## Restart Checklist (Existing Deployment)
+
+1. Load secrets from your host or secret manager, then run `make env-status` to verify the Broker sees the expected config.
+
+2. Apply pending migrations with `uv run alembic upgrade head` before traffic resumes.
+
+3. Start the Broker API using the same supervisor or process manager that you use in production.
+
+   Confirm `/health`, `/metrics`, and `/v1/env` report ready status.
+
+4. Restart the helpers that normally run in the background with `make run-stack` so they stand up beside the API, or launch them individually when you are debugging.
+
+   - Orchestrator loop as above.
+   - StakeMaster heartbeat as above.
+   - Token watcher via `make watch-tokens` or `make watch-tokens-once` for a single refresh.
+
+5. Exercise Venice connectivity and pricing once the services are up.
+
+   `uv run python apps/cli/main.py venice:signals` and `uv run python apps/cli/main.py quotes:preview --units 100` are fast probes.
+
+6. Resume mint or burn only when the heartbeat, limiter counters, and pricing probes look healthy.
+
+   The CLI `diem:mint` and `diem:burn` commands accept `--dry-run` so you can double-check before committing transactions.
+
+## Background Processes
+
+- `make run-stack` launches the Broker API, orchestrator, StakeMaster, and token watcher together via `scripts/start_stack.py`; toggle components with `AUTOSTART_*` env vars and keep it in dry-run mode unless you set the `*_LIVE` flags. The token watcher stays off unless you export `ETHERSCAN_API_KEY`/`BASESCAN_API_KEY` or opt in with `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`.
+
+- Orchestrator runs from `graph/workflows/orchestrator.py` and is exposed through the CLI `run:orchestrator` parser entry at `apps/cli/main.py:1255`.
+
+- StakeMaster lives in `agents/stake_master/agent.py` and the CLI `run:stakemaster` entry wires in optional live claims.
+
+- The token watcher service in `services/marketdata/token_watcher.py` stores price and supply snapshots when you use the `make watch-tokens` target defined near line 158 of the Makefile.
+
+- Brokers that rely on Venice metrics should also keep `uv run python apps/cli/main.py venice:signals` in a periodic cron or task runner to surface transient network failures quickly.
+
 1) Replit — Quick Deploy
 1. Import the repo into Replit (Python template). Ensure the Repl is private.
 2. Open Secrets and add required env vars (see `.env.example`). Minimal set:

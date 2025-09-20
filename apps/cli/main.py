@@ -441,10 +441,16 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     max_cycles = int(args.max_cycles)
     sleep_s = float(args.sleep)
     live = bool(getattr(args, "enable_live", False))
-    for i in range(max_cycles):
-        logger.info(f"Loop cycle {i+1}/{max_cycles} (live={live})")
+    infinite = max_cycles <= 0
+    cycle = 0
+    while True:
+        cycle += 1
+        label = f"/{max_cycles}" if not infinite else " (infinite)"
+        logger.info(f"Loop cycle {cycle}{label} (live={live})")
         agent.run_once(live=live)
-        if i < max_cycles - 1 and sleep_s > 0:
+        if not infinite and cycle >= max_cycles:
+            break
+        if sleep_s > 0:
             time.sleep(sleep_s)
 
 

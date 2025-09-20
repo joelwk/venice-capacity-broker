@@ -7,6 +7,26 @@ Overview
 - Served by: `apps/broker-api/app.py` mounts `apps/control-plane` via Starlette `StaticFiles`
 - Tech: plain HTML + vanilla JS; token stored in browser `localStorage`
 
+## Operations Runbook
+
+- Use `/admin` to confirm the Broker is reachable, then open the Health and Venice cards first.
+
+- Check the `Signals` badge on the Venice card; it reflects the same `signal.market.*` events that StakeMaster and ArbiDiem emit.
+
+- Run `make env-status` or click the Env Snapshot card after every deploy to compare live settings with your `.env` file.
+
+- Use `make run-stack` when you need to restart the Broker API and helper loops together; set `AUTOSTART_*` toggles before running.
+
+- For manual spot checks you can still launch helpers individually from the shell beside the admin UI:
+
+  - `uv run python apps/cli/main.py run:stakemaster --enable-live` ensures the heartbeat described in `agents/stake_master/agent.py:26` stays active.
+  - `uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0` evaluates DIEM trades through `graph/workflows/orchestrator.py:27`.
+  - `make watch-tokens` runs `services/marketdata/token_watcher.py:654` so the Buyer page can show up-to-date supply metrics.
+
+- When Venice connectivity becomes unstable, open the Venice card and run the inline probe or call `uv run python apps/cli/main.py venice:signals`.
+
+- The Admin UI surfaces limiter counters and receipts on demand; use the Makefile helpers (`make rotate-probe`, `make limits-set`) when you need shell access to the same data.
+
 Features (MVP)
 - Tenants
   - List: `GET /v1/tenants`

@@ -31,6 +31,7 @@ help:
 	@echo "  make limits-get TENANT=t1            - admin get broker limits"
 	@echo "  make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"
 	@echo "  make run-broker                      - start uvicorn app:app with --app-dir"
+	@echo "  make run-stack                       - start API + orchestrator + staker + watcher"
 	@echo "  make db-migrate                      - alembic upgrade head"
 	@echo "  make db-stamp                        - alembic stamp head (mark current)"
 	@echo "  make db-setup-and-migrate           - install DB deps + alembic, then upgrade head"
@@ -96,6 +97,15 @@ run-broker:
 	else \
 	  python -m uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
 	fi
+.PHONY: run-stack
+run-stack:
+	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
+	if command -v uv >/dev/null 2>&1; then \
+	  uv run python scripts/start_stack.py; \
+	else \
+	  python scripts/start_stack.py; \
+	fi
+
 
 .PHONY: ci-gate
 ci-gate:
