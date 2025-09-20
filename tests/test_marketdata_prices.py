@@ -8,7 +8,7 @@ from libs.dex.routes import as_route_plan
 def test_prices_normalized_without_heuristics(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
 
-    diem_addr = "0xF4d861575ecc9493420A3f5a14F85B13f0b50EB3"
+    diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
     vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
     quote_addr = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     weth_addr = "0x4200000000000000000000000000000000000006"

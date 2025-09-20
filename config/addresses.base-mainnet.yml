@@ -3,7 +3,7 @@
 contracts:
   vvv_token: '0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf' # VVV token address (Base mainnet)
   vvv_staking: '0x321b7ff75154472B18EDb199033fF4D116F340Ff' # VVV staking contract (Base mainnet)
-  diem_token: '0xF4d861575ecc9493420A3f5a14F85B13f0b50EB3' # DIEM token address (Base mainnet)
+  diem_token: '0xf4d97f2da56e8c3098f3a8d538db630a2606a024' # DIEM token address (Base mainnet)
 
 dex:
   # Dual provider configuration
