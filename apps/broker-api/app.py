@@ -1581,32 +1581,213 @@ try:
         except Exception as _e:  # noqa: BLE001
             raise HTTPException(status_code=503, detail=f"SQL dependencies unavailable: {_e}")
 
+        import json
+        import os
+
+        try:
+            from services.marketdata.token_watcher import KNOWN_TOKENS as _KNOWN_TOKENS
+        except Exception:
+            _KNOWN_TOKENS = {}
+
+        def _norm(addr: object) -> str:
+            if addr is None:
+                return ""
+            s = str(addr).strip()
+            if not s:
+                return ""
+            s = s.lower()
+            if s.startswith("0x"):
+                s = s[2:]
+            return "0x" + s
+
+        def _configured_addresses() -> dict[str, str]:
+            out: dict[str, str] = {}
+            explicit = os.getenv("TOKEN_WATCH_ADDRESSES") or ""
+            if explicit:
+                for part in explicit.split(","):
+                    addr = part.strip()
+                    key = _norm(addr)
+                    if key:
+                        out[key] = addr
+            for key in ("DIEM_TOKEN_ADDRESS", "VVV_TOKEN_ADDRESS", "VVV_STAKING_ADDRESS", "QUOTE_TOKEN_ADDRESS", "USDC_ADDRESS"):
+                val = os.getenv(key)
+                if val:
+                    norm = _norm(val)
+                    if norm:
+                        out[norm] = val.strip()
+            trade_path = os.getenv("TRADE_PATH")
+            if trade_path:
+                def _add(addr: object) -> None:
+                    norm = _norm(addr)
+                    if norm:
+                        out[norm] = str(addr).strip()
+                try:
+                    data = json.loads(trade_path)
+                    if isinstance(data, dict):
+                        tokens = data.get("tokens") or data.get("path") or []
+                        for addr in tokens:
+                            _add(addr)
+                    elif isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict):
+                                _add(item.get("token") or item.get("address"))
+                            else:
+                                _add(item)
+                except Exception:
+                    for part in trade_path.split(","):
+                        raw = part.strip()
+                        if not raw:
+                            continue
+                        addr = raw.split("@", 1)[0].strip()
+                        _add(addr)
+            return {k: v for k, v in out.items() if k}
+
+        symbol_overrides: dict[str, str] = {}
+        for sym, env_key in (("DIEM", "DIEM_TOKEN_ADDRESS"), ("VVV", "VVV_TOKEN_ADDRESS")):
+            val = os.getenv(env_key)
+            if val:
+                norm = _norm(val)
+                if norm:
+                    symbol_overrides[norm] = sym
+        quote_addr = os.getenv("QUOTE_TOKEN_ADDRESS") or os.getenv("USDC_ADDRESS")
+        if quote_addr:
+            norm_q = _norm(quote_addr)
+            if norm_q:
+                symbol_overrides[norm_q] = "USDC"
+
+        configured = _configured_addresses()
+        desired = set(configured.keys())
+
         engine = get_engine()
-        out: list[TokenSummary] = []
-        with Session(engine) as s:  # type: ignore[call-arg]
-            tokens = s.exec(select(AssetToken)).all()
+        token_records: dict[str, dict] = {}
+        with Session(engine) as session:  # type: ignore[call-arg]
+            tokens = session.exec(select(AssetToken)).all()
             for t in tokens:
-                snap = s.exec(
+                addr = getattr(t, "address", "") or ""
+                norm = _norm(addr)
+                if desired and norm and norm not in desired:
+                    continue
+                snap = session.exec(
                     select(TokenSnapshot)
-                    .where(TokenSnapshot.token_address == t.address)
+                    .where(TokenSnapshot.token_address == addr)
                     .order_by(TokenSnapshot.ts.desc())
                     .limit(1)
                 ).first()
-                out.append(
-                    TokenSummary(
-                        address=t.address,
-                        chain=getattr(t, "chain", None),
-                        symbol=getattr(t, "symbol", None),
-                        name=getattr(t, "name", None),
-                        decimals=getattr(t, "decimals", None),
-                        lastTs=(snap.ts.isoformat() + "Z") if snap and snap.ts else None,
-                        priceUsd=getattr(snap, "price_usd", None) if snap else None,
-                        holders=getattr(snap, "holders", None) if snap else None,
-                        transfers24h=getattr(snap, "transfers_24h", None) if snap else None,
-                        marketcapUsd=getattr(snap, "marketcap_usd", None) if snap else None,
-                    )
+                meta = _KNOWN_TOKENS.get(norm, {}) if norm else {}
+                data_chain = getattr(t, "chain", None) or meta.get("chain") or "base"
+                symbol = getattr(t, "symbol", None) or meta.get("symbol")
+                if norm in symbol_overrides:
+                    symbol = symbol_overrides[norm]
+                name = getattr(t, "name", None) or meta.get("name")
+                decimals = getattr(t, "decimals", None)
+                if decimals is None:
+                    decimals = meta.get("decimals")
+                price = getattr(snap, "price_usd", None) if snap else None
+                summary = {
+                    "address": addr or configured.get(norm) or norm,
+                    "chain": data_chain,
+                    "symbol": symbol,
+                    "name": name,
+                    "decimals": decimals,
+                    "lastTs": (snap.ts.isoformat() + "Z") if snap and snap.ts else None,
+                    "priceUsd": price,
+                    "holders": getattr(snap, "holders", None) if snap else None,
+                    "transfers24h": getattr(snap, "transfers_24h", None) if snap else None,
+                    "marketcapUsd": getattr(snap, "marketcap_usd", None) if snap else None,
+                }
+                key = norm or addr.lower()
+                token_records[key] = summary
+
+        for norm, original in configured.items():
+            if not norm or norm in token_records:
+                continue
+            meta = _KNOWN_TOKENS.get(norm, {})
+            symbol = symbol_overrides.get(norm) or meta.get("symbol")
+            placeholder = {
+                "address": original or norm,
+                "chain": meta.get("chain") or "base",
+                "symbol": symbol,
+                "name": meta.get("name"),
+                "decimals": meta.get("decimals"),
+                "lastTs": None,
+                "priceUsd": None,
+                "holders": None,
+                "transfers24h": None,
+                "marketcapUsd": None,
+            }
+            token_records[norm] = placeholder
+
+        for key, data in token_records.items():
+            norm = _norm(data.get("address"))
+            meta = _KNOWN_TOKENS.get(norm, {}) if norm else {}
+            if not data.get("symbol") and meta.get("symbol"):
+                data["symbol"] = meta.get("symbol")
+            if not data.get("name") and meta.get("name"):
+                data["name"] = meta.get("name")
+            if data.get("decimals") is None and meta.get("decimals") is not None:
+                data["decimals"] = meta.get("decimals")
+            if (data.get("symbol") or "").upper() == "USDC":
+                data["priceUsd"] = 1.0
+
+        symbols_to_refresh: dict[str, list[str]] = {}
+        for key, data in token_records.items():
+            symbol = (data.get("symbol") or "").upper()
+            if not symbol or symbol == "USDC":
+                continue
+            price = data.get("priceUsd")
+            valid_price = False
+            try:
+                if price is not None and float(price) > 0:
+                    valid_price = True
+            except Exception:
+                valid_price = False
+            if not valid_price:
+                symbols_to_refresh.setdefault(symbol, []).append(key)
+
+        if symbols_to_refresh:
+            try:
+                from services.marketdata.provider import MarketDataProvider
+
+                md = MarketDataProvider()
+                price_map = md.prices(list(symbols_to_refresh.keys()))
+            except Exception:
+                price_map = {}
+            for symbol, keys in symbols_to_refresh.items():
+                value = price_map.get(symbol)
+                if value is None:
+                    continue
+                for key in keys:
+                    token_records[key]["priceUsd"] = value
+
+        def _sort_key(item: tuple[str, dict]) -> tuple[str, str]:
+            _, data = item
+            symbol = (data.get("symbol") or "").upper()
+            address = data.get("address") or ""
+            return (symbol, address)
+
+        summaries: list[TokenSummary] = []
+        for _, data in sorted(token_records.items(), key=_sort_key):
+            decimals = data.get("decimals")
+            try:
+                decimals_val = int(decimals) if decimals is not None else None
+            except Exception:
+                decimals_val = decimals
+            summaries.append(
+                TokenSummary(
+                    address=data.get("address"),
+                    chain=data.get("chain"),
+                    symbol=data.get("symbol"),
+                    name=data.get("name"),
+                    decimals=decimals_val,
+                    lastTs=data.get("lastTs"),
+                    priceUsd=data.get("priceUsd"),
+                    holders=data.get("holders"),
+                    transfers24h=data.get("transfers24h"),
+                    marketcapUsd=data.get("marketcapUsd"),
                 )
-        return out
+            )
+        return summaries
+
 
     class TokenHistoryPoint(_BM):
         ts: str
@@ -2000,7 +2181,7 @@ try:
                         pass
                     # Mint subkey and upsert tenant
                     try:
-                        # Map units → consumption limit and expiry (24h default)
+                        # Map units -> consumption limit and expiry (24h default)
                         import math as _math
                         limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
                         # Venice consumption limits are integers; map fractional units by ceiling to nearest whole unit.
@@ -2701,7 +2882,7 @@ try:
                                 price = (p1 or 0.0) * (p2 or 0.0)
                             if not price or price <= 0:
                                 raise RuntimeError("no route/mid-price available")
-                            # amountIn ≈ amountOut / price, normalized to input decimals
+                            # amountIn ~= amountOut / price, normalized to input decimals
                             di = mdp._erc20_decimals(frm)  # type: ignore[attr-defined]
                             do = mdp._erc20_decimals(to_token)  # type: ignore[attr-defined]
                             amt_out_float = float(amt_out) / float(10 ** int(do))

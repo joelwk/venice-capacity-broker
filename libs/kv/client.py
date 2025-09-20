@@ -20,6 +20,7 @@ class KVStore:
     def __init__(self) -> None:
         self.base_url = os.getenv("KV_URL") or os.getenv("REPLIT_DB_URL")
         self.api_token = os.getenv("KV_API_TOKEN")
+        self.api_header = os.getenv("KV_API_HEADER")
         self.namespace = os.getenv("KV_NAMESPACE")
         self.prefix = os.getenv("KV_PREFIX", "")
         self._mem: Dict[str, Tuple[Any, Optional[float]]] = {}
@@ -46,6 +47,22 @@ class KVStore:
         if self.prefix:
             key = f"{self.prefix}{key}"
         return key
+
+    def _request_headers(self) -> Dict[str, str]:
+        token = (self.api_token or "").strip()
+        if not token:
+            return {}
+        header_name = (self.api_header or "Authorization").strip()
+        if not header_name:
+            header_name = "Authorization"
+        if header_name.lower() == "authorization":
+            lowered = token.lower()
+            if lowered.startswith("bearer ") or lowered.startswith("basic ") or lowered.startswith("token "):
+                value = token
+            else:
+                value = f"Bearer {token}"
+            return {header_name: value}
+        return {header_name: token}
 
     # --- In-memory fallback implementation ---
     def _mem_get(self, key: str) -> Optional[str]:
@@ -89,21 +106,38 @@ class KVStore:
             try:
                 # Handle TTL via companion exp key
                 exp_raw = None
+                headers = self._request_headers() or None
                 try:
-                    exp_raw = requests.get(urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")), timeout=3)
+                    exp_raw = requests.get(
+                        urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")),
+                        timeout=3,
+                        headers=headers,
+                    )
                     if exp_raw.ok and exp_raw.text:
                         try:
                             exp = float(exp_raw.text)
                             if exp and exp < time.time():
                                 # expired; delete and return None
-                                requests.delete(urljoin(self.base_url.rstrip('/') + '/', quote(k)), timeout=3)
-                                requests.delete(urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")), timeout=3)
+                                requests.delete(
+                                    urljoin(self.base_url.rstrip('/') + '/', quote(k)),
+                                    timeout=3,
+                                    headers=headers,
+                                )
+                                requests.delete(
+                                    urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")),
+                                    timeout=3,
+                                    headers=headers,
+                                )
                                 return None
                         except Exception:
                             pass
                 except Exception:
                     pass
-                r = requests.get(urljoin(self.base_url.rstrip('/') + '/', quote(k)), timeout=3)
+                r = requests.get(
+                    urljoin(self.base_url.rstrip('/') + '/', quote(k)),
+                    timeout=3,
+                    headers=headers,
+                )
                 if r.status_code == 404:
                     return None
                 if r.ok:
@@ -128,10 +162,25 @@ class KVStore:
         if self.base_url:
             try:
                 # Replit DB: PUT /key with raw body
-                requests.put(urljoin(self.base_url.rstrip('/') + '/', quote(k)), data=str(value), timeout=3)
+                headers = self._request_headers() or None
+                resp = requests.put(
+                    urljoin(self.base_url.rstrip('/') + '/', quote(k)),
+                    data=str(value),
+                    timeout=3,
+                    headers=headers,
+                )
+                if not resp.ok:
+                    resp.raise_for_status()
                 if ttl_s and ttl_s > 0:
                     exp = time.time() + ttl_s
-                    requests.put(urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")), data=str(exp), timeout=3)
+                    exp_resp = requests.put(
+                        urljoin(self.base_url.rstrip('/') + '/', quote(k + ":exp")),
+                        data=str(exp),
+                        timeout=3,
+                        headers=headers,
+                    )
+                    if not exp_resp.ok:
+                        exp_resp.raise_for_status()
                 return
             except Exception:
                 pass
@@ -176,6 +225,15 @@ class KVStore:
                 return
             except Exception:
                 pass
+        if self.base_url:
+            try:
+                requests.delete(
+                    urljoin(self.base_url.rstrip('/') + '/', quote(k)),
+                    timeout=3,
+                    headers=self._request_headers() or None,
+                )
+            except Exception:
+                pass
         with self._lock:
             self._mem.pop(k, None)
 
@@ -211,7 +269,7 @@ class KVStore:
                 # Build query without urljoin to avoid dropping path segments
                 base = self.base_url.rstrip('/') + '/'
                 url = f"{base}?prefix={quote(fq_prefix)}"
-                r = requests.get(url, timeout=5)
+                r = requests.get(url, timeout=5, headers=self._request_headers() or None)
                 if r.ok:
                     try:
                         data = r.json()

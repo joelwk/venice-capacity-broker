@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from threading import Lock
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from libs.dex.providers import build_aggregator_from_env
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
@@ -17,6 +18,59 @@ class MarketDataProvider:
     - VVV metrics: fetched via explicit endpoints (circulating supply, utilization, staking_yield).
     - DIEM balance/quotas: fetched via rate-limits endpoint (`/api_keys/rate_limits`).
     """
+
+    _price_cache: Dict[str, Tuple[float, float, float]] = {}
+    _price_cache_lock = Lock()
+
+    def _price_cache_key(self, symbol: str) -> str:
+        return (symbol or "").upper()
+
+    def _price_cache_capacity(self) -> int:
+        try:
+            return max(0, int(os.getenv("MARKETDATA_PRICE_CACHE_MAX_SYMBOLS") or "32"))
+        except Exception:
+            return 32
+
+    def _price_cache_ttl(self) -> int:
+        try:
+            return max(0, int(os.getenv("MARKETDATA_PRICE_CACHE_TTL_SECONDS") or "15"))
+        except Exception:
+            return 15
+
+    def _price_cache_failure_ttl(self) -> int:
+        try:
+            return max(0, int(os.getenv("MARKETDATA_PRICE_CACHE_FAILURE_TTL_SECONDS") or "5"))
+        except Exception:
+            return 5
+
+    def _cache_price_get(self, symbol: str) -> Optional[float]:
+        key = self._price_cache_key(symbol)
+        with self._price_cache_lock:
+            entry = self._price_cache.get(key)
+            if not entry:
+                return None
+            ts, value, ttl = entry
+            if ttl <= 0 or (time.time() - ts) >= ttl:
+                self._price_cache.pop(key, None)
+                return None
+            return float(value)
+
+    def _cache_price_set(self, symbol: str, value: float) -> None:
+        ttl = self._price_cache_ttl()
+        if not self._valid_price(value):
+            ttl = self._price_cache_failure_ttl()
+        if ttl <= 0:
+            return
+        key = self._price_cache_key(symbol)
+        with self._price_cache_lock:
+            capacity = self._price_cache_capacity()
+            if capacity > 0 and len(self._price_cache) >= capacity:
+                try:
+                    oldest = min(self._price_cache.items(), key=lambda item: item[1][0])[0]
+                    self._price_cache.pop(oldest, None)
+                except ValueError:
+                    self._price_cache.clear()
+            self._price_cache[key] = (time.time(), float(value), float(ttl))
 
     def _erc20_decimals(self, address: str) -> int:
         from web3 import Web3  # lazy load
@@ -632,106 +686,29 @@ class MarketDataProvider:
         return None
 
     def prices(self, symbols: List[str]) -> Dict[str, float]:
-        """Return prices for requested symbols.
-
-        MVP+: DIEM resolved via TRADE_PATH, VVV via QUOTE_TOKEN_ADDRESS; ETH resolved via WETH->QUOTE.
-        USDC (quote) remains 1.0 by definition.
-        
-        Returns prices in USD per whole token (not base units).
-        """
-        out: Dict[str, float] = {}
+        """Return prices for requested symbols with lightweight caching."""
+        raw: Dict[str, float] = {}
         for sym in symbols:
-            SU = sym.upper()
-            if SU == "DIEM":
-                # Prefer robust fallback composition to avoid size distortion on thin pools
-                try:
-                    px_fb = self.diem_price_with_fallback()
-                    if self._valid_price(px_fb):
-                        out[sym] = float(px_fb)
-                        continue
-                except Exception:
-                    pass
-                # Last resort: attempt direct best price on the full path
-                try:
-                    route = self._route_from_env()
-                    bp = self.best_price(route, amount_in_decimal=1.0)
-                    price = float(bp.get("price") or 0.0)
-                    out[sym] = price if self._valid_price(price) else 0.0
-                except Exception:
-                    out[sym] = 0.0
-            elif SU == "VVV":
-                # Resolve VVV price vs QUOTE. Prefer direct pair; fall back to WETH bridge or mid-price.
-                try:
-                    token = self._address_for_symbol("VVV")
-                    quote = self._quote_token_address()
-                    if not token or not quote:
-                        raise ValueError("VVV or QUOTE token address missing")
-                    route_override = self._route_optional_from_env("VVV_PRICE_PATH") or self._route_optional_from_env("VVV_TRADE_PATH")
-                    if route_override:
-                        try:
-                            bp = self.best_price(route_override, amount_in_decimal=1.0)
-                            price = float(bp.get("price") or 0.0)
-                            out[sym] = price if self._valid_price(price) else 0.0
-                            continue
-                        except Exception:
-                            pass
-                    # Try direct route first
-                    try:
-                        bp = self.best_price(make_route([token, quote]), amount_in_decimal=1.0)
-                        price = float(bp.get("price") or 0.0)
-                        out[sym] = price if self._valid_price(price) else 0.0
-                    except Exception:
-                        # Bridge via WETH when direct pool is illiquid/missing
-                        try:
-                            weth = self._weth_address()
-                            bp2 = self.best_price(make_route([token, weth, quote]), amount_in_decimal=1.0)
-                            price = float(bp2.get("price") or 0.0)
-                            out[sym] = price if self._valid_price(price) else 0.0
-                        except Exception:
-                            # Last resort: multiply infinitesimal mids if available
-                            try:
-                                weth = self._weth_address()
-                                px_tw = self._mid_price_from_reserves(token, weth) or 0.0
-                                px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
-                                combo = float(px_tw * px_wq) if (px_tw > 0 and px_wq > 0) else 0.0
-                                out[sym] = combo if self._valid_price(combo) else 0.0
-                            except Exception:
-                                out[sym] = 0.0
-                except Exception:
-                    # Any unexpected failure resolving VVV price
-                    out[sym] = 0.0
-            elif SU == "ETH":
-                # Resolve ETH price using WETH->QUOTE path
-                try:
-                    weth = self._weth_address()
-                    quote = self._quote_token_address()
-                    bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0)
-                    price = float(bp.get("price") or 0.0)
-                    out[sym] = price if self._valid_price(price) else 0.0
-                except Exception:
-                    # Fallback to mid price from reserves
-                    try:
-                        weth = self._weth_address()
-                        quote = self._quote_token_address()
-                        px = self._mid_price_from_reserves(weth, quote)
-                        out[sym] = float(px) if self._valid_price(px) else 0.0
-                    except Exception:
-                        out[sym] = 0.0
-            else:
-                out[sym] = 0.0
+            cached = self._cache_price_get(sym)
+            if cached is not None:
+                raw[sym] = cached
+                continue
+            price = self._price_for_symbol(sym)
+            raw[sym] = price
+            self._cache_price_set(sym, price)
+
         normalized_out: Dict[str, float] = {}
-        for sym, price in out.items():
+        for sym, price in raw.items():
             try:
                 val = float(price)
             except Exception:
                 val = 0.0
-            if sym.upper() == "USDC":
+            if str(sym).upper() == "USDC":
                 val = 1.0
             elif not self._valid_price(val):
                 val = 0.0
             normalized_out[sym] = val
 
-        # Emit centralized signal for prices (best-effort)
         try:
             from libs.telemetry.events import emit as _emit
 
@@ -739,6 +716,90 @@ class MarketDataProvider:
         except Exception:
             pass
         return normalized_out
+
+    def _price_for_symbol(self, symbol: str) -> float:
+        sym_str = "" if symbol is None else str(symbol)
+        su = sym_str.upper()
+        if su == "USDC":
+            return 1.0
+        if su == "DIEM":
+            try:
+                px_fb = self.diem_price_with_fallback()
+                if self._valid_price(px_fb):
+                    return float(px_fb)
+            except Exception:
+                pass
+            try:
+                route = self._route_from_env()
+                bp = self.best_price(route, amount_in_decimal=1.0)
+                price = float(bp.get("price") or 0.0)
+                return price if self._valid_price(price) else 0.0
+            except Exception:
+                return 0.0
+        if su == "VVV":
+            try:
+                token = self._address_for_symbol("VVV")
+                quote = self._quote_token_address()
+                if not token or not quote:
+                    raise ValueError("VVV or QUOTE token address missing")
+                route_override = self._route_optional_from_env("VVV_PRICE_PATH") or self._route_optional_from_env("VVV_TRADE_PATH")
+                if route_override:
+                    try:
+                        bp = self.best_price(route_override, amount_in_decimal=1.0)
+                        price = float(bp.get("price") or 0.0)
+                        if self._valid_price(price):
+                            return price
+                    except Exception:
+                        pass
+                try:
+                    bp = self.best_price(make_route([token, quote]), amount_in_decimal=1.0)
+                    price = float(bp.get("price") or 0.0)
+                    if self._valid_price(price):
+                        return price
+                except Exception:
+                    pass
+                try:
+                    weth = self._weth_address()
+                    bp2 = self.best_price(make_route([token, weth, quote]), amount_in_decimal=1.0)
+                    price = float(bp2.get("price") or 0.0)
+                    if self._valid_price(price):
+                        return price
+                except Exception:
+                    pass
+                try:
+                    weth = self._weth_address()
+                    px_tw = self._mid_price_from_reserves(token, weth) or 0.0
+                    px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
+                    if px_tw > 0 and px_wq > 0:
+                        combo = float(px_tw) * float(px_wq)
+                        if self._valid_price(combo):
+                            return combo
+                except Exception:
+                    pass
+                return 0.0
+            except Exception:
+                return 0.0
+        if su == "ETH":
+            try:
+                weth = self._weth_address()
+                quote = self._quote_token_address()
+                bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0)
+                price = float(bp.get("price") or 0.0)
+                if self._valid_price(price):
+                    return price
+            except Exception:
+                pass
+            try:
+                weth = self._weth_address()
+                quote = self._quote_token_address()
+                px = self._mid_price_from_reserves(weth, quote)
+                if self._valid_price(px):
+                    return float(px)
+            except Exception:
+                pass
+            return 0.0
+        return 0.0
+
 
     _vvv_metrics_cache: Optional[Dict[str, Any]] = None
     _vvv_metrics_cache_t: float = 0.0
