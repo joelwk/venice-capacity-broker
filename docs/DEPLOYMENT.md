@@ -109,9 +109,10 @@ Overview
     - `STAKEMASTER_HEARTBEAT_PROMPT`
     - `VENICE_HEARTBEAT_MODEL` or fallback `VENICE_DEFAULT_MODEL`
     - `VVV_ACTIVE_MIN_STAKE_UNITS`, `VVV_COOLDOWN_SECONDS`
-3. Click Run. The app binds to `0.0.0.0:$PORT` and serves `GET /health`.
-4. Deployments panel → Create Web Service (auto-detects run command from `.replit`).
-5. Verify health: open the webview → `/health` returns `{ "status": "ok" }`.
+3. Click **Run**. The default runnable (**Stack (dry-run)**) calls `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`, which installs deps with `uv sync`, starts the Broker API, orchestrator, StakeMaster, and token watcher, and keeps the orchestrator in dry-run mode.
+4. When you are ready for real trades or staking heartbeats, pick the **Stack (live)** runnable (or export `RUN_STACK_MODE=live`) so the same script enables `AUTOSTART_ORCHESTRATOR_LIVE` and `AUTOSTART_STAKEMASTER_LIVE`.
+5. Deployments panel -> Create Web Service (auto-detects the run command from `.replit`).
+6. Verify health: open the webview -> `/health` returns `{ "status": "ok" }`.
 
 Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.

@@ -1,13 +1,21 @@
-run = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker --extra web3 --extra agentkit --extra db\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+run = "RUN_STACK_MODE=dry AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} bash scripts/run_stack_entry.sh"
 language = "python3"
 entrypoint = "apps/broker-api/app.py"
 modules = ["python-3.10"]
 
+[[runnable]]
+name = "Stack (dry-run)"
+command = "RUN_STACK_MODE=dry AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} bash scripts/run_stack_entry.sh"
+
+[[runnable]]
+name = "Stack (live)"
+command = "RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=1 AUTOSTART_STAKEMASTER_LIVE=1 bash scripts/run_stack_entry.sh"
+
 [deployment]
 run = [
-  "sh",
-  "-c",
-  "pip install -r requirements.txt && uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $PORT"
+  "bash",
+  "-lc",
+  "RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} bash scripts/run_stack_entry.sh"
 ]
 
 [nix]
@@ -26,13 +34,13 @@ externalPort = 80
 runButton = "Project"
 
 [[workflows.workflow]]
-name = "Run Venice Broker API"
+name = "Run Venice Stack (dry)"
 author = 38779469
 mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; EXTRA_FLAGS=\"--extra broker --extra web3 --extra agentkit\"; if [ -n \"$UV_EXTRAS\" ]; then for e in $UV_EXTRAS; do EXTRA_FLAGS=\"$EXTRA_FLAGS --extra $e\"; done; fi; uv sync $EXTRA_FLAGS && uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+args = "RUN_STACK_MODE=dry AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} bash scripts/run_stack_entry.sh"
 
 [[workflows.workflow]]
 name = "Project"
@@ -41,10 +49,10 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "broker-api"
+args = "stack-dry"
 
 [[workflows.workflow]]
-name = "broker-api"
+name = "stack-dry"
 author = "agent"
 
 [workflows.workflow.metadata]
@@ -52,7 +60,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "if ! command -v uv >/dev/null 2>&1; then curl -LsSf https://astral.sh/uv/install.sh | sh; fi; export PATH=\"$PWD/.local/bin:$HOME/.local/bin:$PATH\"; /home/runner/workspace/.local/bin/uv sync --extra web3 --extra agentkit --extra db && /home/runner/workspace/.local/bin/uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port 5000"
+args = "RUN_STACK_MODE=dry AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} bash scripts/run_stack_entry.sh"
 waitForPort = 5000
 
 [agent]
