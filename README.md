@@ -97,7 +97,7 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
    Set `AUTOSTART_ORCHESTRATOR_LIVE=1` or `AUTOSTART_STAKEMASTER_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`.
 
    Keep `make run-broker` around when you only want the API without the helpers.
-   On Replit, the default **Stack (dry-run)** runnable in `.replit` invokes `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`; switch to **Stack (live)** (or export `RUN_STACK_MODE=live`) when you are ready for on-chain activity.
+   On Replit, the default **Stack (dry-run)** runnable in `.replit` invokes `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`; switch to **Stack (live)** (or export `RUN_STACK_MODE=live`) when you are ready for on-chain activity, or trigger the **Run Venice Stack (dry)** / **Run Venice Stack (live)** workflows from the Workflows panel.
 
 8. Verify health before moving to live execution.
 

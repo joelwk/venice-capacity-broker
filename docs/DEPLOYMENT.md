@@ -113,6 +113,7 @@ Overview
 4. When you are ready for real trades or staking heartbeats, pick the **Stack (live)** runnable (or export `RUN_STACK_MODE=live`) so the same script enables `AUTOSTART_ORCHESTRATOR_LIVE` and `AUTOSTART_STAKEMASTER_LIVE`.
 5. Deployments panel -> Create Web Service (auto-detects the run command from `.replit`).
 6. Verify health: open the webview -> `/health` returns `{ "status": "ok" }`.
+7. Use the Replit Workflows panel when you need to rerun the stack: **Run Venice Stack (dry)** drives the dry-run mode and **Run Venice Stack (live)** enables the live flags.
 
 Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.

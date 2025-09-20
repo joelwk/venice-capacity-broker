@@ -43,6 +43,35 @@ task = "shell.exec"
 args = "RUN_STACK_MODE=dry AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} bash scripts/run_stack_entry.sh"
 
 [[workflows.workflow]]
+name = "Run Venice Stack (live)"
+author = 38779469
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} bash scripts/run_stack_entry.sh"
+
+[[workflows.workflow]]
+name = "Project (live)"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "stack-live"
+
+[[workflows.workflow]]
+name = "stack-live"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} bash scripts/run_stack_entry.sh"
+waitForPort = 5000
+[[workflows.workflow]]
 name = "Project"
 mode = "parallel"
 author = "agent"
