@@ -124,14 +124,23 @@ class MarketPricingEngine:
             return False
         return 1e-6 < v < 1e6
 
-    def price_from_budget(self, budget_usd: float, asset: str) -> QuoteDraft:
+    def price_from_budget(self, budget_amount: float, asset: str) -> QuoteDraft:
         try:
-            budget = float(budget_usd)
+            raw_budget = float(budget_amount)
         except Exception as exc:  # noqa: BLE001
             raise ValueError("invalid budget") from exc
-        if not self._valid_price(budget):
+        if not self._valid_price(raw_budget):
             raise ValueError("budget must be greater than zero")
-        base_unit_usd, _, _ = self._resolve_prices()
+        asset_u = asset.strip().upper()
+        base_unit_usd, _, eth_usd = self._resolve_prices()
+        if asset_u == "ETH":
+            if not self._valid_price(eth_usd):
+                raise ValueError("ETH pricing unavailable for budget sizing")
+            budget = raw_budget * float(eth_usd)
+        elif asset_u == "USDC":
+            budget = raw_budget  # USDC ≈ USD
+        else:
+            budget = raw_budget
         if not self._valid_price(base_unit_usd):
             raise ValueError("DIEM pricing unavailable for budget sizing")
         target_units = budget / float(base_unit_usd)
