@@ -1259,7 +1259,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Orchestrator loop
     sp = sub.add_parser("run:orchestrator", help="Run orchestrator loop for ArbiDiem with persistence and backoff")
-    sp.add_argument("--dry-run", action="store_true", default=True)
+    sp.add_argument("--dry-run", action="store_true", default=False, help="Run without on-chain actions")
+    sp.add_argument("--live", dest="dry_run", action="store_false", help="Alias to disable dry-run guard")
     sp.add_argument("--max-cycles", default="0")
     sp.add_argument("--interval", default="5.0", help="Loop interval seconds")
     sp.add_argument("--backoff", default="1.0", help="Initial backoff seconds on error")
