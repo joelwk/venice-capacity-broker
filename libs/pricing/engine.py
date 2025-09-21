@@ -136,7 +136,7 @@ class MarketPricingEngine:
         if asset_u == "ETH":
             if not self._valid_price(eth_usd):
                 raise ValueError("ETH pricing unavailable for budget sizing")
-            budget = raw_budget  # Budgets are specified in USD
+            budget = raw_budget * float(eth_usd)
         elif asset_u == "USDC":
             budget = raw_budget  # USDC budgets already denominated in USD
         else:
