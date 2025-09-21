@@ -269,7 +269,8 @@ class MarketDataProvider:
         erc20 = get_contract(w3, Web3.to_checksum_address(address), "erc20.json")
         return int(erc20.functions.decimals().call())
 
-    def _parse_route_spec(self, raw: str) -> RoutePlan:
+    @staticmethod
+    def _parse_route_spec(raw: str) -> RoutePlan:
         spec = raw.strip()
         if not spec:
             raise ValueError("route specification must be non-empty")
@@ -318,7 +319,25 @@ class MarketDataProvider:
             raise ValueError("route must include at least two addresses")
         return make_route(tokens, fees)
 
+    @staticmethod
+    def _coerce_route_entry(entry: Any) -> Optional[str]:  # noqa: ANN401
+        if entry is None:
+            return None
+        if isinstance(entry, str):
+            val = entry.strip()
+            return val or None
+        if isinstance(entry, dict):
+            for key in ("value", "path", "route", "trade_path"):
+                val = entry.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        return None
+
     def _route_from_env(self, key: str = "TRADE_PATH") -> RoutePlan:
+        if key == "TRADE_PATH" and os.getenv("TRADE_PATHS"):
+            paths = self._collect_trade_paths()
+            if paths:
+                return paths[0]
         path_env = os.getenv(key)
         if not path_env:
             raise EnvironmentError(f"{key} must be set for pricing routes")
@@ -390,14 +409,36 @@ class MarketDataProvider:
 
     def _collect_trade_paths(self) -> List[RoutePlan]:
         paths: List[RoutePlan] = []
-        for key in ("TRADE_PATH", "TRADE_PATH_2"):
-            raw = os.getenv(key)
-            if not raw:
-                continue
+
+        raw_paths = os.getenv("TRADE_PATHS")
+        if raw_paths:
             try:
-                paths.append(self._parse_route_spec(raw))
+                parsed = json.loads(raw_paths)
+                if isinstance(parsed, list):
+                    for entry in parsed:
+                        spec = self._coerce_route_entry(entry)
+                        if not spec:
+                            continue
+                        try:
+                            route = self._parse_route_spec(spec)
+                            paths.append(route)
+                        except Exception:
+                            _logger.warning("trade path entry invalid", exc_info=True)
+                else:
+                    _logger.warning("TRADE_PATHS must be a JSON array")
             except Exception:
-                continue
+                _logger.warning("failed to parse TRADE_PATHS JSON", exc_info=True)
+
+        if not paths:
+            for key in ("TRADE_PATH", "TRADE_PATH_2"):
+                raw = os.getenv(key)
+                if not raw:
+                    continue
+                try:
+                    paths.append(self._parse_route_spec(raw))
+                except Exception:
+                    _logger.warning("invalid %s env route", key, exc_info=True)
+                    continue
         return paths
 
     def _try_path_direct(self, route: RoutePlan) -> Optional[float]:

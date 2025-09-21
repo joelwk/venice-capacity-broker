@@ -38,4 +38,15 @@ Next Steps (Execution Order)
 - `graph/langgraph/graph.py:14` still defaults to a sequential fallback when LangGraph is missing, which means true LangGraph-native orchestration has not been validated end to end.
 
 - Capacity resale stops at scoped sub-key issuance in `services/venice_keys/manager.py`; dynamic DIEM rentals and market-clearing logic remain outside the v1 build.
+## Trade Path Validation (2025-09-21)
+- Primary DIEM pricing path now uses the multi-hop DIEM -> WETH -> USDC route: set `TRADE_PATH=0xf4d97f2da56e8c3098f3a8d538db630a2606a024@10000,0x4200000000000000000000000000000000000006@500,0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
+- Keep the direct DIEM -> USDC hop captured as `TRADE_PATH_2` (no Base liquidity as of 2025-09-21) and apply the same pattern for VVV via `VVV_TRADE_PATH_2`.
+- Validate the active path after any change with `uv run python apps/cli/main.py startup:probe` and cross-check live liquidity in Uniswap (DIEM: https://app.uniswap.org/explore/tokens/base/0xF4d97F2da56e8c3098f3a8D538DB630A2606a024, VVV: https://app.uniswap.org/explore/tokens/base/0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf).
+- Record any alternate viable routes in `.env.example` so warm-cache jobs and the orchestrator pick them up automatically.
+- Use `uv run python scripts/rotate_trade_path.py` to evaluate and swap `TRADE_PATH`/`TRADE_PATH_2` safely when liquidity shifts.
+
+
+
+
+
 

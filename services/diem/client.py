@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -401,7 +402,20 @@ class DIEMService:
         return res
 
     def _path_from_env(self) -> List[str]:
-        import os
+        raw_paths = os.getenv("TRADE_PATHS")
+        if raw_paths:
+            try:
+                import json
+                from services.marketdata.provider import MarketDataProvider
+
+                parsed = json.loads(raw_paths)
+                if isinstance(parsed, list) and parsed:
+                    spec = MarketDataProvider._coerce_route_entry(parsed[0])
+                    if spec:
+                        route = MarketDataProvider._parse_route_spec(spec)
+                        return [str(token) for token in route.tokens]
+            except Exception:
+                pass
 
         path_env = os.getenv("TRADE_PATH")
         if not path_env:
