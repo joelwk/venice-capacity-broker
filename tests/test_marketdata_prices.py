@@ -30,7 +30,7 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     monkeypatch.setattr(md, "_erc20_decimals", fake_decimals)
     monkeypatch.setattr(md, "diem_price_with_fallback", lambda: 227.25)
 
-    def fake_best_price(route, amount_in_decimal: float = 1.0):  # type: ignore[override]
+    def fake_best_price(route, amount_in_decimal: float = 1.0, **kwargs):  # type: ignore[override]
         plan = as_route_plan(route)
         tokens = [p.lower() for p in plan.tokens]
         shortcut = [vvv_addr.lower(), quote_addr.lower()]

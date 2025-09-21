@@ -33,7 +33,7 @@ class DemoProvider(MarketDataProvider):
     def diem_price_with_fallback(self) -> float:  # type: ignore[override]
         return 227.25
 
-    def best_price(self, path, amount_in_decimal: float = 1.0):  # type: ignore[override]
+    def best_price(self, path, amount_in_decimal: float = 1.0, **kwargs):  # type: ignore[override]
         lower = [p.lower() for p in as_route_plan(path).tokens]
         if lower == [os.environ['VVV_TOKEN_ADDRESS'].lower(), os.environ['QUOTE_TOKEN_ADDRESS'].lower()]:
             return {"provider": "demo", "price": 2.63}

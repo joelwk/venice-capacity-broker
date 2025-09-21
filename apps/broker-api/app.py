@@ -61,6 +61,32 @@ except Exception:
 logger = get_logger("broker.api")
 
 try:
+    from libs.telemetry.metrics import inc as _metrics_inc  # type: ignore
+except Exception:
+    _metrics_inc = None  # type: ignore
+
+
+def _http_latency_bucket(seconds: float) -> str:
+    try:
+        s = float(seconds)
+    except Exception:
+        s = 0.0
+    if s < 0.05:
+        return "lt_50ms"
+    if s < 0.1:
+        return "lt_100ms"
+    if s < 0.2:
+        return "lt_200ms"
+    if s < 0.5:
+        return "lt_500ms"
+    if s < 1.0:
+        return "lt_1s"
+    if s < 2.0:
+        return "lt_2s"
+    return "ge_2s"
+
+
+try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
     from fastapi.responses import PlainTextResponse, StreamingResponse
     from fastapi.middleware.cors import CORSMiddleware
@@ -1519,18 +1545,54 @@ try:
     def market_prices(
         symbols: str = Query(default="VVV,DIEM,ETH,USDC", description="Comma-separated symbols"),
     ) -> dict:
-        """Return simple price feed and common ratios.
+        """Return simple price feed and common ratios with latency metadata."""
 
-        Prices are sourced via services.marketdata.provider (DEX aggregator + Venice signals).
-        Ratios are convenience fields, e.g., VVV_DIEM = VVV/DIEM when both are present.
-        """
         try:
             from services.marketdata.provider import MarketDataProvider  # type: ignore
+        except Exception as import_err:  # noqa: BLE001
+            logger.exception("market prices provider import failed")
+            raise HTTPException(status_code=500, detail=f"provider unavailable: {import_err}")
 
+        syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
+        start_total = time.perf_counter()
+        outcome = "error"
+        duration = 0.0
+        sla_target = 0.0
+        try:
             md = MarketDataProvider()
-            syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
             prices = md.prices(syms)
-            # Common ratios to DIEM if available
+            duration = time.perf_counter() - start_total
+            try:
+                last_latency, last_ts = md.last_prices_latency()
+            except Exception:
+                last_latency = duration
+                last_ts = time.time()
+
+            sla_raw = _os.getenv("MARKETDATA_PRICE_SLA_SECONDS")
+            try:
+                sla_target = float(sla_raw) if sla_raw not in (None, "") else 0.0
+            except Exception:
+                sla_target = 0.0
+            enforce_sla = str((_os.getenv("MARKETDATA_PRICE_ENFORCE_SLA") or "false")).strip().lower() in {"1", "true", "yes", "on"}
+
+            if enforce_sla and sla_target > 0 and duration > sla_target:
+                outcome = "sla_blocked"
+                detail = f"market prices latency {duration:.3f}s exceeds SLA {sla_target:.3f}s"
+                logger.warning("market prices SLA violation", extra={"latency_s": duration, "sla_s": sla_target, "symbols": ",".join(syms)})
+                if _metrics_inc is not None:
+                    try:
+                        _metrics_inc("market_prices_http_sla_violations_total", labels={"count": str(len(syms))})
+                    except Exception:
+                        pass
+                try:
+                    from libs.telemetry.events import emit as _emit
+
+                    _emit("signal.market.prices_sla_violation", {"symbols": syms, "latency_s": duration, "sla_s": sla_target})
+                except Exception:
+                    pass
+                raise HTTPException(status_code=503, detail=detail)
+
+            outcome = "ok"
             ratios: dict[str, float] = {}
             diem = prices.get("DIEM")
             if diem and float(diem) != 0:
@@ -1540,9 +1602,31 @@ try:
                             ratios[f"{s.upper()}_DIEM"] = float(p) / float(diem)
                         except Exception:
                             pass
-            return {"symbols": syms, "prices": prices, "ratios": ratios}
+            meta: dict[str, float | int] = {"latency_ms": round(duration * 1000.0, 3)}
+            if last_latency:
+                meta["provider_latency_ms"] = round(float(last_latency) * 1000.0, 3)
+            if sla_target > 0:
+                meta["sla_seconds"] = float(sla_target)
+            if last_ts:
+                try:
+                    meta["last_latency_ts"] = int(last_ts)
+                except Exception:
+                    pass
+            return {"symbols": syms, "prices": prices, "ratios": ratios, "meta": meta}
+        except HTTPException:
+            raise
         except Exception as e:  # noqa: BLE001
+            duration = time.perf_counter() - start_total
+            logger.exception("market prices error", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            duration = time.perf_counter() - start_total
+            if _metrics_inc is not None:
+                try:
+                    _metrics_inc("market_prices_http_total", labels={"outcome": outcome})
+                    _metrics_inc("market_prices_http_latency_bucket_total", labels={"bucket": _http_latency_bucket(duration), "outcome": outcome})
+                except Exception:
+                    pass
 
     @app.get("/v1/market/signals")
     @_traceable("broker.market_signals")

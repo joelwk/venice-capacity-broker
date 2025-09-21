@@ -17,7 +17,7 @@ What's Done
 
 Needs Attention
 - Migrations & recovery: ensure compaction and migration runbooks are robust.
-- Price latency: `/v1/market/prices` responds with live data but still takes ~18 s on the current stack; continue investigating RPC/DEX latency before scaling traffic.
+- Price latency: `/v1/market/prices` now records latency buckets, warms the hot-symbol cache, and enforces an optional SLA gate; the endpoint still averages ~18 s, so keep probing RPC/DEX latency before scaling tenant traffic.
 - Observability: prefer `starlette-exporter` metrics; add tracing hooks for graph/agents. DEX telemetry added (quotes/trades/latency, FOT fallback), agent decisions counters, and optional correlationId on DIEM events.
 - Security: enforce `BROKER_REQUIRE_ADMIN_TOKEN=true` in prod; CORS allowlists for buyer/admin; secret hygiene; clear default model (`BROKER_DEFAULT_MODEL`).
 - Pricing/risk: evolve static pricing to policy-driven engine; verify decimals/units; add receipts and audit trails.

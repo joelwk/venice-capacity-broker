@@ -3,11 +3,57 @@ from __future__ import annotations
 import json
 import os
 import time
-from threading import Lock
+import weakref
+from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from libs.dex.providers import build_aggregator_from_env
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
+
+try:
+    from libs.telemetry.metrics import inc as _metrics_inc
+except Exception:  # pragma: no cover - metrics optional
+    def _metrics_inc(name: str, value: int = 1, labels: Dict[str, str] | None = None) -> None:
+        return
+
+try:
+    from libs.telemetry.logger import get_logger
+    _logger = get_logger('marketdata.provider')
+except Exception:  # pragma: no cover - logging optional
+    class _NullLogger:
+        def info(self, *args, **kwargs):
+            return
+
+        def warning(self, *args, **kwargs):
+            return
+
+        def error(self, *args, **kwargs):
+            return
+
+        def debug(self, *args, **kwargs):
+            return
+
+    _logger = _NullLogger()
+
+
+def _latency_bucket(seconds: float) -> str:
+    try:
+        s = float(seconds)
+    except Exception:
+        s = 0.0
+    if s < 0.05:
+        return "lt_50ms"
+    if s < 0.1:
+        return "lt_100ms"
+    if s < 0.2:
+        return "lt_200ms"
+    if s < 0.5:
+        return "lt_500ms"
+    if s < 1.0:
+        return "lt_1s"
+    if s < 2.0:
+        return "lt_2s"
+    return "ge_2s"
 
 
 class MarketDataProvider:
@@ -21,6 +67,12 @@ class MarketDataProvider:
 
     _price_cache: Dict[str, Tuple[float, float, float]] = {}
     _price_cache_lock = Lock()
+    _warm_thread_lock = Lock()
+    _warm_thread_started: bool = False
+    _warm_symbols: Tuple[str, ...] = ()
+    _warm_interval_seconds: float = 0.0
+    _last_prices_latency: float = 0.0
+    _last_prices_latency_ts: float = 0.0
 
     def _price_cache_key(self, symbol: str) -> str:
         return (symbol or "").upper()
@@ -71,6 +123,143 @@ class MarketDataProvider:
                 except ValueError:
                     self._price_cache.clear()
             self._price_cache[key] = (time.time(), float(value), float(ttl))
+
+    def __init__(self) -> None:
+        self._ensure_warm_thread()
+
+    def _norm_symbol_label(self, symbol: object) -> str:
+        try:
+            raw = str(symbol).strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            return "UNKNOWN"
+        sym = raw.upper()
+        if sym.startswith("0X") and len(sym) == 42:
+            mapping: Dict[str, str] = {}
+            try:
+                diem = self._address_for_symbol("DIEM")
+                if diem:
+                    mapping[str(diem).strip().upper()] = "DIEM"
+            except Exception:
+                pass
+            try:
+                vvv = self._address_for_symbol("VVV")
+                if vvv:
+                    mapping[str(vvv).strip().upper()] = "VVV"
+            except Exception:
+                pass
+            try:
+                quote_addr = self._quote_token_address()
+                if quote_addr:
+                    quote_symbol = (os.getenv("QUOTE_TOKEN_SYMBOL") or "QUOTE").upper()
+                    mapping[str(quote_addr).strip().upper()] = quote_symbol
+            except Exception:
+                pass
+            try:
+                mapping[self._weth_address().strip().upper()] = "WETH"
+            except Exception:
+                pass
+            mapped = mapping.get(sym)
+            if mapped:
+                return mapped
+        return sym or "UNKNOWN"
+
+    def _record_counter(self, name: str, labels: Dict[str, str]) -> None:
+        try:
+            clean = {str(k): str(v) for k, v in (labels or {}).items()}
+            _metrics_inc(name, labels=clean)
+        except Exception:
+            return
+
+    def _record_latency(self, symbol: object, stage: str, seconds: float, outcome: str) -> None:
+        try:
+            sym = self._norm_symbol_label(symbol)
+            bucket = _latency_bucket(seconds)
+            labels = {
+                "symbol": sym,
+                "stage": str(stage or "").lower(),
+                "bucket": bucket,
+                "outcome": str(outcome or "").lower() or "unknown",
+            }
+            _metrics_inc("marketdata_latency_bucket_total", labels=labels)
+        except Exception:
+            return
+
+    def _mark_last_latency(self, latency: float) -> None:
+        cls = type(self)
+        try:
+            cls._last_prices_latency = float(latency)
+        except Exception:
+            cls._last_prices_latency = 0.0
+        cls._last_prices_latency_ts = time.time()
+
+    def last_prices_latency(self) -> Tuple[float, float]:
+        cls = type(self)
+        return float(cls._last_prices_latency), float(cls._last_prices_latency_ts)
+
+    def _ensure_warm_thread(self) -> None:
+        cls = type(self)
+        env_symbols = os.getenv("MARKETDATA_WARM_SYMBOLS", "")
+        symbols = tuple(sorted({s.strip().upper() for s in env_symbols.split(",") if s.strip()}))
+        if not symbols:
+            return
+        interval_val = os.getenv("MARKETDATA_WARM_INTERVAL_SECONDS")
+        try:
+            interval = float(interval_val) if interval_val not in (None, "") else 30.0
+        except Exception:
+            interval = 30.0
+        if interval < 0:
+            interval = 0.0
+        with cls._warm_thread_lock:
+            if cls._warm_thread_started:
+                return
+            cls._warm_thread_started = True
+            cls._warm_symbols = symbols
+            cls._warm_interval_seconds = interval
+            weak_self = weakref.ref(self)
+            def _runner() -> None:
+                inst = weak_self()
+                if inst is None:
+                    try:
+                        inst = MarketDataProvider()
+                    except Exception:
+                        return
+                try:
+                    inst._warm_loop()
+                except Exception:
+                    _logger.warning("marketdata warm loop failed", exc_info=True)
+            thread = Thread(target=_runner, name="marketdata-warm-cache", daemon=True)
+            thread.start()
+            try:
+                _logger.info("marketdata warm cache thread started", extra={"symbols": list(symbols), "interval": interval})
+            except Exception:
+                pass
+
+    def _warm_loop(self) -> None:
+        cls = type(self)
+        symbols = cls._warm_symbols
+        if not symbols:
+            return
+        interval = float(cls._warm_interval_seconds or 0.0)
+        while True:
+            for sym in symbols:
+                start = time.perf_counter()
+                outcome = "ok"
+                try:
+                    price = self._price_for_symbol(sym)
+                    self._cache_price_set(sym, price)
+                    if not self._valid_price(price):
+                        outcome = "invalid"
+                except Exception:
+                    outcome = "error"
+                finally:
+                    elapsed = time.perf_counter() - start
+                    self._record_counter("marketdata_warm_total", {"symbol": self._norm_symbol_label(sym), "outcome": outcome})
+                    self._record_latency(sym, "warm", elapsed, outcome)
+            if interval <= 0:
+                break
+            time.sleep(interval)
 
     def _erc20_decimals(self, address: str) -> int:
         from web3 import Web3  # lazy load
@@ -354,8 +543,8 @@ class MarketDataProvider:
     def _ratio_units_to_tokens(self, units: int, diem_decimals: int, svvv_decimals: int) -> float:
         return float(units) * (10 ** diem_decimals) / float(10 ** svvv_decimals)
 
-    def best_price(self, route: RouteLike, amount_in_decimal: float = 1.0) -> Dict[str, Any]:
-        """Compute best price for the supplied route given a decimal input amount."""
+    def best_price(self, route: RouteLike, amount_in_decimal: float = 1.0, *, label_symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Compute best price for the supplied route with telemetry instrumentation."""
 
         plan = as_route_plan(route)
         tokens = plan.tokens
@@ -364,23 +553,51 @@ class MarketDataProvider:
         dec_in = self._erc20_decimals(tokens[0])
         dec_out = self._erc20_decimals(tokens[-1])
         amount_in_units = int(amount_in_decimal * (10 ** dec_in))
+        label = self._norm_symbol_label(label_symbol or (tokens[0] if tokens else None))
 
         agg = build_aggregator_from_env()
         supports_reserve = any(getattr(p, "supports_reserve_math", False) for p in getattr(agg, "providers", []))
 
-        quote = agg.best_quote(amount_in_units, plan)
+        def _record(stage: str, elapsed: float, outcome: str) -> None:
+            self._record_latency(label, stage, elapsed, outcome)
+            self._record_counter("marketdata_price_source_total", {"symbol": label, "source": stage, "outcome": outcome})
+
+        quote = None
         used_route = plan
+
+        start = time.perf_counter()
+        try:
+            quote = agg.best_quote(amount_in_units, plan)
+        except Exception:
+            elapsed = time.perf_counter() - start
+            _record("dex_primary", elapsed, "error")
+            raise
+        else:
+            elapsed = time.perf_counter() - start
+            outcome = "ok" if quote is not None else "empty"
+            _record("dex_primary", elapsed, outcome)
+            if quote is not None:
+                used_route = quote.route
+                self._record_counter("marketdata_price_provider_total", {"symbol": label, "provider": str(quote.provider)})
 
         if quote is None and len(tokens) == 2:
             bridge = self._bridge_token_address()
             if bridge and bridge.lower() not in {tokens[0].lower(), tokens[-1].lower()}:
                 alt_route = make_route([tokens[0], bridge, tokens[-1]])
+                start_bridge = time.perf_counter()
                 try:
                     quote = agg.best_quote(amount_in_units, alt_route)
+                except Exception:
+                    elapsed = time.perf_counter() - start_bridge
+                    _record("dex_bridge", elapsed, "error")
+                    quote = None
+                else:
+                    elapsed = time.perf_counter() - start_bridge
+                    outcome = "ok" if quote is not None else "empty"
+                    _record("dex_bridge", elapsed, outcome)
                     if quote is not None:
                         used_route = quote.route
-                except Exception:
-                    quote = None
+                        self._record_counter("marketdata_price_provider_total", {"symbol": label, "provider": str(quote.provider)})
 
         if quote is not None:
             used_route = quote.route
@@ -395,7 +612,11 @@ class MarketDataProvider:
             }
 
         if supports_reserve:
+            start_approx = time.perf_counter()
             approx = self.approx_exec_price(amount_in_units, plan)
+            elapsed = time.perf_counter() - start_approx
+            outcome = "ok" if approx and approx > 0 else "empty"
+            _record("approx", elapsed, outcome)
             if approx and approx > 0:
                 price = float(approx)
                 if dec_out >= dec_in:
@@ -411,6 +632,7 @@ class MarketDataProvider:
                     "path": plan.tokens,
                 }
 
+        _record("dex_final", 0.0, "error")
         raise RuntimeError("No quotes available for provided route")
 
     def _best_price_scan(
@@ -686,36 +908,78 @@ class MarketDataProvider:
         return None
 
     def prices(self, symbols: List[str]) -> Dict[str, float]:
-        """Return prices for requested symbols with lightweight caching."""
+        """Return prices for requested symbols with caching and telemetry."""
+        symbols = list(symbols or [])
+        cache_hits = 0
+        cache_misses = 0
+        overall_outcome = "ok"
+        total_elapsed = 0.0
         raw: Dict[str, float] = {}
-        for sym in symbols:
-            cached = self._cache_price_get(sym)
-            if cached is not None:
-                raw[sym] = cached
-                continue
-            price = self._price_for_symbol(sym)
-            raw[sym] = price
-            self._cache_price_set(sym, price)
-
         normalized_out: Dict[str, float] = {}
-        for sym, price in raw.items():
-            try:
-                val = float(price)
-            except Exception:
-                val = 0.0
-            if str(sym).upper() == "USDC":
-                val = 1.0
-            elif not self._valid_price(val):
-                val = 0.0
-            normalized_out[sym] = val
-
+        start_total = time.perf_counter()
         try:
-            from libs.telemetry.events import emit as _emit
-
-            _emit("signal.market.prices", {"symbols": [str(s) for s in symbols], "prices": dict(normalized_out)})
+            for sym in symbols:
+                sym_label = self._norm_symbol_label(sym)
+                sym_start = time.perf_counter()
+                cached = self._cache_price_get(sym)
+                if cached is not None:
+                    cache_hits += 1
+                    raw[sym] = cached
+                    self._record_counter("marketdata_price_cache_hits_total", {"symbol": sym_label})
+                    elapsed = time.perf_counter() - sym_start
+                    self._record_latency(sym_label, "symbol", elapsed, "cache")
+                    continue
+                cache_misses += 1
+                self._record_counter("marketdata_price_cache_misses_total", {"symbol": sym_label})
+                try:
+                    price = self._price_for_symbol(sym)
+                except Exception:
+                    elapsed = time.perf_counter() - sym_start
+                    self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": "error"})
+                    self._record_latency(sym_label, "symbol", elapsed, "error")
+                    overall_outcome = "error"
+                    raise
+                else:
+                    raw[sym] = price
+                    outcome = "ok" if self._valid_price(price) else "invalid"
+                    elapsed = time.perf_counter() - sym_start
+                    self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": outcome})
+                    self._record_latency(sym_label, "symbol", elapsed, outcome)
+                    self._cache_price_set(sym, price)
+            for sym, price in raw.items():
+                try:
+                    val = float(price)
+                except Exception:
+                    val = 0.0
+                if str(sym).upper() == "USDC":
+                    val = 1.0
+                elif not self._valid_price(val):
+                    val = 0.0
+                normalized_out[sym] = val
+            try:
+                from libs.telemetry.events import emit as _emit
+                total_elapsed = time.perf_counter() - start_total
+                payload = {
+                    "symbols": [str(s) for s in symbols],
+                    "prices": dict(normalized_out),
+                    "latency_ms": round(total_elapsed * 1000.0, 3),
+                    "cache_hits": cache_hits,
+                    "cache_misses": cache_misses,
+                }
+                _emit("signal.market.prices", payload)
+            except Exception:
+                pass
+            return normalized_out
         except Exception:
-            pass
-        return normalized_out
+            overall_outcome = "error"
+            raise
+        finally:
+            if total_elapsed <= 0.0:
+                total_elapsed = time.perf_counter() - start_total
+            self._mark_last_latency(total_elapsed)
+            self._record_latency("batch", "request", total_elapsed, overall_outcome)
+            request_labels = {"outcome": overall_outcome, "count": str(len(symbols))}
+            self._record_counter("marketdata_prices_requests_total", request_labels)
 
     def _price_for_symbol(self, symbol: str) -> float:
         sym_str = "" if symbol is None else str(symbol)
@@ -731,7 +995,7 @@ class MarketDataProvider:
                 pass
             try:
                 route = self._route_from_env()
-                bp = self.best_price(route, amount_in_decimal=1.0)
+                bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 return price if self._valid_price(price) else 0.0
             except Exception:
@@ -745,7 +1009,7 @@ class MarketDataProvider:
                 route_override = self._route_optional_from_env("VVV_PRICE_PATH") or self._route_optional_from_env("VVV_TRADE_PATH")
                 if route_override:
                     try:
-                        bp = self.best_price(route_override, amount_in_decimal=1.0)
+                        bp = self.best_price(route_override, amount_in_decimal=1.0, label_symbol=su)
                         price = float(bp.get("price") or 0.0)
                         if self._valid_price(price):
                             return price
@@ -783,7 +1047,7 @@ class MarketDataProvider:
             try:
                 weth = self._weth_address()
                 quote = self._quote_token_address()
-                bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0)
+                bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 if self._valid_price(price):
                     return price
