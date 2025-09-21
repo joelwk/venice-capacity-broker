@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import os
 import shutil
-import sys
-from pathlib import Path
 from typing import Optional, Tuple
 
 from libs.env import load_dotenv_if_present
