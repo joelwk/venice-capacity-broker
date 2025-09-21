@@ -67,7 +67,18 @@ class PricingService:
         if units is not None and budget_usd is not None:
             raise ValueError("provide either units or budget, not both")
         if budget_usd is not None:
-            draft = self.engine.price_from_budget(float(budget_usd), asset)  # type: ignore[attr-defined]
+            budget_value = float(budget_usd)
+            asset_u = asset.strip().upper()
+            if isinstance(self.engine, MarketPricingEngine):
+                try:
+                    _, _, eth_usd = self.engine._resolve_prices()  # type: ignore[attr-defined]
+                except Exception:  # noqa: BLE001
+                    eth_usd = 0.0
+                if asset_u == "ETH":
+                    if not (eth_usd and eth_usd > 0):
+                        raise ValueError("ETH pricing unavailable for budget sizing")
+                    budget_value = budget_value / float(eth_usd)
+            draft = self.engine.price_from_budget(budget_value, asset)  # type: ignore[attr-defined]
         else:
             if units is None:
                 raise ValueError("units must be greater than zero")
