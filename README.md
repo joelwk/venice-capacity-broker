@@ -731,6 +731,7 @@ Idempotency
 - Feature flags (off by default): set in env and restart broker
     - `QUOTES_ENABLED=true` to enable `GET /v1/quotes`
     - `PURCHASES_ENABLED=true` to enable `POST /v1/purchases/verify` and `GET /v1/purchases/{id}`
+    - `PURCHASE_TENANT_ALLOWLIST` (optional) comma-separated tenant ids that buyers may select instead of the default `w:<wallet>` tenant. Overrides outside this list are rejected.
     - `CORS_ENABLED=true` and `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
   - Quotes API
     - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` → returns `{ quoteId, units, unitPrice, totalPrice, expiresAt }`

@@ -18,6 +18,7 @@ class Tenant:
     status: str = "active"  # active|revoked
     # Optional Venice API key id to allow revoke via API
     key_id: Optional[str] = None
+    owner_address: Optional[str] = None
 
 
 class TenantStore:

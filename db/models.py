@@ -117,7 +117,10 @@ class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
     quote_id: str = Field(index=True)
     buyer_address: str
     asset: str
-    amount_paid: int
+    if _HAS_SA:
+        amount_paid: int = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=False))  # type: ignore[call-arg]
+    else:
+        amount_paid: int
     tx_hash: str = Field(index=True)
     status: str = Field(default="pending")  # pending|confirmed|fulfilled|failed
     tenant_id: Optional[str] = None

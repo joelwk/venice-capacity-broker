@@ -2125,8 +2125,12 @@ try:
                 expiresAt: str | None = None
 
             def _normalize_hex(x: str) -> str:
-                x = str(x).strip()
-                return x if x.startswith("0x") else ("0x" + x)
+                x = str(x or "").strip()
+                if not x:
+                    return ""
+                if not x.startswith("0x"):
+                    x = "0x" + x
+                return x.lower()
 
             def _wei(hex_str: str) -> int:
                 return int(hex_str, 16)
@@ -2141,68 +2145,86 @@ try:
                     raise RuntimeError(str(j["error"]))
                 return j["result"]
 
-            def _verify_tx(quote: DbQuote, tx_hash: str, treasury: str, usdc_addr: str | None, base_rpc: str) -> tuple[int, dict]:
+
+
+            def _verify_tx(quote: DbQuote, tx_hash: str, treasury: str, usdc_addr: str | None, base_rpc: str, buyer_address: str) -> tuple[int, dict]:
                 tx_hash = _normalize_hex(tx_hash)
+                buyer_address = _normalize_hex(buyer_address)
+                if not tx_hash or len(tx_hash) != 66:
+                    raise RuntimeError("transaction hash required")
+                if not buyer_address or len(buyer_address) != 42:
+                    raise RuntimeError("buyer address invalid")
+                treasury_norm = _normalize_hex(treasury)
+                usdc_norm = _normalize_hex(usdc_addr) if usdc_addr else None
                 rec = _rpc_call(base_rpc, "eth_getTransactionReceipt", [tx_hash])
                 if rec is None:
                     raise RuntimeError("transaction not found")
                 status_hex = rec.get("status") or "0x0"
                 if int(status_hex, 16) != 1:
                     raise RuntimeError("transaction failed")
-                to_addr = (rec.get("to") or "").lower()
-                # ETH path: check 'to' and value
+                receipt_from = _normalize_hex(rec.get("from") or "")
+                if receipt_from and receipt_from != buyer_address:
+                    raise RuntimeError("payment from unexpected address")
+                tx = _rpc_call(base_rpc, "eth_getTransactionByHash", [tx_hash])
+                tx_from = _normalize_hex(tx.get("from") or "")
+                if not tx_from:
+                    tx_from = receipt_from or buyer_address
+                if tx_from != buyer_address:
+                    raise RuntimeError("payment from unexpected address")
+                quote_total = int(quote.total_price)
+                # ETH path: verify destination and value
                 if quote.asset.upper() == "ETH":
-                    tx = _rpc_call(base_rpc, "eth_getTransactionByHash", [tx_hash])
-                    if (tx.get("to") or "").lower() != treasury.lower():
+                    tx_to = _normalize_hex(tx.get("to") or "")
+                    if tx_to != treasury_norm:
                         raise RuntimeError("ETH payment to wrong address")
                     val = _wei(tx.get("value", "0x0"))
-                    if val < int(quote.total_price):
+                    if val < quote_total:
                         raise RuntimeError("insufficient ETH amount")
                     details = {
                         "method": "ETH",
-                        "to": tx.get("to"),
-                        "from": tx.get("from"),
+                        "to": tx_to,
+                        "from": tx_from,
                         "blockNumber": rec.get("blockNumber"),
                         "value": str(val),
                     }
                     return val, details
-                # USDC path: find Transfer(to=treasury)
+                # USDC path: aggregate transfers to treasury
                 if quote.asset.upper() == "USDC":
-                    if not usdc_addr:
+                    if not usdc_norm:
                         raise RuntimeError("USDC_ADDRESS not configured")
                     logs = rec.get("logs", [])
-                    sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"  # keccak(Transfer(address,address,uint256))
+                    sig = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
                     paid = 0
                     matches: list[dict] = []
                     for lg in logs:
-                        if (lg.get("address") or "").lower() != usdc_addr.lower():
+                        if (lg.get("address") or "").lower() != usdc_norm:
                             continue
                         topics = lg.get("topics") or []
                         if not topics or topics[0].lower() != sig:
                             continue
-                        # topics[2] is to address (indexed)
                         if len(topics) < 3:
                             continue
                         to_topic = topics[2]
-                        # last 20 bytes
                         to_addr_log = "0x" + to_topic[-40:]
-                        if to_addr_log.lower() != treasury.lower():
+                        if to_addr_log.lower() != treasury_norm:
                             continue
                         amount = _wei(lg.get("data", "0x0"))
                         paid += amount
                         matches.append({"amount": str(amount), "index": lg.get("logIndex")})
-                    if paid < int(quote.total_price):
+                    if paid <= 0:
+                        raise RuntimeError("transfer to treasury not found")
+                    if paid < quote_total:
                         raise RuntimeError("insufficient USDC amount")
                     details = {
                         "method": "USDC",
-                        "to": treasury,
+                        "to": treasury_norm,
+                        "from": tx_from,
                         "blockNumber": rec.get("blockNumber"),
                         "matches": matches,
                         "value": str(paid),
                     }
                     return paid, details
                 raise RuntimeError("unsupported asset")
-
             @app.post("/v1/purchases/verify", response_model=PurchaseStatus)
             def verify_purchase(req: PurchaseVerifyRequest) -> dict:
                 if not _has_sqlmodel_p:
@@ -2215,42 +2237,88 @@ try:
                     raise HTTPException(status_code=400, detail="TREASURY_ADDRESS not set")
                 usdc_addr = (_os.getenv("USDC_ADDRESS") or "").strip() or None
 
-                # Load quote
+                buyer_norm = _normalize_hex(req.buyerAddress)
+                if not buyer_norm or len(buyer_norm) != 42:
+                    raise HTTPException(status_code=400, detail="buyerAddress invalid")
+                tx_hash_norm = _normalize_hex(req.txHash)
+                if not tx_hash_norm or len(tx_hash_norm) != 66:
+                    raise HTTPException(status_code=400, detail="txHash invalid")
+
+                allowlist_raw = (_os.getenv("PURCHASE_TENANT_ALLOWLIST") or "")
+                tenant_allow = {item.strip().lower() for item in allowlist_raw.split(",") if item.strip()}
+                default_tenant = "w:" + buyer_norm.lower()
+
                 with next(get_session()) as s:  # type: ignore[call-arg]
-                    q = s.exec(_select(DbQuote).where(DbQuote.quote_id == req.quoteId)).first()  # type: ignore[misc]
+                    pur_id = _hh.sha256(f"{req.txHash}:{req.buyerAddress}".encode()).hexdigest()[:16]
+                    existing = s.exec(_select(Purchase).where(Purchase.purchase_id == pur_id)).first()
+                    if existing is None and (req.txHash != tx_hash_norm or req.buyerAddress != buyer_norm):
+                        alt_id = _hh.sha256(f"{tx_hash_norm}:{buyer_norm}".encode()).hexdigest()[:16]
+                        existing = s.exec(_select(Purchase).where(Purchase.purchase_id == alt_id)).first()
+                        if existing is not None:
+                            pur_id = existing.purchase_id
+
+                    quote_id = req.quoteId
+                    if existing and existing.quote_id:
+                        if req.quoteId and existing.quote_id != req.quoteId:
+                            raise HTTPException(status_code=409, detail="purchase already recorded for a different quote")
+                        quote_id = existing.quote_id
+
+                    q = s.exec(_select(DbQuote).where(DbQuote.quote_id == quote_id)).first()  # type: ignore[misc]
                     if q is None:
                         raise HTTPException(status_code=404, detail="quote not found")
-                    # Verify payment
+
+                    if existing and existing.status == "fulfilled" and existing.subkey:
+                        expires_iso = existing.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if existing.expires_at else None
+                        return {
+                            "purchaseId": existing.purchase_id,
+                            "status": existing.status,
+                            "tenantId": existing.tenant_id,
+                            "subkey": existing.subkey,
+                            "expiresAt": expires_iso,
+                        }
+
+                    now = _dt.utcnow()
+                    if q.expires_at and q.expires_at < now and existing is None:
+                        raise HTTPException(status_code=400, detail="quote expired")
+                    if (q.status or "open") not in {"open"} and existing is None:
+                        raise HTTPException(status_code=409, detail=f"quote not open (status={q.status})")
+
                     try:
-                        paid_val, receipt = _verify_tx(q, req.txHash, treasury, usdc_addr, base_rpc)
+                        paid_val, receipt = _verify_tx(q, tx_hash_norm, treasury, usdc_addr, base_rpc, buyer_norm)
                     except Exception as e:  # noqa: BLE001
                         raise HTTPException(status_code=400, detail=str(e))
-                    # Record/Upsert purchase
-                    pur_id = _hh.sha256(f"{req.txHash}:{req.buyerAddress}".encode()).hexdigest()[:16]
-                    p = s.exec(_select(Purchase).where(Purchase.purchase_id == pur_id)).first()
-                    if p is None:
+
+                    amount_paid = int(paid_val or q.total_price)
+                    if existing is None:
                         p = Purchase(
                             purchase_id=pur_id,
                             quote_id=q.quote_id,
-                            buyer_address=req.buyerAddress,
+                            buyer_address=buyer_norm,
                             asset=q.asset,
-                            amount_paid=int(paid_val or q.total_price),
-                            tx_hash=req.txHash,
+                            amount_paid=amount_paid,
+                            tx_hash=tx_hash_norm,
                             status="confirmed",
                         )
                         s.add(p)
                     else:
+                        p = existing
+                        p.quote_id = q.quote_id
+                        p.buyer_address = buyer_norm
+                        p.asset = q.asset
+                        p.amount_paid = amount_paid
+                        p.tx_hash = tx_hash_norm
                         p.status = "confirmed"
-                        p.amount_paid = int(paid_val or q.total_price)
+
                     # Attach audit receipt JSON (best-effort)
                     try:
                         import json as _json2
+
                         p.receipt = _json2.dumps(
                             {
-                                "txHash": req.txHash,
+                                "txHash": tx_hash_norm,
                                 "network": (_os.getenv("NETWORK_ID") or "base-mainnet"),
                                 "asset": q.asset,
-                                "amountPaid": int(paid_val or q.total_price),
+                                "amountPaid": amount_paid,
                                 "quote": {
                                     "quoteId": q.quote_id,
                                     "units": float(q.units),
@@ -2263,22 +2331,38 @@ try:
                         )
                     except Exception:
                         pass
-                    # Mint subkey and upsert tenant
+
+                    # Determine tenant assignment
+                    tenant_id = default_tenant
+                    if req.tenantId:
+                        requested_id = req.tenantId.strip()
+                        if requested_id.lower() == default_tenant:
+                            tenant_id = requested_id
+                        elif requested_id.lower() in tenant_allow:
+                            tenant_id = requested_id
+                        else:
+                            raise HTTPException(status_code=403, detail="tenantId override not permitted")
+
+                    existing_tenant = store.get(tenant_id)
+                    if existing_tenant and existing_tenant.owner_address and existing_tenant.owner_address.lower() != buyer_norm:
+                        raise HTTPException(status_code=409, detail="tenant already assigned to a different wallet")
+                    if existing_tenant and existing_tenant.owner_address is None and tenant_id != default_tenant:
+                        raise HTTPException(status_code=409, detail="tenant reserved for administrator")
+
                     try:
-                        # Map units -> consumption limit and expiry (24h default)
                         import math as _math
+
                         limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
-                        # Venice consumption limits are integers; map fractional units by ceiling to nearest whole unit.
                         _units_limit = max(1, int(_math.ceil(float(q.units))))
                         cons = {"diem": _units_limit} if limit_kind == "diem" else {limit_kind: _units_limit}
                         expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
                         sub = keys.issue_scoped_key(
                             (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or ""),
-                            label=f"Buyer {req.buyerAddress[:6]}...",
+                            label=f"Buyer {buyer_norm[2:8]}...",
                             consumption_limit=cons,
                             expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         )
-                        # Extract values
+
                         def _extract(obj: dict, keys: list[str]) -> str:
                             for k in keys:
                                 v = obj.get(k)
@@ -2290,20 +2374,32 @@ try:
                         kid = _extract(sub, ["id", "keyId", "apiKeyId", "api_key_id"]) or None
                         if not subkey:
                             raise RuntimeError("failed to mint subkey")
-                        # Choose tenant id: reuse provided or derive from wallet address
-                        tenant_id = req.tenantId or ("w:" + req.buyerAddress.lower())
-                        store.upsert(Tenant(id=tenant_id, label="Buyer", subkey=subkey, quota=float(q.units), expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")))
+
+                        store.upsert(
+                            Tenant(
+                                id=tenant_id,
+                                label="Buyer",
+                                subkey=subkey,
+                                quota=float(q.units),
+                                expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                owner_address=buyer_norm,
+                                key_id=kid,
+                            )
+                        )
                         p.status = "fulfilled"
                         p.tenant_id = tenant_id
                         p.subkey = subkey
                         p.key_id = kid
                         p.expires_at = expires_at
                         p.fulfilled_at = _dt.utcnow()
+                        q.status = "filled"
                     except Exception as e:  # noqa: BLE001
-                        # Keep as confirmed; fulfill later
                         p.status = "confirmed"
+
                     s.add(p)
+                    s.add(q)
                     s.commit()
+
                     out = {
                         "purchaseId": p.purchase_id,
                         "status": p.status,
@@ -2311,15 +2407,15 @@ try:
                         "subkey": p.subkey,
                         "expiresAt": p.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ") if p.expires_at else None,
                     }
-                    # Emit audit event (best-effort)
+
                     try:
                         from libs.telemetry.events import emit as _emit
 
-                        _emit("purchase.verified", {**out, "txHash": req.txHash, "asset": q.asset, "units": float(q.units)})
+                        _emit("purchase.verified", {**out, "txHash": tx_hash_norm, "asset": q.asset, "units": float(q.units)})
                     except Exception:
                         pass
-                    return out
 
+                    return out
             @app.get("/v1/purchases/{purchase_id}", response_model=PurchaseStatus)
             def get_purchase(purchase_id: str) -> dict:
                 if not _has_sqlmodel_p:
