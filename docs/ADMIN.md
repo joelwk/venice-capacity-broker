@@ -75,7 +75,7 @@ Security
 
 Environment & Backends
 - Store backend: SQL is default (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Set `BROKER_STORE_BACKEND=json` only for local file-based development.
-- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`); otherwise in-memory. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
+- KV (limits/idempotency): autodetects Redis (`REDIS_URL`/`KV_REDIS_URL`) or Replit DB (`KV_URL`/`REPLIT_DB_URL`). Set `KV_URL` **and** `KV_API_TOKEN` when using Replit DB so broker limits persist after refresh; otherwise the in-memory fallback is used only for local smoke tests. Namespacing via `KV_NAMESPACE` and `KV_PREFIX` is supported.
 - Metrics: `/metrics` uses starlette-exporter if installed (`METRICS_BACKEND=starlette`), else builtin text metrics.
   - Agent counters (builtin): look for `vvv_agent_decisions_total{agent,action}`.
   - DEX metrics:
@@ -130,6 +130,11 @@ Makefile Shortcuts (handy in Replit Shell)
 - `make chat-admin TENANT=t1 [MESSAGE=Hello]` (admin act-as chat)
 - `make limits-get TENANT=t1` / `make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]`
 - `make db-compact` and `make db-counters TENANT=t1 [LIMIT=20]`
+
+Validated Front-End Flows
+- 2025-09-21 QA sweep confirmed `/admin`, `/admin/buy.html`, and `/docs` load on the live stack.
+- `GET /v1/market/prices?symbols=DIEM,VVV,ETH,USDC` now returns non-zero prices (DIEM ~219.3, VVV ~1.2e-5, ETH ~4452.5, USDC = 1.0) and surfaces DIEM/VVV ratios in the dashboard cards.
+- Admin broker limits persist after `POST /v1/tenants/{id}/broker-limits` when `KV_URL`/`KV_API_TOKEN` are configured. Refresh the Limits card to verify the new window/max pair.
 
 Buyer Page
 - Navigate to `/admin/buy.html` for the Buyer flow. Cards appear when the corresponding flags are enabled in `/v1/env.features`.

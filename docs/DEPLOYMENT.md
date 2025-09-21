@@ -12,9 +12,9 @@ Overview
 
    The CLI loads `.env` on startup, so complete this step before booting any agents.
 
-2. Copy `.env.example` to `.env` and set the Broker, Venice, Base RPC, and DIEM variables that your environment requires.
+2. Copy `.env.example` to `.env` and set the Broker, Venice, Base RPC, DIEM, and KV variables that your environment requires.
 
-   Confirm the values with `uv run python apps/cli/main.py env:status` before going live.
+   Confirm the values with `uv run python apps/cli/main.py env:status` before going live. Set `KV_URL` and `KV_API_TOKEN` when you rely on Replit DB; without them broker limits and idempotency fall back to an in-memory stub intended only for local smoke tests.
 
 3. Run database migrations so counters, purchases, and token snapshots have the expected schema.
 
@@ -85,7 +85,7 @@ Overview
 2. Open Secrets and add required env vars (see `.env.example`). Minimal set:
    - `BROKER_ADMIN_TOKEN`: a strong random string
    - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) for creating tenants
-   - KV store: `REPLIT_DB_URL` (or `KV_URL`); optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
+   - KV store: `REPLIT_DB_URL` (or `KV_URL`) **and** `KV_API_TOKEN`; optional `KV_NAMESPACE=vvv`, `KV_PREFIX=vvv:`
    - Optional: `BROKER_BASE_URL` = your public Replit URL (enables Makefile/CLI to reach the service)
    - Optional SQL (Replit SQL): `SQL_DATABASE_URL` (or `DATABASE_URL`)
  - Optional CDP Smart Wallet: `WALLET_PROVIDER=smart_wallet`, `NETWORK_ID=base-mainnet`, `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`, `CDP_WALLET_SECRET`
