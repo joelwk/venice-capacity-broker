@@ -33,6 +33,7 @@ class Tenant(SQLModel, table=True):  # type: ignore[call-arg]
     id: str = Field(primary_key=True)
     label: str
     status: str = Field(default="active")
+    owner_address: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
     updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
 
@@ -42,6 +43,7 @@ class Key(SQLModel, table=True):  # type: ignore[call-arg]
     tenant_id: str = Field(foreign_key="tenant.id")
     label: Optional[str] = None
     subkey: str
+    key_id: Optional[str] = Field(default=None)
     quota: int = 0
     expires_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.utcnow())

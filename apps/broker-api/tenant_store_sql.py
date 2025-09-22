@@ -56,18 +56,20 @@ class SQLTenantStore:
             # Upsert tenant row
             db_t = session.get(DbTenant, t.id)
             if db_t is None:
-                db_t = DbTenant(id=t.id, label=t.label, status=t.status)
+                db_t = DbTenant(id=t.id, label=t.label, status=t.status, owner_address=t.owner_address)
                 session.add(db_t)
                 # Ensure tenant row exists before inserting dependent key
                 session.flush()
             else:
                 db_t.label = t.label
                 db_t.status = t.status
+                if t.owner_address:
+                    db_t.owner_address = t.owner_address
                 db_t.updated_at = datetime.utcnow()
 
             # Insert key record (latest subkey/quota/expiry)
             expires_dt = self._parse_expires(t.expires_at)
-            key = DbKey(tenant_id=t.id, label=t.label, subkey=t.subkey, quota=int(t.quota), expires_at=expires_dt)
+            key = DbKey(tenant_id=t.id, label=t.label, subkey=t.subkey, quota=int(t.quota), expires_at=expires_dt, key_id=t.key_id)
             session.add(key)
             session.commit()
 
@@ -89,7 +91,7 @@ class SQLTenantStore:
             subkey = key.subkey if key is not None else ""
             quota = int(key.quota) if key is not None else 0
             exp = key.expires_at.isoformat().replace("+00:00", "Z") if (key and key.expires_at) else None
-            return Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status, owner_address=None, key_id=None)
+            return Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status, owner_address=db_t.owner_address, key_id=getattr(key, "key_id", None))
 
     def delete(self, tenant_id: str) -> None:
         # Soft-delete by marking revoked to avoid FK issues; mirror JSON store semantics where possible.
@@ -127,7 +129,7 @@ class SQLTenantStore:
                     quota=quota,
                     expires_at=exp,
                     status=db_t.status,
-                    owner_address=None,
-                    key_id=None,
+                    owner_address=db_t.owner_address,
+                    key_id=getattr(key, "key_id", None),
                 )
         return out
