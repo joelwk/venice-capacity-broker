@@ -32,6 +32,11 @@
       <div class="layout-2">
         <div>
           <section class="card">
+            <h2>How It Works</h2>
+            <p>Pay with ETH or USDC to issue a scoped API key stocked with DIEM compute credits. These credits cover Venice usage; no DIEM tokens ever land in your wallet.</p>
+          </section>
+
+          <section class="card">
             <h2>Markets</h2>
             <div id="marketMsg" class="status"></div>
             <div class="kvs" id="marketGrid"></div>
@@ -49,7 +54,7 @@
             <h2>Bids</h2>
             <div class="row grid-2">
               <div>
-                <label>Units (DIEM)</label>
+                <label>Units (DIEM credits)</label>
                 <input id="bidUnits" type="number" min="0.01" step="0.01" value="0.10" />
                 <label>Max price per unit (<span id="bidAssetLabel">USDC</span>)</label>
                 <input id="bidMaxPrice" type="number" min="0.00000001" step="0.00000001" value="1.00" />
@@ -115,7 +120,7 @@
             <div class="row grid-2">
               <div>
                 <div id="byUnits">
-                  <label>Units (DIEM)</label>
+                  <label>Units (DIEM credits)</label>
                   <input id="units" type="number" min="0.01" step="0.01" value="0.10" />
                 </div>
                 <div id="byBudget" class="hide">
@@ -685,7 +690,7 @@
           copyValue = String(amountMinor);
           formatted = `${copyValue} ${asset}`;
         }
-        summary.textContent = `Send ${formatted} to ${treasury}`;
+        summary.textContent = `Send ${formatted} to ${treasury} to issue your DIEM credit API key.`;
         if (asset === 'ETH'){
           try {
             const ethUsd = lastPrices && Number(lastPrices['ETH']);
@@ -862,7 +867,7 @@
         } else {
           const units = parseFloat(qs('units').value || '0');
           if (!isFinite(units) || units <= 0) {
-            qs('quoteMsg').textContent = 'Enter a valid DIEM amount.';
+            qs('quoteMsg').textContent = 'Enter a valid DIEM credit amount.';
             setPayIntro(PAY_INTRO_DEFAULT);
             return;
           }
@@ -883,7 +888,7 @@
               qs('quoteMsg').textContent = `Accepted units: ${body.acceptedMin} - ${body.acceptedMax}`;
             }
             if (tabMode === 'budget') {
-              let msg = `Server sized ${Number(body.units).toFixed(6)} DIEM for your budget.`;
+              let msg = `Server sized ${Number(body.units).toFixed(6)} DIEM credits for your budget.`;
               try {
                 const diemUsd = lastPrices && Number(lastPrices['DIEM']);
                 if (diemUsd && isFinite(diemUsd)) {
@@ -954,7 +959,7 @@
             vvvAmount = units * (diemUsd / vvvUsd);
           }
           const parts = [];
-          parts.push(units.toFixed(4) + ' DIEM');
+          parts.push(units.toFixed(4) + ' DIEM credits');
           if (Number.isFinite(ethAmount)) {
             parts.push(ethAmount.toFixed(6) + ' ETH');
           }

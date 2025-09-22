@@ -760,6 +760,7 @@ Endpoints
 
 Buyer UI
 - Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
+- Quotes price DIEM compute credits and returns a scoped API key; buyers do not receive DIEM tokens in their wallet.
 - For ETH, the page offers a one-click “Pay with wallet (ETH)” using `eth_sendTransaction`, and an EIP‑681 deeplink. For USDC, copy address/amount helpers are shown.
 - Receipts & audit: verification attaches a JSON receipt to each purchase (stored in SQL) with tx details, quote summary, and verification metadata.
 
