@@ -750,7 +750,9 @@ Idempotency
   - `ACCEPT_ASSETS=ETH,USDC`
   - For USDC: `USDC_ADDRESS` (Base mainnet) and `USDC_DECIMALS=6` (informational)
 - Venice key issuance
-  - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) is required to mint subkeys on successful verify
+  - `VENICE_PARENT_KEY` (or `VENICE_API_KEY`) must be set; the broker uses it as the parent bearer when buyers verify payments.
+  - Responses now include `{ purchaseId, status, tenantId, subkey, expiresAt }`; the UI copies the `subkey` once `status === "fulfilled"`.
+  - When the parent key is missing or Venice rejects issuance, the broker leaves the purchase `confirmed` and logs `purchase verify: key issuance failed` so operators can retry after fixing credentials.
 
 Endpoints
 - `POST /v1/purchases/verify` with `{ quoteId, txHash, buyerAddress }` → verifies on Base and issues a subkey
@@ -762,6 +764,7 @@ Buyer UI
 - Navigate to `/admin/buy.html`: connect wallet (Metamask), fetch quote, send payment to the treasury address, paste tx hash, retrieve key.
 - Quotes price DIEM compute credits and returns a scoped API key; buyers do not receive DIEM tokens in their wallet.
 - For ETH, the page offers a one-click “Pay with wallet (ETH)” using `eth_sendTransaction`, and an EIP‑681 deeplink. For USDC, copy address/amount helpers are shown.
+- Pay & Verify now highlights when quotes expire, shows JSON payloads for the issued key, and offers a `Copy key` shortcut once the broker returns `status: "fulfilled"`.
 - Receipts & audit: verification attaches a JSON receipt to each purchase (stored in SQL) with tx details, quote summary, and verification metadata.
 
 ## End-to-End Demo (MVP)

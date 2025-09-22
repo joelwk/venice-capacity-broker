@@ -139,6 +139,7 @@ Validated Front-End Flows
 Buyer Page
 - Navigate to `/admin/buy.html` for the Buyer flow. Cards appear when the corresponding flags are enabled in `/v1/env.features`.
 - Quote (baseline): connect wallet → request quote → pay to Treasury → paste tx hash → retrieve issued key. ETH offers one‑click `eth_sendTransaction` and EIP‑681 deeplink; USDC provides copy helpers.
+- Pay card now surfaces quote expiry warnings, displays the `{ purchaseId, status, tenantId, subkey, expiresAt }` JSON from the broker, and adds a `Copy key` action once `status` becomes `fulfilled`.
 - Clearing Price (when `CLEARING_ENABLED=true`): live clearing price card with SSE updates showing price and acceptance band (min/max), plus component prices (DIEM/VVV) when available.
 - Bids (when `BIDS_ENABLED=true`): Place Bid form signs EIP‑712 `PurchaseIntent` via wallet; creates a bid with server verification and SSE status updates. “My Bids” lists recent bids for the connected wallet and allows subscribing to bid updates.
 - Settle Now (when `SETTLEMENT_ENABLED=true`): for bids in the `accepted_window` with asset ETH/USDC, click Settle to create a server quote; the page then switches to the Quote card for Pay & Verify.

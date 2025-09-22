@@ -42,5 +42,6 @@
 
 * Keep Base gas funded; monitor **Diem balance**, **stake share**, **DIEM mint rate**, and **VVV emissions** each cycle.&#x20;
 * Automate stake/mint/burn/key-gen via Venice endpoints; log decisions for quorum/guardrail review.&#x20;
+* Configure a Venice parent key so broker purchase verifications immediately mint scoped API keys; confirmed purchases stay replayable if issuance fails the first time.&#x20;
 
 *TL;DR:* **Stake VVV** to earn ongoing compute + emissions. **Mint DIEM** (by locking sVVV) to make compute **tradeable** and capture market premia; **burn** to re-balance. Agents can run all of this **autonomously** on Base.&#x20;

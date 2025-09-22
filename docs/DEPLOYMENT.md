@@ -236,7 +236,9 @@ Buyer Flow (flag-gated)
   - `CORS_ENABLED=true` with `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
   - Pricing: `PRICE_UNIT_USDC` and/or `PRICE_UNIT_ETH_WEI`; optional `PRICE_QUOTE_TTL_SECONDS`
   - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC`, and `USDC_ADDRESS` for USDC
+  - Venice parent key: set `VENICE_PARENT_KEY` (preferred) or `VENICE_API_KEY` so the broker can mint scoped keys after payment verification. Missing credentials leave purchases in `confirmed` state and log a warning.
 - UI path: `/admin/buy.html` → connect wallet → get quote → pay → paste tx hash → receive subkey
+  - The Pay card now shows quote expiry notices, streams the broker response `{ purchaseId, status, tenantId, subkey, expiresAt }`, and exposes a Copy button when the key is issued.
  - Receipts: Successful verification persists a JSON `receipt` on the `Purchase` row (tx, quote summary, verifiedAt). Emit `purchase.verified` on the event bus.
 - API endpoints:
  - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>`

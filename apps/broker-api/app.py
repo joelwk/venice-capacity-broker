@@ -2356,12 +2356,21 @@ try:
                     if existing_tenant and existing_tenant.owner_address is None and tenant_id != default_tenant:
                         raise HTTPException(status_code=409, detail="tenant reserved for administrator")
 
-                    try:
-                        import math as _math
+                    import math as _math
 
-                        limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
-                        _units_limit = max(1, int(_math.ceil(float(q.units))))
-                        cons = {"diem": _units_limit} if limit_kind == "diem" else {limit_kind: _units_limit}
+                    limit_kind = (_os.getenv("PURCHASE_UNITS_KIND") or "diem").strip().lower()
+                    try:
+                        units_value = float(q.units)
+                    except (TypeError, ValueError):
+                        raise HTTPException(status_code=400, detail="quote units invalid")
+                    if units_value <= 0:
+                        raise HTTPException(status_code=400, detail="quote units must be positive")
+                    if limit_kind == "diem":
+                        cons = {"diem": round(units_value, 12)}
+                    else:
+                        _units_limit = max(1, int(_math.ceil(units_value)))
+                        cons = {limit_kind: _units_limit}
+                    try:
                         expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
                         parent_key = (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or "").strip()
                         if not parent_key:

@@ -94,6 +94,69 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch, tmp_path):
         assert out["subkey"] == "sk-test-123"
 
 
+def test_purchase_fractional_units_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUOTES_ENABLED", "true")
+    monkeypatch.setenv("PURCHASES_ENABLED", "true")
+    monkeypatch.setenv("PRICE_ENGINE", "static")
+    monkeypatch.setenv("PRICE_UNIT_ETH_WEI", str(10**15))
+    monkeypatch.setenv("PRICE_QUOTE_TTL_SECONDS", "120")
+    monkeypatch.setenv("BASE_RPC_URL", "http://localhost:8545")
+    monkeypatch.setenv("TREASURY_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    db_path = tmp_path / "buyer-fractional.db"
+    store_path = tmp_path / "store-fractional.json"
+    monkeypatch.setenv("SQL_DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("BROKER_STORE_FILE", str(store_path))
+    db_path.unlink(missing_ok=True)
+    store_path.unlink(missing_ok=True)
+
+    mod = _load_broker_app_module()
+
+    buyer_wallet = "0xdef0000000000000000000000000000000000002"
+    tx_payload = {
+        "to": "0xabc0000000000000000000000000000000000001",
+        "from": buyer_wallet,
+        "value": hex(10**15),
+    }
+    tx_hash = "0x" + "4" * 64
+
+    def _fake_rpc(url: str, method: str, params: list):  # noqa: ANN001
+        if method == "eth_getTransactionReceipt":
+            return {"status": hex(1), "blockNumber": hex(12345), "logs": []}
+        if method == "eth_getTransactionByHash":
+            return tx_payload
+        raise AssertionError(f"unexpected rpc call: {method}")
+
+    monkeypatch.setattr(mod, "_rpc_call", _fake_rpc, raising=True)
+
+    recorded: dict[str, object] = {}
+
+    def _fake_issue(parent_key: str, label: str, consumption_limit, expires_at: str | None = None):  # noqa: ANN001
+        recorded["consumption_limit"] = consumption_limit
+        return {"apiKey": "sk-fractional-123", "id": "kid-2"}
+
+    monkeypatch.setattr(mod.keys, "issue_scoped_key", _fake_issue, raising=True)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(mod.app)
+    quote = client.get("/v1/quotes", params={"units": 0.01, "asset": "ETH"})
+    assert quote.status_code == 200, quote.text
+    data = quote.json()
+    tx_payload["value"] = hex(int(data["totalPrice"]))
+
+    resp = client.post(
+        "/v1/purchases/verify",
+        json={
+            "quoteId": data["quoteId"],
+            "txHash": tx_hash,
+            "buyerAddress": buyer_wallet,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert isinstance(recorded.get("consumption_limit"), dict)
+    assert recorded["consumption_limit"]["diem"] == pytest.approx(0.01, rel=1e-9, abs=1e-12)
+
+
 def test_budget_quote_path(monkeypatch, tmp_path):
     monkeypatch.setenv("QUOTES_ENABLED", "true")
     monkeypatch.setenv("PRICE_ENGINE", "market")

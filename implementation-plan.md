@@ -152,10 +152,10 @@ We encode each revenue stream as a **LangGraph workflow** with nodes for observa
 
 ### C) **Resell API capacity** (multi‑tenant proxy + DIEM rentals)
 
-1. **Broker API**: a thin HTTP service that accepts prompts and forwards to Venice using **per‑tenant scoped keys** with **consumptionLimit** (1–N Diem/day) and expiry; throttle per key. ([docs.venice.ai][2])
+1. **Broker API**: a thin HTTP service that accepts prompts and forwards to Venice using **per-tenant scoped keys** with **consumptionLimit** (1–N Diem/day) and expiry; throttle per key. ([docs.venice.ai][2])
 2. **Pricing**: dynamic (surge when utilisation is high), set to undercut centralized APIs while margining >0 since our marginal cost is 0 when staked. Venice explicitly allows reselling capacity. ([Venice AI][3])
-3. **Inventory failsafe**: if Diem budget nearly exhausted midday, broker pauses lower‑tier tenants, offers upsell to DIEM rental, or raises price.
-4. **CapacityBroker agent**: matches supply/demand (escrow DIEM for B2B rentals; or just sub‑keys with quotas).
+3. **Inventory failsafe**: if Diem budget nearly exhausted midday, broker pauses lower-tier tenants, offers upsell to DIEM rental, or raises price.
+4. **CapacityBroker agent**: matches supply/demand (escrow DIEM for B2B rentals; or just sub-keys with quotas) and replays buyer verifications when necessary; with a valid Venice parent key the broker now issues scoped keys as soon as payments clear.
 5. **Abuse controls**: content filters if you need them; rate limits; revocation of keys.
 
 ### D) **Integrate AI costs into app/DeFi tokenomics**
