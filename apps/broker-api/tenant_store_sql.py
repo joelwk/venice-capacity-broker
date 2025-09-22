@@ -28,6 +28,8 @@ class Tenant:
     quota: int
     expires_at: Optional[str] = None
     status: str = "active"  # active|revoked
+    owner_address: Optional[str] = None
+    key_id: Optional[str] = None
 
 
 class SQLTenantStore:
@@ -87,7 +89,7 @@ class SQLTenantStore:
             subkey = key.subkey if key is not None else ""
             quota = int(key.quota) if key is not None else 0
             exp = key.expires_at.isoformat().replace("+00:00", "Z") if (key and key.expires_at) else None
-            return Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status)
+            return Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status, owner_address=None, key_id=None)
 
     def delete(self, tenant_id: str) -> None:
         # Soft-delete by marking revoked to avoid FK issues; mirror JSON store semantics where possible.
@@ -125,5 +127,7 @@ class SQLTenantStore:
                     quota=quota,
                     expires_at=exp,
                     status=db_t.status,
+                    owner_address=None,
+                    key_id=None,
                 )
         return out
