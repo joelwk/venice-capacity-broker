@@ -237,6 +237,43 @@ try:
     client = VeniceClient()
     keys = KeyManager(client)
 
+    from typing import Any, Iterable
+
+    def _extract_field(payload: Any, candidates: Iterable[str]) -> str:
+        """Find the first non-empty string (or numeric) value for any candidate key."""
+        try:
+            keys_iter = [k for k in candidates if k]
+        except Exception:
+            keys_iter = list(candidates)
+        seen: set[int] = set()
+        stack: list[Any] = [payload]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, (dict, list, tuple, set)):
+                ident = id(current)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+            if isinstance(current, dict):
+                for key in keys_iter:
+                    if key not in current:
+                        continue
+                    value = current[key]
+                    if isinstance(value, str):
+                        text = value.strip()
+                        if text:
+                            return text
+                    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                        return str(value)
+                for value in current.values():
+                    if isinstance(value, (dict, list, tuple, set)):
+                        stack.append(value)
+            elif isinstance(current, (list, tuple, set)):
+                for item in current:
+                    if isinstance(item, (dict, list, tuple, set)):
+                        stack.append(item)
+        return ""
+
     # --- Defaults from environment ---
     ADMIN_TOKEN = _os.getenv("BROKER_ADMIN_TOKEN")
     REQUIRE_ADMIN = (_os.getenv("BROKER_REQUIRE_ADMIN_TOKEN") or "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -985,42 +1022,12 @@ try:
             sub = keys.issue_scoped_key(parent_key, label, quota, expires_at)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"Failed to create subkey: {e}")
-        # Extract the api key token from common response shapes
-        def _extract_api_key(obj: dict) -> str:
-            try:
-                # Direct fields first
-                for k in ("apiKey", "api_key", "key", "token", "api_key_value"):
-                    v = obj.get(k)
-                    if isinstance(v, str) and len(v) >= 16:
-                        return v
-                # Nested objects
-                for v in obj.values():
-                    if isinstance(v, dict):
-                        s = _extract_api_key(v)
-                        if s:
-                            return s
-            except Exception:
-                pass
-            return ""
 
-        subkey = _extract_api_key(sub)
+        subkey = _extract_field(sub, ("apiKey", "api_key", "key", "token", "api_key_value"))
         if not subkey:
-            # Do not leak response content; include top-level keys to aid debugging
-            try:
-                keys_present = list(sub.keys())
-            except Exception:
-                keys_present = []
+            keys_present = list(sub.keys()) if isinstance(sub, dict) else []
             raise HTTPException(status_code=502, detail=f"Subkey not returned by Venice (fields={keys_present})")
-        # Attempt to capture key id for later revoke
-        key_id = ""
-        try:
-            for k in ("id", "keyId", "apiKeyId", "api_key_id"):
-                v = sub.get(k)
-                if v:
-                    key_id = str(v)
-                    break
-        except Exception:
-            key_id = ""
+        key_id = _extract_field(sub, ("id", "keyId", "apiKeyId", "api_key_id"))
 
         tenant = Tenant(id=req.tenant_id, label=label, subkey=subkey, quota=quota, expires_at=expires_at, key_id=key_id or None)
         store.upsert(tenant)
@@ -2356,22 +2363,19 @@ try:
                         _units_limit = max(1, int(_math.ceil(float(q.units))))
                         cons = {"diem": _units_limit} if limit_kind == "diem" else {limit_kind: _units_limit}
                         expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
+                        parent_key = (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or "").strip()
+                        if not parent_key:
+                            raise RuntimeError("Venice parent key not configured")
                         sub = keys.issue_scoped_key(
-                            (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or ""),
+                            parent_key,
                             label=f"Buyer {buyer_norm[2:8]}...",
                             consumption_limit=cons,
                             expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         )
 
-                        def _extract(obj: dict, keys: list[str]) -> str:
-                            for k in keys:
-                                v = obj.get(k)
-                                if isinstance(v, str) and v:
-                                    return v
-                            return ""
-
-                        subkey = _extract(sub, ["apiKey", "api_key", "key", "token", "api_key_value"]) or ""
-                        kid = _extract(sub, ["id", "keyId", "apiKeyId", "api_key_id"]) or None
+                        subkey = _extract_field(sub, ("apiKey", "api_key", "key", "token", "api_key_value"))
+                        kid_val = _extract_field(sub, ("id", "keyId", "apiKeyId", "api_key_id"))
+                        kid = kid_val or None
                         if not subkey:
                             raise RuntimeError("failed to mint subkey")
 
@@ -2394,6 +2398,7 @@ try:
                         p.fulfilled_at = _dt.utcnow()
                         q.status = "filled"
                     except Exception as e:  # noqa: BLE001
+                        logger.warning("purchase verify: key issuance failed for purchase %s: %s", pur_id, e)
                         p.status = "confirmed"
 
                     s.add(p)
