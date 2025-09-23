@@ -236,7 +236,7 @@ Buyer Flow (flag-gated)
   - `CORS_ENABLED=true` with `CORS_ALLOW_ORIGINS=https://your-buyer.app,https://your-admin.app`
   - Pricing: `PRICE_UNIT_USDC` and/or `PRICE_UNIT_ETH_WEI`; optional `PRICE_QUOTE_TTL_SECONDS`
   - Discounts: leave defaults for a 5% markdown, or override with `PRICE_DISCOUNT_BPS` / `PRICE_DISCOUNT_<ASSET>_BPS` (basis points or percent-style values)
-  - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC,WBTC`, `USDC_ADDRESS` for USDC, and `WBTC_TOKEN_ADDRESS` (plus `TRADE_PATH` coverage) before exposing WBTC in the dropdown
+  - Payments: `BASE_RPC_URL`, `TREASURY_ADDRESS`, `ACCEPT_ASSETS=ETH,USDC,WBTC`, `USDC_ADDRESS` for USDC, and `WBTC_TOKEN_ADDRESS` (plus `TRADE_PATH` coverage) before exposing WBTC in the dropdown. When Base liquidity is thin, set `WBTC_PRICE_PATH` (or `WBTC_TRADE_PATH`) to pin price discovery to the deepest pools.
   - Venice parent key: set `VENICE_PARENT_KEY` (preferred) or `VENICE_API_KEY` so the broker can mint scoped keys after payment verification. Missing credentials leave purchases in `confirmed` state and log a warning.
 - UI path: `/admin/buy.html` -> Step 1: get a quote (copy helpers + countdown) -> Step 2: confirm wallet + tx hash after the quote unlocks verification -> Step 3: verify and copy the scoped key.
   - The Pay card now shows quote expiry notices, streams the broker response `{ purchaseId, status, tenantId, subkey, expiresAt }`, and exposes a Copy button when the key is issued.

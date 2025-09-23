@@ -1104,18 +1104,33 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
                 if not token or not quote:
                     raise ValueError("WBTC or QUOTE token address missing")
+                override = self._route_optional_from_env("WBTC_PRICE_PATH") or self._route_optional_from_env("WBTC_TRADE_PATH")
                 weth = self._weth_address()
-                routes = [make_route([token, quote])]
+                routes = [override] if override else [make_route([token, quote])]
                 if weth and weth.lower() not in {token.lower(), quote.lower()}:
                     routes.append(make_route([token, weth, quote]))
                 for route in routes:
-                    try:
-                        bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
+                    priced = None
+                    for amt in (1.0, 0.1, 0.01, 0.001):
+                        try:
+                            bp = self.best_price(route, amount_in_decimal=amt, label_symbol=su)
+                        except Exception:
+                            bp = None
+                        if not bp:
+                            continue
                         price = float(bp.get("price") or 0.0)
                         if self._valid_price(price):
-                            return price
-                    except Exception:
-                        continue
+                            priced = price
+                            break
+                    if priced is None:
+                        try:
+                            scan_price = self._best_price_scan(route, start=1.0, min_amount=1e-6, factor=10.0)
+                        except Exception:
+                            scan_price = None
+                        if self._valid_price(scan_price):
+                            priced = float(scan_price)
+                    if priced is not None and self._valid_price(priced):
+                        return float(priced)
                 # Reserve-based fallback(s)
                 px_direct = self._mid_price_from_reserves(token, quote)
                 if self._valid_price(px_direct):

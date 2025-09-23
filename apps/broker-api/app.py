@@ -2094,6 +2094,8 @@ try:
             from services.pricing.service import PricingService  # type: ignore
             _pricing = PricingService()
 
+            from typing import Any, Dict
+
             class QuoteResponse(BaseModel):
                 quoteId: str
                 units: float
@@ -2104,7 +2106,7 @@ try:
                 acceptedMax: float | None = None
                 expiresAt: int
                 discountBps: int | None = None
-                discount: dict[str, object] | None = None
+                discount: Dict[str, Any] | None = None
                 unitPriceBeforeDiscount: int | None = None
 
             @app.get("/v1/quotes", response_model=QuoteResponse)
