@@ -1,5 +1,4 @@
-import json
-import threading
+import json\r\nimport re\r\nimport threading
 import time
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -156,46 +155,54 @@ def test_quote_to_key_happy_path():
                 page.goto(f"{base_url}/buy.html")
                 page.wait_for_load_state("networkidle")
 
-                page.get_by_role("button", name="Connect Wallet").click()
-                expect(page.locator("#walletStatus")).to_contain_text("Connected:")
-
+                # Step 1 - request a quote
                 page.get_by_role("button", name="Get Quote").click()
-                page.wait_for_function(
-                    "() => !document.getElementById('quoteAdvanceBtn').classList.contains('hide')"
-                )
+                page.wait_for_selector("#quote-details:not(.hidden)")
 
-                page.get_by_role("button", name="Continue to Pay & Verify").click()
-                page.wait_for_function(
-                    "() => !document.getElementById('payFlow').classList.contains('hide')"
-                )
+                expect(page.locator("#quote-status")).to_have_text("Quote ready. Send the payment before it expires.")
+                expect(page.locator("#quote-amount")).to_have_value(re.compile("USDC"))
+                expect(page.locator("#quote-address")).to_have_value(TREASURY_ADDRESS)
 
-                expect(page.locator("#paySummary")).to_contain_text("Send")
-                expect(page.locator("#paySummary")).to_contain_text(TREASURY_ADDRESS)
-
-                page.locator("#copyAddressBtn").click()
+                page.locator("#copy-amount").click()
                 page.wait_for_function("() => window.__clipboardWrites.length === 1")
-                expect(page.locator("#payStatus")).to_have_text("Treasury address copied.")
+                expect(page.locator("#quote-status")).to_have_text("Amount copied to clipboard.")
 
-                page.locator("#copyAmountBtn").click()
+                page.locator("#copy-address").click()
                 page.wait_for_function("() => window.__clipboardWrites.length === 2")
-                expect(page.locator("#payStatus")).to_contain_text("copied")
+                expect(page.locator("#quote-status")).to_have_text("Treasury address copied.")
 
-                page.fill("#txHash", "0xfeedface")
-                page.get_by_role("button", name="Verify payment").click()
+                page.wait_for_function("() => !document.getElementById('step-verify').classList.contains('step-disabled')")
 
-                expect(page.locator("#verifyMsg")).to_contain_text("Key issued")
-                expect(page.locator("#keyOut")).to_contain_text("demo-subkey-123")
+                page.locator("#connect-wallet").click()
+                expect(page.locator("#wallet-address")).to_have_value(re.compile("^0xdeadbeef", re.IGNORECASE))
+                expect(page.locator("#verify-status")).to_contain_text("Wallet connected")
 
-                page.wait_for_function(
-                    "() => !document.getElementById('copyKeyBtn').classList.contains('hide')"
-                )
-                page.get_by_role("button", name="Copy key").click()
+                tx_hash = "0x" + "a" * 64
+                page.fill("#tx-hash", tx_hash)
+                page.wait_for_function("() => !document.getElementById('verify-btn').disabled")
+
+                page.get_by_role("button", name="Verify Payment").click()
+                expect(page.locator("#verify-status")).to_contain_text("Payment verified")
+
+                page.wait_for_selector("#step-key:not(.step-hidden)")
+                expect(page.locator("#api-key")).to_have_value("demo-subkey-123")
+                expect(page.locator("#key-status")).to_contain_text("API key issued")
+
+                page.locator("#copy-key").click()
                 page.wait_for_function("() => window.__clipboardWrites.length === 3")
-                expect(page.locator("#verifyMsg")).to_contain_text("copied")
+                expect(page.locator("#key-status")).to_have_text("API key copied to clipboard.")
 
                 clipboard_writes = page.evaluate("window.__clipboardWrites")
-                assert clipboard_writes[0] == TREASURY_ADDRESS
-                assert float(clipboard_writes[1]) == pytest.approx(22.66, rel=1e-6)
+                amount_text = clipboard_writes[0]
+                assert amount_text.endswith("USDC")
+                assert float(amount_text.split()[0]) == pytest.approx(22.66, rel=1e-6)
+                assert clipboard_writes[1] == TREASURY_ADDRESS
                 assert clipboard_writes[2] == "demo-subkey-123"
             finally:
                 browser.close()
+
+
+
+
+
+
