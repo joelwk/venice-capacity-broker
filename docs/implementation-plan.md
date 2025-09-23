@@ -17,6 +17,13 @@ Below is a concrete, end‑to‑end implementation plan you can hand to engineer
 We’ll implement four revenue paths in software (staking, DIEM mint/trade, resale of capacity, tokenomic integration), and govern them via **quorum decisioning** and **dynamic listen intervals** as laid out in your multi‑agent architecture notes.&#x20;
 For economics/timing details and risk levers (utilization, emissions, “active staker” effects, DIEM mint‑rate dynamics), we follow your tokenomics summary.&#x20;
 
+## Status checkpoint (Broker API baseline)
+
+* Completed: Wallet and staking automation keeps us active (`services/wallet`, `services/staking/client.py`, `agents/stake_master/agent.py`).
+* Completed: Broker API with scoped keys and buyer UI handles quotes, payments, and issuance (`apps/broker-api/app.py`, `apps/control-plane/*`).
+* Completed: DIEM mint/burn plus ArbiDiem risk and pricing loops run in production (`services/diem`, `agents/arbi_diem/agent.py`, `services/marketdata/provider.py`).
+* Next: Promote the orchestrator to the quorum graph and expand AI Treasurer automation before scaling tenant load.
+
 ---
 
 ## 1) Monorepo layout
@@ -186,32 +193,32 @@ We encode each revenue stream as a **LangGraph workflow** with nodes for observa
 
 ## 9) Step‑by‑step delivery plan (2–4 week slices)
 
-**Sprint 1 — Foundations**
+**Sprint 1 - Foundations** *(Status: Completed - wallet + StakeMaster delivered)*
 
-* Stand up **wallet service** (CDP + ETH account) and **staking** calls on Base. Dry‑run on Base Sepolia first, then mainnet addresses (VVV, staking). AgentKit + LangChain example adapted. ([GitHub][5])
-* Implement **Venice autonomous key** flow end‑to‑end and test scoped keys with consumption limits. ([docs.venice.ai][2])
-* Create **StakeMaster** agent (claim/compound/heartbeat).
+* Delivered wallet service and Base staking helpers (`services/wallet`, `services/staking/client.py`).
+* Delivered Venice autonomous key issuance with scoped limits (`services/venice_keys/manager.py`, CLI verbs).
+* Delivered StakeMaster agent with claim, compound, and heartbeat loops (`agents/stake_master/agent.py`, `libs/agentkit_ext/actions.py`).
 
-**Sprint 2 — Broker & quotas**
+**Sprint 2 - Broker & quotas** *(Status: Completed - Broker API live with buyer flow)*
 
-* Ship **Broker API** (multi‑tenant proxy); per‑client scoped keys + quotas + usage metering.
-* Dynamic pricing policy + basic dashboard for Diem usage.
-* First external pilot customers (discord devs, bot makers).
+* Delivered Broker API with scoped keys, quotas, and usage metering (`apps/broker-api/app.py`, `services/venice_keys/manager.py`).
+* Delivered pricing surfaces and buyer dashboard (`apps/control-plane/*`, `services/pricing/service.py`).
+* Ready for pilot tenants through the `/admin/buy.html` wizard and CLI admin helpers.
 
-**Sprint 3 — DIEM mint/trade**
+**Sprint 3 - DIEM mint/trade** *(Status: Completed - ArbiDiem running with DIEM services)*
 
-* Add **DIEM module**: mint, stake, sell (Aerodrome), burn/unlock. Automated **arb check**; slippage guard. ([Venice AI][4])
-* Ship **ArbiDiem** crew + fair‑value model (perpetuity \$1/day) and **mint‑rate** watcher. ([Venice AI][10])
+* Delivered DIEM mint, burn, and staking module with Aerodrome routing and slippage guards (`services/diem/client.py`, `libs/dex/providers.py`).
+* Delivered ArbiDiem agent with fair value model and mint-rate watcher (`agents/arbi_diem/agent.py`, `services/marketdata/provider.py`).
 
-**Sprint 4 — Quorum & treasury**
+**Sprint 4 - Quorum & treasury** *(Status: Next - promote orchestration to multi-agent)*
 
-* Implement **Quorum** orchestrator (weighted vote; dynamic listen interval).&#x20;
-* **AI Treasurer** for an internal dApp (eat our own dogfood): hold DIEM to cover Broker, rebalance with VVV/DIEM.
+* Implement Quorum orchestrator with weighted voting, dynamic listen intervals, and LangGraph wiring over existing agents.
+* Expand AI Treasurer into executable treasury actions that coordinate DIEM buffers for Broker demand.
 
-**Sprint 5 — Hardening & scale**
+**Sprint 5 - Hardening & scale** *(Status: Later - after quorum launch)*
 
-* Abuse prevention (key revocation, anomaly detection), SLAs, autoscaling workers.
-* Add **price hedges** (if supported venues exist) & stop‑loss automations.&#x20;
+* Harden abuse prevention, anomaly detection, SLAs, and autoscaling once quorum orchestration is live.
+* Add price hedges and stop-loss automations when supporting venues are ready.
 
 ---
 
@@ -274,11 +281,11 @@ And from your internal docs for architecture & tokenomics details we used when d
 
 ### TL;DR build order
 
-1. Lift AgentKit + LangChain ETH example; wire Base + staking + autonomous keying to Venice. ([GitHub][5], [docs.venice.ai][2])
-2. Ship **Broker API** (scoped keys + quotas). ([docs.venice.ai][2])
-3. Add **DIEM mint/trade** with dual DEX aggregator (Uniswap V2 + Aerodrome); deploy **ArbiDiem** crew. ([Venice AI][4])
-4. Add **Quorum** orchestrator + **StakeMaster** + **AI Treasurer**; encode listen‑interval rules.&#x20;
-5. Harden, hedge, and scale tenants; iterate towards profit‑max with minimal information asymmetry.
+1. [Done] Lift AgentKit + LangChain ETH example; wire Base staking and autonomous keying to Venice (`services/wallet`, `services/venice_keys/manager.py`).
+2. [Done] Ship Broker API with scoped keys, quotas, and buyer wizard (`apps/broker-api/app.py`, `apps/control-plane/buy.js`).
+3. [Done] Add DIEM mint/trade flows with dual DEX routing and ArbiDiem crew (`services/diem`, `agents/arbi_diem/agent.py`).
+4. [Next] Add Quorum orchestrator and upgrade StakeMaster/ArbiDiem coordination via LangGraph (`graph/workflows/orchestrator.py`).
+5. [Later] Harden abuse prevention, hedges, and scaling guardrails after quorum launch.
 
 This plan stays tightly aligned with VVV/DIEM mechanics, AgentKit capabilities, and your quorum‑driven vision—while giving you a pragmatic, testable path from day‑1 automation (self‑staking + self‑keying) to multi‑agent profit optimization on Base.
 

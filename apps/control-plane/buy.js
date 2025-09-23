@@ -463,7 +463,7 @@ function handleVerifyResponse(body) {
   const expiresAt = body.expiresAt;
   const purchaseId = body.purchaseId;
   if (subkey) {
-    showAlert(verifyStatus, "success", "? Payment verified. Copy your API key below.");
+    showAlert(verifyStatus, "success", "Payment verified. Copy your API key below.");
     showKey({ subkey, expiresAt });
     return;
   }
@@ -491,9 +491,9 @@ function showKey({ subkey, expiresAt, status, purchaseId }) {
       : "Pending";
   }
   if (subkey) {
-    showAlert(keyStatus, "success", "? API key issued. Store it in a safe place.");
+    showAlert(keyStatus, "success", "API key issued. Store it in a safe place.");
   } else {
-    const baseMessage = "? Payment verified. We are issuing your key.";
+    const baseMessage = "Payment verified. We are issuing your key.";
     const extra = purchaseId ? ` Purchase id: ${purchaseId}.` : "";
     showAlert(keyStatus, "info", baseMessage + extra);
   }
@@ -527,7 +527,7 @@ async function pollPurchaseUntilReady(purchaseId) {
       if (body && body.subkey) {
         showKey({ subkey: body.subkey, expiresAt: body.expiresAt });
         clearAlert(keyStatus);
-        showAlert(keyStatus, "success", "? API key issued. Store it in a safe place.");
+        showAlert(keyStatus, "success", "API key issued. Store it in a safe place.");
         return;
       }
       showAlert(keyStatus, "info", `Issuing key... status=${body.status || "pending"}`);
