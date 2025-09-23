@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   env: null,
   treasury: "",
   quote: null,
@@ -527,6 +527,8 @@ async function pollPurchaseUntilReady(purchaseId) {
   showAlert(keyStatus, "info", "Still waiting for key issuance. Keep your purchase id handy and try again later.");
 }
 
+}
+
 async function copyToClipboard(value, successMessage, alertEl) {
   if (!value) return;
   try {
@@ -709,6 +711,7 @@ async function init() {
 }
 
 init();
+
 
 
 
