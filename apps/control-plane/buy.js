@@ -25,6 +25,8 @@ const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC";
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
 const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
+const JSON_GET_HEADERS = { Accept: "application/json" };
+const JSON_POST_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
 
 function $(id) {
   return document.getElementById(id);
@@ -343,7 +345,7 @@ async function requestQuote() {
     const params = new URLSearchParams();
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
-    const res = await fetch(`${QUOTE_ENDPOINT}?${params.toString()}`);
+    const res = await fetch(`${QUOTE_ENDPOINT}?${params.toString()}`, { headers: JSON_GET_HEADERS });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || "Quote request failed");
@@ -418,7 +420,7 @@ async function handleVerify() {
   try {
     const res = await fetch(VERIFY_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: JSON_POST_HEADERS,
       body: JSON.stringify({
         quoteId: state.quote.quoteId,
         txHash,
@@ -505,7 +507,7 @@ async function pollPurchaseUntilReady(purchaseId) {
     attempt += 1;
     try {
       await delay(3000);
-      const res = await fetch(`${PURCHASE_ENDPOINT}/${encodeURIComponent(purchaseId)}`);
+      const res = await fetch(`${PURCHASE_ENDPOINT}/${encodeURIComponent(purchaseId)}`, { headers: JSON_GET_HEADERS });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(body && (body.detail || body.message) || res.statusText);
@@ -581,7 +583,7 @@ async function connectWallet() {
 
 async function loadEnv() {
   try {
-    const res = await fetch(ENV_ENDPOINT);
+    const res = await fetch(ENV_ENDPOINT, { headers: JSON_GET_HEADERS });
     if (!res.ok) return;
     const body = await res.json();
     state.env = body || {};
@@ -622,7 +624,7 @@ function populateAssets(assets) {
 
 async function fetchPrices() {
   try {
-    const res = await fetch(PRICES_ENDPOINT);
+    const res = await fetch(PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
     if (!res.ok) {
       throw new Error(await res.text());
     }
