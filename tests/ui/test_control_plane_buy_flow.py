@@ -1,4 +1,5 @@
-import json\r\nimport re\r\nimport threading
+import json
+import threading
 import time
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -155,6 +156,11 @@ def test_quote_to_key_happy_path():
                 page.goto(f"{base_url}/buy.html")
                 page.wait_for_load_state("networkidle")
 
+                page.wait_for_selector("#pricing-table:not(.hidden)")
+                expect(page.locator("#pricing-tbody tr")).to_have_count(3)
+                expect(page.locator("#pricing-tbody tr").nth(0).locator('td').first()).to_have_text("DIEM")
+                expect(page.locator("#pricing-note")).to_have_text("Generate a quote to compare mint pricing against the market.")
+
                 # Step 1 - request a quote
                 page.get_by_role("button", name="Get Quote").click()
                 page.wait_for_selector("#quote-details:not(.hidden)")
@@ -170,6 +176,10 @@ def test_quote_to_key_happy_path():
                 page.locator("#copy-address").click()
                 page.wait_for_function("() => window.__clipboardWrites.length === 2")
                 expect(page.locator("#quote-status")).to_have_text("Treasury address copied.")
+
+                page.wait_for_function("() => document.getElementById('pricing-note').textContent.includes('Latest quote')")
+                expect(page.locator("#pricing-note")).to_contain_text("Latest quote (USDC)")
+                expect(page.locator("#pricing-tbody tr").nth(1).locator('td').nth(3)).to_have_text("0.00%")
 
                 page.wait_for_function("() => !document.getElementById('step-verify').classList.contains('step-disabled')")
 

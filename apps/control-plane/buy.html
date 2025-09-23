@@ -16,110 +16,134 @@
     </header>
 
     <main>
-      <p class="page-intro">Buy scoped Venice access by paying with crypto. Follow the steps below to request a quote, send the payment, and collect your API key.</p>
+      <div class="page-grid">
+        <aside class="card pricing-card" id="pricing-card">
+          <div class="pricing-header">
+            <h2>Market Snapshot</h2>
+            <p class="muted small">Live asset prices compared to DIEM.</p>
+          </div>
+          <div id="pricing-empty" class="status small">Loading market data…</div>
+          <table id="pricing-table" class="price-table hidden" aria-live="polite">
+            <thead>
+              <tr>
+                <th scope="col">Asset</th>
+                <th scope="col">Price (USD)</th>
+                <th scope="col">DIEM ratio</th>
+                <th scope="col">Discount</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-tbody"></tbody>
+          </table>
+          <div id="pricing-note" class="status small muted"></div>
+        </aside>
 
-      <section class="card step-card" id="step-quote">
-        <div class="step-heading">
-          <span class="step-badge">1</span>
-          <div>
-            <h2>Step 1 - Get Payment Details</h2>
-            <p class="muted">Request a live quote and send the funds before the timer expires.</p>
-          </div>
-        </div>
-        <div class="step-body">
-          <div class="step-form-group">
-            <div class="form-field">
-              <label for="quote-units">DIEM credits</label>
-              <input id="quote-units" type="number" min="0.01" step="0.01" value="0.10" />
-            </div>
-            <div class="form-field">
-              <label for="quote-asset">Pay with</label>
-              <select id="quote-asset"></select>
-            </div>
-          </div>
-          <div class="step-actions">
-            <button id="quote-btn" type="button">Get Quote</button>
-            <button id="quote-refresh" type="button" class="ghost" hidden>Refresh Quote</button>
-          </div>
-                  <div id="quote-status" class="alert hidden" role="status"></div>
-          <div id="quote-details" class="step-details hidden">
-            <p class="muted">Send this exact amount to the address below.</p>
-            <div class="info-grid">
-              <div class="info-block">
-                <label>Amount to send</label>
-                <div class="copy-field">
-                  <input id="quote-amount" type="text" readonly />
-                  <button id="copy-amount" type="button">Copy Amount</button>
-                </div>
-                <div id="quote-usd" class="status small"></div>
-              </div>
-              <div class="info-block">
-                <label>Treasury address</label>
-                <div class="copy-field">
-                  <input id="quote-address" type="text" readonly />
-                  <button id="copy-address" type="button">Copy Address</button>
-                </div>
+        <div class="flow-column">
+          <p class="page-intro">Buy scoped Venice access by paying with crypto. Follow the steps below to request a quote, send the payment, and collect your API key.</p>
+
+          <section class="card step-card" id="step-quote">
+            <div class="step-heading">
+              <span class="step-badge">1</span>
+              <div>
+                <h2>Step 1 - Get Payment Details</h2>
+                <p class="muted">Request a live quote and send the funds before the timer expires.</p>
               </div>
             </div>
-            <div class="quote-meta">
-              <span id="quote-countdown" class="pill">Quote expires in --:--</span>
+            <div class="step-body">
+              <div class="step-form-group">
+                <div class="form-field">
+                  <label for="quote-units">DIEM credits</label>
+                  <input id="quote-units" type="number" min="0.01" step="0.01" value="0.10" />
+                </div>
+                <div class="form-field">
+                  <label for="quote-asset">Pay with</label>
+                  <select id="quote-asset"></select>
+                </div>
+              </div>
+              <div class="step-actions">
+                <button id="quote-btn" type="button">Get Quote</button>
+                <button id="quote-refresh" type="button" class="ghost" hidden>Refresh Quote</button>
+              </div>
+              <div id="quote-status" class="alert hidden" role="status"></div>
+              <div id="quote-details" class="step-details hidden">
+                <p class="muted">Send this exact amount to the address below.</p>
+                <div class="info-grid">
+                  <div class="info-block">
+                    <label>Amount to send</label>
+                    <div class="copy-field">
+                      <input id="quote-amount" type="text" readonly />
+                      <button id="copy-amount" type="button">Copy Amount</button>
+                    </div>
+                    <div id="quote-usd" class="status small"></div>
+                  </div>
+                  <div class="info-block">
+                    <label>Treasury address</label>
+                    <div class="copy-field">
+                      <input id="quote-address" type="text" readonly />
+                      <button id="copy-address" type="button">Copy Address</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="quote-meta">
+                  <span id="quote-countdown" class="pill">Quote expires in --:--</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </section>
+          </section>
 
-      <section class="card step-card step-disabled" id="step-verify">
-        <div class="step-heading">
-          <span class="step-badge">2</span>
-          <div>
-            <h2>Step 2 - Confirm Transaction</h2>
-            <p class="muted">After you send the payment, paste the transaction details so we can verify it on-chain.</p>
-          </div>
-        </div>
-        <div class="step-body">
-          <div class="form-field">
-            <label for="wallet-address">Your wallet address</label>
-            <div class="input-with-button">
-              <input id="wallet-address" type="text" placeholder="0x..." autocomplete="off" />
-              <button id="connect-wallet" type="button" class="ghost">Connect Wallet</button>
+          <section class="card step-card step-disabled" id="step-verify">
+            <div class="step-heading">
+              <span class="step-badge">2</span>
+              <div>
+                <h2>Step 2 - Confirm Transaction</h2>
+                <p class="muted">After you send the payment, paste the transaction details so we can verify it on-chain.</p>
+              </div>
             </div>
-          </div>
-          <div class="form-field">
-            <label for="tx-hash">Transaction hash</label>
-            <input id="tx-hash" type="text" placeholder="0x..." autocomplete="off" />
-          </div>
-          <div class="step-actions">
-            <button id="verify-btn" type="button" disabled>Verify Payment</button>
-            <div id="verify-spinner" class="spinner hidden" aria-hidden="true"></div>
-          </div>
-                  <div id="verify-status" class="alert hidden" role="status"></div>
-        </div>
-      </section>
+            <div class="step-body">
+              <div class="form-field">
+                <label for="wallet-address">Your wallet address</label>
+                <div class="input-with-button">
+                  <input id="wallet-address" type="text" placeholder="0x..." autocomplete="off" />
+                  <button id="connect-wallet" type="button" class="ghost">Connect Wallet</button>
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="tx-hash">Transaction hash</label>
+                <input id="tx-hash" type="text" placeholder="0x..." autocomplete="off" />
+              </div>
+              <div class="step-actions">
+                <button id="verify-btn" type="button" disabled>Verify Payment</button>
+                <div id="verify-spinner" class="spinner hidden" aria-hidden="true"></div>
+              </div>
+              <div id="verify-status" class="alert hidden" role="status"></div>
+            </div>
+          </section>
 
-      <section class="card step-card step-hidden" id="step-key">
-        <div class="step-heading">
-          <span class="step-badge">3</span>
-          <div>
-            <h2>Step 3 - Receive API Key</h2>
-            <p class="muted">Once we verify your payment, we will issue a scoped DIEM access key.</p>
-          </div>
-        </div>
-        <div class="step-body">
-                  <div id="key-status" class="alert hidden" role="status"></div>
-          <div class="form-field">
-            <label for="api-key">API key</label>
-            <div class="copy-field">
-              <input id="api-key" type="text" readonly />
-              <button id="copy-key" type="button">Copy Key</button>
+          <section class="card step-card step-hidden" id="step-key">
+            <div class="step-heading">
+              <span class="step-badge">3</span>
+              <div>
+                <h2>Step 3 - Receive API Key</h2>
+                <p class="muted">Once we verify your payment, we will issue a scoped DIEM access key.</p>
+              </div>
             </div>
-          </div>
-          <div class="form-field">
-            <label>Key expiry</label>
-            <div id="key-expiry" class="status"></div>
-          </div>
-          <p class="muted note">Store this key securely; it grants access to your DIEM credits.</p>
+            <div class="step-body">
+              <div id="key-status" class="alert hidden" role="status"></div>
+              <div class="form-field">
+                <label for="api-key">API key</label>
+                <div class="copy-field">
+                  <input id="api-key" type="text" readonly />
+                  <button id="copy-key" type="button">Copy Key</button>
+                </div>
+              </div>
+              <div class="form-field">
+                <label>Key expiry</label>
+                <div id="key-expiry" class="status"></div>
+              </div>
+              <p class="muted note">Store this key securely; it grants access to your DIEM credits.</p>
+            </div>
+          </section>
         </div>
-      </section>
+      </div>
     </main>
 
     <script src="./buy.js" type="module"></script>

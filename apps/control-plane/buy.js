@@ -6,6 +6,8 @@ const state = {
   verifying: false,
   prices: null,
   purchaseId: null,
+  quoteUsdPerDiem: null,
+  quoteAsset: null,
 };
 
 const assetDecimals = {
@@ -22,6 +24,7 @@ const ENV_ENDPOINT = "/v1/env";
 const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC";
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
+const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
 
 function $(id) {
   return document.getElementById(id);
@@ -42,6 +45,114 @@ function clearAlert(el) {
   el.classList.add("hidden");
   el.classList.remove("alert-info", "alert-success", "alert-error");
 }
+
+function formatUsd(value) {
+  if (!Number.isFinite(value)) return "--";
+  const abs = Math.abs(value);
+  if (abs >= 1000) return `\$${value.toFixed(0)}`;
+  if (abs >= 1) return `\$${value.toFixed(2)}`;
+  return `\$${value.toFixed(4)}`;
+}
+
+function formatRatio(value) {
+  if (!Number.isFinite(value) || value <= 0) return "--";
+  if (value >= 1000) return `${value.toFixed(0)}`;
+  if (value >= 10) return `${value.toFixed(2)}`;
+  return `${value.toFixed(4)}`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return "--";
+  const rounded = Math.abs(value).toFixed(2);
+  return `${value >= 0 ? '' : '-'}${rounded}%`;
+}
+
+function computeQuoteMetrics() {
+  state.quoteUsdPerDiem = null;
+  state.quoteAsset = null;
+  if (!state.quote) return;
+  const units = Number(state.quote.units ?? state.quote.quantity ?? 0);
+  const totalMinor = Number(state.quote.totalPrice ?? state.quote.total_price ?? 0);
+  if (!Number.isFinite(units) || units <= 0 || !Number.isFinite(totalMinor) || totalMinor <= 0) {
+    return;
+  }
+  const asset = String(state.quote.asset || getSelectedAsset()).toUpperCase();
+  const decimals = assetDecimals[asset] ?? 18;
+  const totalAsset = totalMinor / 10 ** decimals;
+  if (!Number.isFinite(totalAsset) || totalAsset <= 0) {
+    return;
+  }
+  const assetUsd = state.prices ? Number(state.prices[asset]) : Number.NaN;
+  if (!Number.isFinite(assetUsd) || assetUsd <= 0) {
+    return;
+  }
+  const totalUsd = totalAsset * assetUsd;
+  if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
+    return;
+  }
+  state.quoteUsdPerDiem = totalUsd / units;
+  state.quoteAsset = asset;
+}
+
+function renderPricingTable() {
+  const table = $("pricing-table");
+  const tbody = $("pricing-tbody");
+  const empty = $("pricing-empty");
+  const note = $("pricing-note");
+  if (!table || !tbody || !empty) return;
+
+  const prices = state.prices;
+  if (!prices || Object.keys(prices).length === 0) {
+    table.classList.add("hidden");
+    tbody.innerHTML = "";
+    empty.classList.remove("hidden");
+    empty.textContent = "Market data unavailable.";
+    if (note) note.textContent = "";
+    return;
+  }
+
+  const diemUsd = Number(prices.DIEM);
+  const assets = Array.from(new Set([...PRICING_PRIORITY, ...Object.keys(prices || {})]));
+  const rows = [];
+  assets.forEach((asset) => {
+    const upper = String(asset).toUpperCase();
+    const priceUsd = Number(prices[upper]);
+    if (!Number.isFinite(priceUsd) || priceUsd <= 0) return;
+    const ratio = Number.isFinite(diemUsd) && diemUsd > 0 ? diemUsd / priceUsd : null;
+    let discount = null;
+    if (state.quoteUsdPerDiem && Number.isFinite(diemUsd) && diemUsd > 0 && upper === state.quoteAsset) {
+      discount = ((diemUsd - state.quoteUsdPerDiem) / diemUsd) * 100;
+    }
+    rows.push({ asset: upper, priceUsd, ratio, discount, active: upper === state.quoteAsset });
+  });
+
+  tbody.innerHTML = rows
+    .map(({ asset, priceUsd, ratio, discount, active }) => `
+      <tr class="${active ? "price-row-active" : ""}">
+        <td>${asset}</td>
+        <td>${formatUsd(priceUsd)}</td>
+        <td>${formatRatio(ratio)}</td>
+        <td>${discount !== null ? formatPercent(discount) : "--"}</td>
+      </tr>`)
+    .join("");
+
+  table.classList.toggle("hidden", rows.length === 0);
+  empty.classList.toggle("hidden", rows.length > 0);
+  empty.textContent = rows.length > 0 ? "" : "Market data unavailable.";
+
+  if (note) {
+    if (state.quoteUsdPerDiem && state.quoteAsset) {
+      const discount = (Number.isFinite(diemUsd) && diemUsd > 0)
+        ? ((diemUsd - state.quoteUsdPerDiem) / diemUsd) * 100
+        : null;
+      const formattedDiscount = discount !== null ? ` (${formatPercent(discount)} vs. market)` : "";
+      note.textContent = `Latest quote (${state.quoteAsset}): ${formatUsd(state.quoteUsdPerDiem)} per DIEM${formattedDiscount}.`;
+    } else {
+      note.textContent = "Generate a quote to compare mint pricing against the market.";
+    }
+  }
+}
+
 
 function formatAmount(asset, totalMinor) {
   const decimals = assetDecimals[asset] ?? 18;
@@ -165,6 +276,8 @@ function resetStep3() {
 
 function applyQuote(result) {
   state.quote = result;
+  computeQuoteMetrics();
+  renderPricingTable();
   const details = $("quote-details");
   const amountInput = $("quote-amount");
   const addressInput = $("quote-address");
@@ -205,6 +318,9 @@ async function requestQuote() {
   if (details) details.classList.add("hidden");
   stopQuoteTimer();
   state.quote = null;
+  state.quoteUsdPerDiem = null;
+  state.quoteAsset = null;
+  renderPricingTable();
   enableStep2(false);
   resetStep3();
   clearAlert(status);
@@ -507,11 +623,19 @@ function populateAssets(assets) {
 async function fetchPrices() {
   try {
     const res = await fetch(PRICES_ENDPOINT);
-    if (!res.ok) return;
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
     const body = await res.json();
     state.prices = (body && body.prices) || {};
-  } catch {
-    // ignore price failures; USD estimate will be blank
+  } catch (err) {
+    // keep previous prices on failure but surface the message in console for debugging
+    if (err) {
+      console.warn('Market price fetch failed', err);
+    }
+  } finally {
+    computeQuoteMetrics();
+    renderPricingTable();
   }
 }
 
@@ -580,10 +704,13 @@ async function init() {
   await loadEnv();
   await fetchPrices();
   schedulePriceRefresh();
+  renderPricingTable();
   updateVerifyButtonState();
 }
 
 init();
+
+
 
 
 
