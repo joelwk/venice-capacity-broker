@@ -781,7 +781,22 @@ try:
             },
             "payments": {
                 "enabled": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
-                "accepted_assets": [a.strip().upper() for a in (_os.getenv("ACCEPT_ASSETS") or "ETH,USDC").split(",") if a.strip()],
+                "accepted_assets": [
+                    asset
+                    for asset in (
+                        a.strip().upper()
+                        for a in (_os.getenv("ACCEPT_ASSETS") or "ETH,USDC,WBTC").split(",")
+                        if a.strip()
+                    )
+                    if not (
+                        asset == "WBTC"
+                        and not (
+                            (_os.getenv("WBTC_TOKEN_ADDRESS") or "").strip()
+                            or (_os.getenv("BTC_TOKEN_ADDRESS") or "").strip()
+                            or (_os.getenv("CBBTC_TOKEN_ADDRESS") or "").strip()
+                        )
+                    )
+                ],
                 "treasury_address": (_os.getenv("TREASURY_ADDRESS") or "").strip() or None,
                 "usdc_address": (_os.getenv("USDC_ADDRESS") or "").strip() or None,
             },
@@ -2088,11 +2103,14 @@ try:
                 acceptedMin: float | None = None
                 acceptedMax: float | None = None
                 expiresAt: int
+                discountBps: int | None = None
+                discount: dict[str, object] | None = None
+                unitPriceBeforeDiscount: int | None = None
 
             @app.get("/v1/quotes", response_model=QuoteResponse)
             def get_quote(
                 units: float | None = Query(default=None, gt=0),
-                asset: str = Query(..., description="ETH or USDC"),
+                asset: str = Query(..., description="ETH, USDC, or WBTC"),
                 budget: float | None = Query(default=None, gt=0, description="Budget in USD"),
             ) -> dict:
                 if units is None and budget is None:

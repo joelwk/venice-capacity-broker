@@ -22,6 +22,7 @@ The correct Aerodrome router address on Base is `0xcF77a3Ba9A5CA399B7c97c74d54e5
 - **USDC**: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
 - **DIEM**: `0xF4d97F2da56e8c3098f3a8D538DB630A2606a024`
 - **VVV**: `0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf`
+- **WBTC**: Set `WBTC_TOKEN_ADDRESS` to the canonical Base WBTC contract before enabling WBTC quotes (e.g. Axelar or official bridge address depending on deployment)
 
 ## Environment Configuration
 

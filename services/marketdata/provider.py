@@ -397,6 +397,20 @@ class MarketDataProvider:
             return (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip() or None
         if s == "VVV":
             return (os.getenv("VVV_TOKEN_ADDRESS") or "").strip() or None
+        if s in {"ETH", "WETH"}:
+            try:
+                return self._weth_address()
+            except Exception:
+                return None
+        if s == "USDC":
+            return (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip() or None
+        if s == "WBTC":
+            return (
+                os.getenv("WBTC_TOKEN_ADDRESS")
+                or os.getenv("BTC_TOKEN_ADDRESS")
+                or os.getenv("CBBTC_TOKEN_ADDRESS")
+                or ""
+            ).strip() or None
         return None
 
     @staticmethod
@@ -1076,6 +1090,40 @@ class MarketDataProvider:
                     px_tw = self._mid_price_from_reserves(token, weth) or 0.0
                     px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
                     if px_tw > 0 and px_wq > 0:
+                        combo = float(px_tw) * float(px_wq)
+                        if self._valid_price(combo):
+                            return combo
+                except Exception:
+                    pass
+                return 0.0
+            except Exception:
+                return 0.0
+        if su == "WBTC":
+            try:
+                token = self._address_for_symbol("WBTC")
+                quote = self._quote_token_address()
+                if not token or not quote:
+                    raise ValueError("WBTC or QUOTE token address missing")
+                weth = self._weth_address()
+                routes = [make_route([token, quote])]
+                if weth and weth.lower() not in {token.lower(), quote.lower()}:
+                    routes.append(make_route([token, weth, quote]))
+                for route in routes:
+                    try:
+                        bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
+                        price = float(bp.get("price") or 0.0)
+                        if self._valid_price(price):
+                            return price
+                    except Exception:
+                        continue
+                # Reserve-based fallback(s)
+                px_direct = self._mid_price_from_reserves(token, quote)
+                if self._valid_price(px_direct):
+                    return float(px_direct)
+                try:
+                    px_tw = self._mid_price_from_reserves(token, weth) or 0.0
+                    px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
+                    if self._valid_price(px_tw) and self._valid_price(px_wq):
                         combo = float(px_tw) * float(px_wq)
                         if self._valid_price(combo):
                             return combo

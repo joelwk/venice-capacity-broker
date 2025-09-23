@@ -172,9 +172,9 @@ def test_budget_quote_path(monkeypatch, tmp_path):
     # Force deterministic pricing without on-chain calls.
     engine = mod._pricing.engine
 
-    def _fake_prices() -> tuple[float, float, float]:
-        # base_unit_usd, diem_usd, eth_usd
-        return (200.0, 200.0, 4000.0)
+    def _fake_prices():
+        # base_unit_usd, market prices
+        return (200.0, {"DIEM": 200.0, "ETH": 4000.0, "USDC": 1.0})
 
     monkeypatch.setattr(engine, "_resolve_prices", _fake_prices, raising=True)
 
@@ -186,8 +186,9 @@ def test_budget_quote_path(monkeypatch, tmp_path):
     payload = resp.json()
     assert payload["asset"] == "ETH"
     assert pytest.approx(payload["units"], rel=1e-6) == 0.05
+    assert payload.get("discountBps") == 500
     eth_amount = payload["totalPrice"] / 1e18
-    assert pytest.approx(eth_amount, rel=1e-6) == 0.0025
+    assert pytest.approx(eth_amount, rel=1e-6) == 0.002375
 
     too_small = client.get("/v1/quotes", params={"budget": 0.1, "asset": "ETH"})
     assert too_small.status_code == 400

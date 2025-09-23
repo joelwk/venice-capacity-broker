@@ -17,6 +17,12 @@ A sticky sidebar requests `/v1/market/prices` every 45 seconds and renders a com
 It highlights the asset tied to the latest quote and shows the live discount versus the DIEM fair value when possible.
 An empty state explains when market data is unavailable so buyers understand the absence of pricing hints.
 
+## Pricing adjustments
+
+Quotes now apply a built-in 5% discount relative to the live DIEM price, and the UI spells out the base discount plus any utilization relief in the quote card.
+
+WBTC payments are surfaced automatically when `WBTC_TOKEN_ADDRESS` is present, and they default to a 10% incentive so the table highlights the extra savings.
+
 ## Status and accessibility details
 
 - Alerts use the `.alert-info|success|error` classes so copy successes, countdown expiries, and verification failures surface clearly.

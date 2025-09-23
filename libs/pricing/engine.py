@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 @dataclass
@@ -16,6 +16,8 @@ class QuoteDraft:
     accepted_min: Optional[float]
     accepted_max: Optional[float]
     expires_at_epoch: int
+    usd_per_unit: Optional[float] = None
+    market_prices: Optional[Dict[str, float]] = None
 
 
 class StaticPricingEngine:
@@ -60,6 +62,9 @@ class StaticPricingEngine:
         total = int(round(unit_p * uf))
         now = int(time.time())
         qid = f"q-{asset_u}-{now}-{uf}"
+        usd_hint = None
+        if asset_u == "USDC":
+            usd_hint = unit_p / 1_000_000
         return QuoteDraft(
             quote_id=qid,
             units=uf,
@@ -69,6 +74,8 @@ class StaticPricingEngine:
             accepted_min=self._min_u,
             accepted_max=self._max_u,
             expires_at_epoch=now + self._ttl,
+            usd_per_unit=usd_hint,
+            market_prices=None,
         )
 
     def price_from_budget(self, budget_usd: float, asset: str) -> QuoteDraft:
@@ -132,15 +139,21 @@ class MarketPricingEngine:
         if not self._valid_price(raw_budget):
             raise ValueError("budget must be greater than zero")
         asset_u = asset.strip().upper()
-        base_unit_usd, _, eth_usd = self._resolve_prices()
-        if asset_u == "ETH":
+        base_unit_usd, price_map = self._resolve_prices()
+        eth_usd = float(price_map.get("ETH") or price_map.get("WETH") or 0.0)
+        wbtc_usd = float(price_map.get("WBTC") or 0.0)
+        if asset_u in {"ETH", "WETH"}:
             if not self._valid_price(eth_usd):
                 raise ValueError("ETH pricing unavailable for budget sizing")
             budget = raw_budget * float(eth_usd)
+        elif asset_u == "WBTC":
+            if not self._valid_price(wbtc_usd):
+                raise ValueError("WBTC pricing unavailable for budget sizing")
+            budget = raw_budget * float(wbtc_usd)
         elif asset_u == "USDC":
             budget = raw_budget  # USDC budgets already denominated in USD
         else:
-            budget = raw_budget
+            raise ValueError("unsupported asset; use ETH, WBTC, or USDC")
         if not self._valid_price(base_unit_usd):
             raise ValueError("DIEM pricing unavailable for budget sizing")
         target_units = budget / float(base_unit_usd)
@@ -151,28 +164,40 @@ class MarketPricingEngine:
             raise ValueError(f"budget must cover at least {min_units} DIEM (current min quote size)")
         return self.price(target_units, asset)
 
-    def _resolve_prices(self) -> Tuple[float, float, float]:
-        """Return tuple (base_unit_usd, diem_usd, eth_usd).
+    def _resolve_prices(self) -> Tuple[float, Dict[str, float]]:
+        """Return per-unit USD baseline alongside a market price map.
 
-        - base_unit_usd reflects per-unit USD cost based on units kind.
-        - Fetches DIEM/ETH prices from MarketDataProvider with AMM/bridge fallbacks.
+        The price map always includes at least USDC (1.0) and best-effort
+        entries for DIEM, ETH, WETH, and WBTC when available from the
+        MarketDataProvider.
         """
-        # Default fallbacks
+
+        def _valid(v: Optional[float]) -> bool:
+            try:
+                if v is None:
+                    return False
+                return self._valid_price(float(v))
+            except Exception:
+                return False
+
         base_unit_usd = float(self._base_unit_usd_default)
+        prices: Dict[str, float] = {"USDC": 1.0}
         diem_usd = 0.0
         eth_usd = 0.0
-        # Resolve via market provider (best-effort)
+        wbtc_usd = 0.0
+
         try:
             from services.marketdata.provider import MarketDataProvider  # lazy import
+
             mdp = MarketDataProvider()
-            px = mdp.prices(["DIEM", "ETH", "USDC"]) or {}
-            # Prices are in QUOTE token (USDC); USDC≈1 USD
+            px = mdp.prices(["DIEM", "ETH", "USDC", "WBTC"]) or {}
             if isinstance(px, dict):
-                if self._valid_price(px.get("DIEM")):
-                    diem_usd = float(px.get("DIEM") or 0.0)
-                if self._valid_price(px.get("ETH")):
-                    eth_usd = float(px.get("ETH") or 0.0)
-            # Sanity: reject clearly invalid DIEM prices (too small/large) and try robust fallback
+                if _valid(px.get("DIEM")):
+                    diem_usd = float(px["DIEM"])  # type: ignore[index]
+                if _valid(px.get("ETH")):
+                    eth_usd = float(px["ETH"])  # type: ignore[index]
+                if _valid(px.get("WBTC")):
+                    wbtc_usd = float(px["WBTC"])  # type: ignore[index]
             if not self._valid_price(diem_usd):
                 try:
                     alt = mdp.diem_price_with_fallback()
@@ -185,47 +210,56 @@ class MarketPricingEngine:
         except Exception:
             diem_usd = 0.0
             eth_usd = 0.0
-        if not self._valid_price(diem_usd):
-            diem_usd = 0.0
-        if not self._valid_price(eth_usd):
-            eth_usd = 0.0
-        # Units kind mapping
+            wbtc_usd = 0.0
+
+        if self._valid_price(diem_usd):
+            prices["DIEM"] = float(diem_usd)
+        if self._valid_price(eth_usd):
+            prices["ETH"] = float(eth_usd)
+            prices["WETH"] = float(eth_usd)
+        if self._valid_price(wbtc_usd):
+            prices["WBTC"] = float(wbtc_usd)
+
         uk = str(self._units_kind or "").lower()
         if uk == "diem":
-            # 1 unit == 1 DIEM
             if self._valid_price(diem_usd):
                 base_unit_usd = float(diem_usd)
         elif uk == "vvv":
-            # 1 unit == 1 VVV (rare); use hint if provided, otherwise fall back to default base
-            # No static override; keep default base if no price
             try:
                 from services.marketdata.provider import MarketDataProvider  # lazy import
-                px = MarketDataProvider().prices(["VVV"]) or {}
-                vvv = float(px.get("VVV") or 0.0)
-                if vvv > 0:
+
+                px_vvv = MarketDataProvider().prices(["VVV"]) or {}
+                vvv = float(px_vvv.get("VVV") or 0.0)
+                if self._valid_price(vvv):
                     base_unit_usd = vvv
+                    prices["VVV"] = vvv
             except Exception:
                 pass
         else:
-            # Generic USD-priced units
             base_unit_usd = float(self._base_unit_usd_default)
-        return float(base_unit_usd), float(diem_usd or 0.0), float(eth_usd or 0.0)
+
+        return float(base_unit_usd), prices
 
     def price(self, units: float, asset: str) -> QuoteDraft:
         import time
 
         asset_u = asset.strip().upper()
-        base_unit_usd, _diem_usd, eth_usd = self._resolve_prices()
-        # Convert base USD price per unit into selected asset's minor units
+        base_unit_usd, price_map = self._resolve_prices()
+        eth_usd = float(price_map.get("ETH") or price_map.get("WETH") or 0.0)
+        wbtc_usd = float(price_map.get("WBTC") or 0.0)
+
         if asset_u == "USDC":
             unit_p = int(round(float(base_unit_usd) * 1_000_000))
-        elif asset_u == "ETH":
-            # Derive wei per unit using ETH/USD from market provider only
+        elif asset_u in {"ETH", "WETH"}:
             if not (eth_usd and eth_usd > 0):
                 raise ValueError("ETH pricing unavailable (missing ETH/USD from DEX); check QUOTE_TOKEN_ADDRESS and WETH route")
             unit_p = int(round((float(base_unit_usd) / float(eth_usd)) * 1e18))
+        elif asset_u == "WBTC":
+            if not (wbtc_usd and wbtc_usd > 0):
+                raise ValueError("WBTC pricing unavailable (missing WBTC/USD liquidity); configure WBTC_TOKEN_ADDRESS and trade paths")
+            unit_p = int(round((float(base_unit_usd) / float(wbtc_usd)) * 1e8))
         else:
-            raise ValueError("unsupported asset; use ETH or USDC")
+            raise ValueError("unsupported asset; use ETH, WBTC, or USDC")
         if unit_p <= 0:
             raise ValueError("unit price not configured for selected asset")
         try:
@@ -245,4 +279,6 @@ class MarketPricingEngine:
             accepted_min=self._min_u,
             accepted_max=self._max_u,
             expires_at_epoch=now + self._ttl,
+            usd_per_unit=float(base_unit_usd),
+            market_prices=dict(price_map),
         )

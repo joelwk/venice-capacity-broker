@@ -15,13 +15,14 @@ const assetDecimals = {
   WETH: 18,
   USDC: 6,
   USDT: 6,
+  WBTC: 8,
 };
 
 const QUOTE_ENDPOINT = "/v1/quotes";
 const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const ENV_ENDPOINT = "/v1/env";
-const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC";
+const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC,WBTC";
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
 const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
@@ -73,6 +74,13 @@ function computeQuoteMetrics() {
   state.quoteUsdPerDiem = null;
   state.quoteAsset = null;
   if (!state.quote) return;
+  const discountUsd = Number(state.quote?.discount?.postDiscountUsdPerUnit);
+  const discountAsset = String(state.quote?.asset || getSelectedAsset()).toUpperCase();
+  if (Number.isFinite(discountUsd) && discountUsd > 0) {
+    state.quoteUsdPerDiem = discountUsd;
+    state.quoteAsset = discountAsset;
+    return;
+  }
   const units = Number(state.quote.units ?? state.quote.quantity ?? 0);
   const totalMinor = Number(state.quote.totalPrice ?? state.quote.total_price ?? 0);
   if (!Number.isFinite(units) || units <= 0 || !Number.isFinite(totalMinor) || totalMinor <= 0) {
@@ -188,6 +196,13 @@ function computeUsdEstimate(asset, totalMinor, units) {
       return `~$${(eth * ethUsd).toFixed(2)} USD`;
     }
   }
+  if (asset === "WBTC") {
+    const wbtc = Number(totalMinor || 0) / 10 ** (assetDecimals.WBTC || 8);
+    const wbtcUsd = Number(prices.WBTC);
+    if (Number.isFinite(wbtc) && Number.isFinite(wbtcUsd) && wbtcUsd > 0) {
+      return `~$${(wbtc * wbtcUsd).toFixed(2)} USD`;
+    }
+  }
   const diemUsd = Number(prices.DIEM);
   if (Number.isFinite(diemUsd) && Number.isFinite(units)) {
     return `~$${(units * diemUsd).toFixed(2)} USD`;
@@ -284,6 +299,7 @@ function applyQuote(result) {
   const amountInput = $("quote-amount");
   const addressInput = $("quote-address");
   const usdLine = $("quote-usd");
+  const discountLine = $("quote-discount");
   const refreshBtn = $("quote-refresh");
   if (!details || !amountInput || !addressInput) return;
 
@@ -301,6 +317,31 @@ function applyQuote(result) {
   if (usdLine) {
     const usdText = computeUsdEstimate(asset, result.totalPrice ?? result.total_price ?? 0, result.units);
     usdLine.textContent = usdText || "";
+  }
+  if (discountLine) {
+    discountLine.textContent = "";
+    discountLine.classList.add("hidden");
+    const discountBps = Number(result.discountBps ?? result.discount?.totalBps);
+    if (Number.isFinite(discountBps) && discountBps > 0) {
+      const baseBps = Number(result.discount?.baseBps ?? discountBps);
+      const reliefBps = Math.max(0, discountBps - baseBps);
+      const totalPct = (discountBps / 100).toFixed(2);
+      const basePct = (baseBps / 100).toFixed(2);
+      let text = `Discount applied: ${totalPct}% off market`;
+      if (reliefBps > 0) {
+        text += ` (base ${basePct}% + relief ${(reliefBps / 100).toFixed(2)}%)`;
+      } else {
+        text += ` (base ${basePct}%)`;
+      }
+      text += ".";
+      const marketUsd = Number(result.discount?.marketUsdPerUnit);
+      const quoteUsd = Number(result.discount?.postDiscountUsdPerUnit);
+      if (Number.isFinite(marketUsd) && marketUsd > 0 && Number.isFinite(quoteUsd) && quoteUsd > 0) {
+        text += ` Market ${formatUsd(marketUsd)} → Quote ${formatUsd(quoteUsd)} per DIEM.`;
+      }
+      discountLine.textContent = text;
+      discountLine.classList.remove("hidden");
+    }
   }
   details.classList.remove("hidden");
   if (refreshBtn) refreshBtn.hidden = false;
@@ -322,6 +363,11 @@ async function requestQuote() {
   state.quote = null;
   state.quoteUsdPerDiem = null;
   state.quoteAsset = null;
+  const discountLine = $("quote-discount");
+  if (discountLine) {
+    discountLine.textContent = "";
+    discountLine.classList.add("hidden");
+  }
   renderPricingTable();
   enableStep2(false);
   resetStep3();
