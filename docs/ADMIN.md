@@ -137,15 +137,11 @@ Validated Front-End Flows
 - Admin broker limits persist after `POST /v1/tenants/{id}/broker-limits` when `KV_URL`/`KV_API_TOKEN` are configured. Refresh the Limits card to verify the new window/max pair.
 
 Buyer Page
-- Navigate to `/admin/buy.html` for the Buyer flow. Cards appear when the corresponding flags are enabled in `/v1/env.features`.
-- Quote (baseline): connect wallet ‚Üí request quote ‚Üí pay to Treasury ‚Üí paste tx hash ‚Üí retrieve issued key. ETH offers one‚Äëclick `eth_sendTransaction` and EIP‚Äë681 deeplink; USDC provides copy helpers.
-- Pay card now surfaces quote expiry warnings, displays the `{ purchaseId, status, tenantId, subkey, expiresAt }` JSON from the broker, and adds a `Copy key` action once `status` becomes `fulfilled`.
-- Clearing Price (when `CLEARING_ENABLED=true`): live clearing price card with SSE updates showing price and acceptance band (min/max), plus component prices (DIEM/VVV) when available.
-- Bids (when `BIDS_ENABLED=true`): Place Bid form signs EIP‚Äë712 `PurchaseIntent` via wallet; creates a bid with server verification and SSE status updates. ‚ÄúMy Bids‚Äù lists recent bids for the connected wallet and allows subscribing to bid updates.
-- Settle Now (when `SETTLEMENT_ENABLED=true`): for bids in the `accepted_window` with asset ETH/USDC, click Settle to create a server quote; the page then switches to the Quote card for Pay & Verify.
-- Settlement Preview (when `SETTLEMENT_ENABLED=true`): exact‚Äëout DEX preview (UniswapV2 only) to estimate required input for a desired ETH/USDC output; mid‚Äëprice fallback is marked `approx=true`.
-- Audit receipts: Successful verification persists a JSON `receipt` (SQL) with tx details, amount, quote summary, and verification metadata. Admin listings include status; detailed receipts can be queried via the DB.
-
+- Navigate to `/admin/buy.html` for the Buyer flow. Cards appear once `/v1/env.features` reports `quotes=true` (Step 1) and `purchases=true` (Step 2/3).
+- Step 1 (ìGet Payment Detailsî) requests a live quote, shows the amount/address with copy helpers, renders a USD estimate, and starts a visible expiry countdown beside the Market Snapshot sidebar.
+- Step 2 (ìConfirm Transactionî) stays hidden until a quote is active, then unlocks the wallet + tx hash inputs, enables Connect Wallet, and shows inline alerts/spinner while verification runs. Expired quotes re-disable the step and prompt for a refresh.
+- Step 3 (ìReceive API Keyî) appears only after verification succeeds, presents a success checkmark, exposes the scoped key with a copy button, and shows the formatted expiry.
+- All alerts now use friendly copy instead of raw JSON; copy-to-clipboard buttons acknowledge success, and verification errors keep Step 2 visible (disabled) so the message remains readable.
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
 - Rotate + probe from shell: `make rotate-probe TENANT=t1 [LABEL=TeamA MESSAGE=Hello]`.

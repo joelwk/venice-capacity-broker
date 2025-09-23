@@ -2,9 +2,9 @@
 
 Use this list when validating the /admin/buy view after deployments.
 
-1. Load `buy.html` from the running broker API and confirm wallet status renders before interaction.
-2. Connect a wallet (Metamask or Coinbase Wallet), then verify the status banner reflects the connected address.
-3. Request a DIEM quote and confirm the summary shows the treasury address, accepted asset, and a ticking TTL countdown.
-4. Click "Continue to Pay & Verify", then exercise the copy address and copy amount buttons while watching the inline status text update.
-5. Submit a known-good transaction hash, wait for "Key issued" to appear, and ensure the issued key is visible and copyable.
-6. Optional: replay with an expired quote to confirm the UI blocks verification until a fresh quote is generated.
+1. Load `buy.html` from the running broker API and confirm the Market Snapshot renders, Step 1 is active, and Steps 2/3 remain hidden.
+2. Request a DIEM quote and verify the amount/address fields populate with copy helpers, the USD estimate appears, and the countdown starts.
+3. Confirm the quote-expiry pill decrements in real time and the Refresh button is available once the timer reaches zero.
+4. After the quote arrives, ensure Step 2 unlocks the wallet + tx hash inputs (Connect Wallet stays disabled until then) and the Verify button remains disabled until both fields look valid.
+5. Submit a known-good transaction hash, watch the spinner and info alert while verification runs, then confirm Step 3 appears with the success checkmark, key value, copy button, and expiry timestamp.
+6. Optional: let a quote expire without verifying to confirm Step 2 disables and hides again, and the UI flashes the “Quote expired” alert.

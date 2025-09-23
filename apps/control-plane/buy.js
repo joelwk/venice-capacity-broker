@@ -234,15 +234,27 @@ function updateQuoteCountdown() {
   }
 }
 
-function enableStep2(enable) {
+function enableStep2(enable, options = {}) {
+  const { keepVisible = false, focus = true } = options || {};
   const card = $("step-verify");
   const verifyBtn = $("verify-btn");
+  const walletInput = $("wallet-address");
+  const txInput = $("tx-hash");
+  const connectBtn = $("connect-wallet");
   if (!card || !verifyBtn) return;
+  const shouldHide = !enable && !keepVisible;
+  card.classList.toggle("step-hidden", shouldHide);
   card.classList.toggle("step-disabled", !enable);
+  if (walletInput) walletInput.disabled = !enable;
+  if (txInput) txInput.disabled = !enable;
+  if (connectBtn) connectBtn.disabled = !enable;
   if (!enable) {
     verifyBtn.disabled = true;
-  } else {
-    updateVerifyButtonState();
+    return;
+  }
+  updateVerifyButtonState();
+  if (focus) {
+    setTimeout(() => walletInput?.focus(), 0);
   }
 }
 
@@ -393,7 +405,7 @@ async function handleVerify() {
   }
   if (isQuoteExpired()) {
     showAlert($("verify-status"), "error", "Quote expired. Refresh the quote and try again.");
-    enableStep2(false);
+    enableStep2(false, { keepVisible: true, focus: false });
     return;
   }
   const walletInput = $("wallet-address");
@@ -451,7 +463,7 @@ function handleVerifyResponse(body) {
   const expiresAt = body.expiresAt;
   const purchaseId = body.purchaseId;
   if (subkey) {
-    showAlert(verifyStatus, "success", "Payment verified. Copy your API key below.");
+    showAlert(verifyStatus, "success", "? Payment verified. Copy your API key below.");
     showKey({ subkey, expiresAt });
     return;
   }
@@ -479,9 +491,9 @@ function showKey({ subkey, expiresAt, status, purchaseId }) {
       : "Pending";
   }
   if (subkey) {
-    showAlert(keyStatus, "success", "API key issued. Store it in a safe place.");
+    showAlert(keyStatus, "success", "? API key issued. Store it in a safe place.");
   } else {
-    const baseMessage = "Payment verified. We are issuing your key.";
+    const baseMessage = "? Payment verified. We are issuing your key.";
     const extra = purchaseId ? ` Purchase id: ${purchaseId}.` : "";
     showAlert(keyStatus, "info", baseMessage + extra);
   }
@@ -515,7 +527,7 @@ async function pollPurchaseUntilReady(purchaseId) {
       if (body && body.subkey) {
         showKey({ subkey: body.subkey, expiresAt: body.expiresAt });
         clearAlert(keyStatus);
-        showAlert(keyStatus, "success", "API key issued. Store it in a safe place.");
+        showAlert(keyStatus, "success", "? API key issued. Store it in a safe place.");
         return;
       }
       showAlert(keyStatus, "info", `Issuing key... status=${body.status || "pending"}`);
@@ -598,7 +610,7 @@ async function loadEnv() {
       showAlert($("quote-status"), "error", "Quotes are disabled by the server.");
     }
     if (feats && feats.purchases === false) {
-      enableStep2(false);
+      enableStep2(false, { keepVisible: true });
       showAlert($("verify-status"), "error", "Purchases are disabled by the server.");
     }
   } catch {
@@ -701,6 +713,7 @@ function initDefaults() {
 async function init() {
   initDefaults();
   setupEventHandlers();
+  enableStep2(false);
   await loadEnv();
   await fetchPrices();
   schedulePriceRefresh();

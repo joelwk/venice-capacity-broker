@@ -4,7 +4,7 @@ This snapshot summarizes current functionality vs the implementation plan (`impl
 
 What's Done
 - Broker API: multi-tenant tenants/limits/chat endpoints; idempotency middleware; optional KV-backed sliding-window limiter; JSON store with optional SQL store; basic metrics at `/metrics`. Admin broker limits now persist in production after setting `KV_URL`/`KV_API_TOKEN`.
-- Admin UI: static control panel at `/admin` (token prompt, health/env, tenants, limits, chat probe); buyer page at `/admin/buy.html`.
+- Admin UI: static control panel at `/admin` (token prompt, health/env, tenants, limits, chat probe); buyer page at `/admin/buy.html` now ships the three-step quote -> verify -> key wizard with countdowns, copy helpers, and friendly alerts.
 - Marketplace: feature-gated Quotes and Purchases; on-chain ETH/USDC verification (Base RPC) with scoped Venice subkey issuance on success; admin listings for quotes/purchases/utilization. `/v1/market/prices` and `/v1/market/tokens` now surface live DIEM/VVV pricing (last QA: DIEM ~219.3, VVV ~1.2e-5, ETH ~4452.5).
 - Venice SDK + Key Manager: autonomous root/subkey flows; CLI/Make helpers (`rotate-probe`, `db-compact`, `env-status`).
  - Risk: liquidity-aware sizing added to ArbiDiem with conservative halving backoff; emits `vvv_risk_liquidity_*` metrics and enriches decision rationale.
