@@ -42,7 +42,7 @@ def get_api_key_usage(api_key):
 
 # Example usage
 if __name__ == "__main__":
-    api_key = 'dLN9fnDV70qw1N0OjoguPo8Vkyej8vSMOd-1Smt0LV'
+    api_key = 'VENICE_API_KEY'
 
     # Chat completion example
     model = "llama-3.3-70b"
