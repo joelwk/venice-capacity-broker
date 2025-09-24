@@ -19,6 +19,9 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     monkeypatch.setenv("WETH_ADDRESS", weth_addr)
     monkeypatch.setenv("TRADE_PATH", ",".join([diem_addr, weth_addr, quote_addr]))
 
+    monkeypatch.setattr(MarketDataProvider, "_fetch_external_price", lambda self, symbol: None, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_external_price_ttl", lambda self: 0.0, raising=False)
+
     md = MarketDataProvider()
 
     def fake_decimals(address: str) -> int:

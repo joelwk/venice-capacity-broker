@@ -7,6 +7,8 @@ import weakref
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import requests
+
 from libs.dex.providers import build_aggregator_from_env
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
 
@@ -56,6 +58,9 @@ def _latency_bucket(seconds: float) -> str:
     return "ge_2s"
 
 
+DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
+
+
 class MarketDataProvider:
     """Market data via DEX aggregator + Venice endpoints.
 
@@ -73,6 +78,8 @@ class MarketDataProvider:
     _warm_interval_seconds: float = 0.0
     _last_prices_latency: float = 0.0
     _last_prices_latency_ts: float = 0.0
+    _external_price_cache: Dict[str, Tuple[float, float]] = {}
+    _external_price_lock: Lock = Lock()
 
     def _price_cache_key(self, symbol: str) -> str:
         return (symbol or "").upper()
@@ -124,8 +131,164 @@ class MarketDataProvider:
                     self._price_cache.clear()
             self._price_cache[key] = (time.time(), float(value), float(ttl))
 
+
+    def _external_price_ttl(self) -> float:
+        try:
+            raw = os.getenv("MARKETDATA_EXTERNAL_PRICE_TTL_SECONDS") or "30"
+            ttl = float(raw)
+            return ttl if ttl > 0 else 0.0
+        except Exception:
+            return 30.0
+
+    def _price_sanity_threshold(self) -> float:
+        try:
+            raw = os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT") or os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT_PCT") or "0.10"
+            val = float(raw)
+            if val > 1.0:
+                val = val / 100.0
+            if val < 0.0:
+                return 0.0
+            if val > 1.0:
+                return 1.0
+            return val
+        except Exception:
+            return 0.10
+
+    def _external_price(self, symbol: str) -> Optional[float]:
+        ttl = self._external_price_ttl()
+        if ttl <= 0:
+            return None
+        key = self._price_cache_key(symbol)
+        now = time.time()
+        with self._external_price_lock:
+            cached = self._external_price_cache.get(key)
+            if cached and (now - cached[0]) < ttl:
+                return cached[1]
+        price = self._fetch_external_price(symbol)
+        if self._valid_price(price):
+            with self._external_price_lock:
+                self._external_price_cache[key] = (now, float(price))
+        return float(price) if self._valid_price(price) else None
+
+    def _fetch_external_price(self, symbol: str) -> Optional[float]:
+        address = self._address_for_symbol(symbol)
+        if not address:
+            return None
+        try:
+            response = requests.get(DEXSCREENER_TOKEN_URL.format(address=address), timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return None
+        return self._select_external_price(payload, address)
+
+    def _select_external_price(self, payload: Dict[str, Any], address: str) -> Optional[float]:
+        try:
+            pairs = payload.get("pairs") or []
+        except Exception:
+            return None
+        if not isinstance(pairs, list):
+            return None
+        try:
+            quote_pref = (self._quote_token_address() or "").lower()
+        except Exception:
+            quote_pref = ""
+        best_price: Optional[float] = None
+        best_score: Optional[Tuple[int, float]] = None
+        address_norm = address.lower()
+        for pair in pairs:
+            try:
+                base = str(((pair or {}).get("baseToken") or {}).get("address") or "").lower()
+                if base != address_norm:
+                    continue
+                price_raw = (pair or {}).get("priceUsd")
+                if price_raw is None:
+                    continue
+                price = float(price_raw)
+                if price <= 0:
+                    continue
+                liquidity = float(((pair or {}).get("liquidity") or {}).get("usd") or 0.0)
+                quote = str(((pair or {}).get("quoteToken") or {}).get("address") or "").lower()
+                priority = 1 if quote_pref and quote == quote_pref else 0
+                score = (priority, liquidity)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_price = price
+            except Exception:
+                continue
+        return best_price
+
+    def _apply_price_sanity(self, symbol: str, price: Optional[float]) -> float:
+        label = self._norm_symbol_label(symbol)
+        try:
+            ext_price = self._external_price(symbol)
+        except Exception:
+            ext_price = None
+        if ext_price is None or ext_price <= 0:
+            return float(price or 0.0)
+        if not self._valid_price(price):
+            self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "external_replace", "reason": "invalid_internal"})
+            _logger.warning("price sanity: replacing invalid internal price", extra={"symbol": label, "external_price": ext_price, "internal_price": price})
+            return float(ext_price)
+        threshold = self._price_sanity_threshold()
+        diff = abs(float(price) - float(ext_price)) / float(ext_price)
+        if diff > threshold:
+            self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
+            _logger.warning("price sanity: clamp applied", extra={"symbol": label, "internal_price": float(price), "external_price": float(ext_price), "diff": diff, "threshold": threshold})
+            return float(ext_price)
+        return float(price)
+
+    def _validate_trade_paths(self) -> None:
+        try:
+            routes = self._collect_trade_paths()
+        except Exception:
+            _logger.warning("failed to load TRADE_PATH for validation", exc_info=True)
+            return
+        if not routes:
+            return
+        for route in routes:
+            try:
+                if route.is_uniswap_v3():
+                    route.ensure_v3()
+            except Exception:
+                _logger.error("trade path missing fee tiers for Uniswap V3", extra={"path": route.tokens})
+            try:
+                self._warm_route_liquidity(route.tokens)
+            except Exception:
+                _logger.debug("trade path warm attempt failed", exc_info=True)
+
+    def _check_wbtc_configuration(self) -> None:
+        try:
+            token = (self._address_for_symbol("WBTC") or "").strip()
+        except Exception:
+            token = ""
+        if not token:
+            return
+        override = self._route_optional_from_env("WBTC_PRICE_PATH") or self._route_optional_from_env("WBTC_TRADE_PATH")
+        if override:
+            try:
+                self._warm_route_liquidity(override.tokens)
+            except Exception:
+                _logger.debug("failed to warm WBTC override path", exc_info=True)
+            return
+        _logger.warning("WBTC_TOKEN_ADDRESS configured without WBTC_PRICE_PATH; defaulting to WBTC->WETH->QUOTE routing")
+        try:
+            tokens = [token, self._weth_address(), self._quote_token_address()]
+            self._warm_route_liquidity(tokens)
+        except Exception:
+            _logger.debug("failed to warm default WBTC route", exc_info=True)
+
+    def _warm_route_liquidity(self, tokens: Sequence[str]) -> None:
+        if not tokens or len(tokens) < 2:
+            return
+        from services.marketdata.etherscan_verify import warm_cache_for_path
+
+        warm_cache_for_path(list(tokens))
+
     def __init__(self) -> None:
         self._ensure_warm_thread()
+        self._validate_trade_paths()
+        self._check_wbtc_configuration()
 
     def _norm_symbol_label(self, symbol: object) -> str:
         try:
@@ -1045,16 +1208,16 @@ class MarketDataProvider:
             try:
                 px_fb = self.diem_price_with_fallback()
                 if self._valid_price(px_fb):
-                    return float(px_fb)
+                    return self._apply_price_sanity("DIEM", float(px_fb))
             except Exception:
                 pass
             try:
                 route = self._route_from_env()
                 bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
-                return price if self._valid_price(price) else 0.0
+                return self._apply_price_sanity("DIEM", price)
             except Exception:
-                return 0.0
+                return self._apply_price_sanity("DIEM", 0.0)
         if su == "VVV":
             try:
                 token = self._address_for_symbol("VVV")
@@ -1106,9 +1269,12 @@ class MarketDataProvider:
                     raise ValueError("WBTC or QUOTE token address missing")
                 override = self._route_optional_from_env("WBTC_PRICE_PATH") or self._route_optional_from_env("WBTC_TRADE_PATH")
                 weth = self._weth_address()
-                routes = [override] if override else [make_route([token, quote])]
+                routes: List[RoutePlan] = []
+                if override:
+                    routes.append(override)
                 if weth and weth.lower() not in {token.lower(), quote.lower()}:
                     routes.append(make_route([token, weth, quote]))
+                routes.append(make_route([token, quote]))
                 for route in routes:
                     priced = None
                     candidates: list[float] = []
@@ -1133,23 +1299,23 @@ class MarketDataProvider:
                         if self._valid_price(scan_price):
                             priced = float(scan_price)
                     if priced is not None and self._valid_price(priced):
-                        return float(priced)
+                        return self._apply_price_sanity("WBTC", float(priced))
                 # Reserve-based fallback(s)
                 px_direct = self._mid_price_from_reserves(token, quote)
                 if self._valid_price(px_direct):
-                    return float(px_direct)
+                    return self._apply_price_sanity("WBTC", float(px_direct))
                 try:
                     px_tw = self._mid_price_from_reserves(token, weth) or 0.0
                     px_wq = self._mid_price_from_reserves(weth, quote) or 0.0
                     if self._valid_price(px_tw) and self._valid_price(px_wq):
                         combo = float(px_tw) * float(px_wq)
                         if self._valid_price(combo):
-                            return combo
+                            return self._apply_price_sanity("WBTC", combo)
                 except Exception:
                     pass
-                return 0.0
+                return self._apply_price_sanity("WBTC", 0.0)
             except Exception:
-                return 0.0
+                return self._apply_price_sanity("WBTC", 0.0)
         if su == "ETH":
             try:
                 weth = self._weth_address()
