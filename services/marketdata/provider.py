@@ -1111,17 +1111,20 @@ class MarketDataProvider:
                     routes.append(make_route([token, weth, quote]))
                 for route in routes:
                     priced = None
-                    for amt in (1.0, 0.1, 0.01, 0.001):
+                    candidates: list[float] = []
+                    probe_sizes = (1e-6, 1e-5, 1e-4, 1e-3, 0.01, 0.1, 1.0)
+                    for amt in probe_sizes:
                         try:
-                            bp = self.best_price(route, amount_in_decimal=amt, label_symbol=su)
+                            bp = self.best_price(route, amount_in_decimal=float(amt), label_symbol=su)
                         except Exception:
-                            bp = None
+                            continue
                         if not bp:
                             continue
                         price = float(bp.get("price") or 0.0)
                         if self._valid_price(price):
-                            priced = price
-                            break
+                            candidates.append(price)
+                    if candidates:
+                        priced = max(candidates)
                     if priced is None:
                         try:
                             scan_price = self._best_price_scan(route, start=1.0, min_amount=1e-6, factor=10.0)
@@ -1441,3 +1444,4 @@ class MarketDataProvider:
             return int(cap)
         except Exception:
             return None
+
