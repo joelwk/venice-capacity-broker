@@ -4,6 +4,7 @@ import json
 import os
 import time
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -81,6 +82,7 @@ class MarketDataProvider:
     _external_price_cache: Dict[str, Tuple[float, float]] = {}
     _external_price_lock: Lock = Lock()
 
+
     def _price_cache_key(self, symbol: str) -> str:
         return (symbol or "").upper()
 
@@ -92,9 +94,24 @@ class MarketDataProvider:
 
     def _price_cache_ttl(self) -> int:
         try:
-            return max(0, int(os.getenv("MARKETDATA_PRICE_CACHE_TTL_SECONDS") or "15"))
+            return max(0, int(os.getenv("MARKETDATA_PRICE_CACHE_TTL_SECONDS") or "60"))
         except Exception:
-            return 15
+            return 60
+
+    def _price_cache_ttl_for_symbol(self, symbol: str) -> int:
+        base = self._price_cache_ttl()
+        sym = (symbol or "").upper()
+        if sym in {"DIEM", "VVV"}:
+            try:
+                return max(1, int(os.getenv("MARKETDATA_PRICE_CACHE_TTL_DIEM_SECONDS") or "30"))
+            except Exception:
+                return 30
+        if sym == "USDC":
+            try:
+                return max(1, int(os.getenv("MARKETDATA_PRICE_CACHE_TTL_USDC_SECONDS") or "300"))
+            except Exception:
+                return 300
+        return base
 
     def _price_cache_failure_ttl(self) -> int:
         try:
@@ -115,8 +132,9 @@ class MarketDataProvider:
             return float(value)
 
     def _cache_price_set(self, symbol: str, value: float) -> None:
-        ttl = self._price_cache_ttl()
-        if not self._valid_price(value):
+        if self._valid_price(value):
+            ttl = self._price_cache_ttl_for_symbol(symbol)
+        else:
             ttl = self._price_cache_failure_ttl()
         if ttl <= 0:
             return
@@ -130,6 +148,14 @@ class MarketDataProvider:
                 except ValueError:
                     self._price_cache.clear()
             self._price_cache[key] = (time.time(), float(value), float(ttl))
+
+    def _stat_increment(self, key: str, delta: int = 1) -> None:
+        stats = getattr(self, '_active_stats', None)
+        if not stats:
+            return
+        with self._stats_lock:
+            stats[key] = stats.get(key, 0) + delta
+
 
 
     def _external_price_ttl(self) -> float:
@@ -286,6 +312,9 @@ class MarketDataProvider:
         warm_cache_for_path(list(tokens))
 
     def __init__(self) -> None:
+        self._stats_lock = Lock()
+        self._active_stats: Optional[Dict[str, Any]] = None
+        self._last_prices_stats: Dict[str, Any] = {}
         self._ensure_warm_thread()
         self._validate_trade_paths()
         self._check_wbtc_configuration()
@@ -360,6 +389,9 @@ class MarketDataProvider:
     def last_prices_latency(self) -> Tuple[float, float]:
         cls = type(self)
         return float(cls._last_prices_latency), float(cls._last_prices_latency_ts)
+
+    def last_prices_stats(self) -> Dict[str, Any]:
+        return dict(getattr(self, '_last_prices_stats', {}))
 
     def _ensure_warm_thread(self) -> None:
         cls = type(self)
@@ -620,6 +652,7 @@ class MarketDataProvider:
 
     def _try_path_direct(self, route: RoutePlan) -> Optional[float]:
         try:
+            self._stat_increment("dex_calls")
             bp = self.best_price(route, amount_in_decimal=1.0)
             price = float(bp.get("price") or 0.0)
             return price if self._valid_price(price) else None
@@ -637,6 +670,7 @@ class MarketDataProvider:
         attempts: List[Optional[float]] = []
         # Direct aggregator quote (best effort)
         try:
+            self._stat_increment("dex_calls")
             bp = self.best_price(make_route([token_in, token_out]), amount_in_decimal=1.0)
             attempts.append(float(bp.get("price") or 0.0))
         except Exception:
@@ -659,6 +693,7 @@ class MarketDataProvider:
         bridge = self._weth_address()
         if bridge and bridge.lower() not in {token_in.lower(), token_out.lower()}:
             try:
+                self._stat_increment("dex_calls")
                 bp_bridge = self.best_price(make_route([token_in, bridge, token_out]), amount_in_decimal=1.0)
                 price_bridge = float(bp_bridge.get("price") or 0.0)
                 if self._valid_price(price_bridge):
@@ -1128,42 +1163,65 @@ class MarketDataProvider:
     def prices(self, symbols: List[str]) -> Dict[str, float]:
         """Return prices for requested symbols with caching and telemetry."""
         symbols = list(symbols or [])
-        cache_hits = 0
-        cache_misses = 0
-        overall_outcome = "ok"
-        total_elapsed = 0.0
+        stats: Dict[str, Any] = {
+            "symbols": [self._norm_symbol_label(sym) for sym in symbols],
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "dex_calls": 0,
+        }
+        self._active_stats = stats
         raw: Dict[str, float] = {}
         normalized_out: Dict[str, float] = {}
+        overall_outcome = "ok"
+        total_elapsed = 0.0
         start_total = time.perf_counter()
+        label_map: Dict[str, str] = {}
+        start_map: Dict[str, float] = {}
         try:
+            misses: List[str] = []
             for sym in symbols:
                 sym_label = self._norm_symbol_label(sym)
+                label_map[sym] = sym_label
                 sym_start = time.perf_counter()
                 cached = self._cache_price_get(sym)
                 if cached is not None:
-                    cache_hits += 1
+                    stats["cache_hits"] += 1
                     raw[sym] = cached
                     self._record_counter("marketdata_price_cache_hits_total", {"symbol": sym_label})
                     elapsed = time.perf_counter() - sym_start
                     self._record_latency(sym_label, "symbol", elapsed, "cache")
                     continue
-                cache_misses += 1
+                stats["cache_misses"] += 1
                 self._record_counter("marketdata_price_cache_misses_total", {"symbol": sym_label})
-                try:
-                    price = self._price_for_symbol(sym)
-                except Exception:
-                    elapsed = time.perf_counter() - sym_start
-                    self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": "error"})
-                    self._record_latency(sym_label, "symbol", elapsed, "error")
-                    overall_outcome = "error"
-                    raise
-                else:
-                    raw[sym] = price
-                    outcome = "ok" if self._valid_price(price) else "invalid"
-                    elapsed = time.perf_counter() - sym_start
-                    self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": outcome})
-                    self._record_latency(sym_label, "symbol", elapsed, outcome)
-                    self._cache_price_set(sym, price)
+                misses.append(sym)
+                start_map[sym] = sym_start
+            worker_env = os.getenv("MARKETDATA_PRICE_FETCH_WORKERS")
+            try:
+                max_workers = int(worker_env) if worker_env else 4
+            except Exception:
+                max_workers = 4
+            max_workers = max(1, max_workers)
+            if misses:
+                with ThreadPoolExecutor(max_workers=min(len(misses), max_workers)) as executor:
+                    future_map = {executor.submit(self._price_for_symbol, sym): sym for sym in misses}
+                    for future, sym in future_map.items():
+                        sym_label = label_map.get(sym, self._norm_symbol_label(sym))
+                        sym_start = start_map.get(sym, start_total)
+                        try:
+                            price = future.result()
+                        except Exception:
+                            elapsed = time.perf_counter() - sym_start
+                            self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": "error"})
+                            self._record_latency(sym_label, "symbol", elapsed, "error")
+                            overall_outcome = "error"
+                            raise
+                        else:
+                            raw[sym] = price
+                            outcome = "ok" if self._valid_price(price) else "invalid"
+                            elapsed = time.perf_counter() - sym_start
+                            self._record_counter("marketdata_price_lookup_total", {"symbol": sym_label, "outcome": outcome})
+                            self._record_latency(sym_label, "symbol", elapsed, outcome)
+                            self._cache_price_set(sym, price)
             for sym, price in raw.items():
                 try:
                     val = float(price)
@@ -1174,15 +1232,16 @@ class MarketDataProvider:
                 elif not self._valid_price(val):
                     val = 0.0
                 normalized_out[sym] = val
+            total_elapsed = time.perf_counter() - start_total
             try:
                 from libs.telemetry.events import emit as _emit
-                total_elapsed = time.perf_counter() - start_total
                 payload = {
                     "symbols": [str(s) for s in symbols],
                     "prices": dict(normalized_out),
                     "latency_ms": round(total_elapsed * 1000.0, 3),
-                    "cache_hits": cache_hits,
-                    "cache_misses": cache_misses,
+                    "cache_hits": stats["cache_hits"],
+                    "cache_misses": stats["cache_misses"],
+                    "dex_calls": stats.get("dex_calls", 0),
                 }
                 _emit("signal.market.prices", payload)
             except Exception:
@@ -1198,6 +1257,12 @@ class MarketDataProvider:
             self._record_latency("batch", "request", total_elapsed, overall_outcome)
             request_labels = {"outcome": overall_outcome, "count": str(len(symbols))}
             self._record_counter("marketdata_prices_requests_total", request_labels)
+            self._active_stats = None
+            stats["duration_seconds"] = total_elapsed
+            total_requests = stats["cache_hits"] + stats["cache_misses"]
+            stats["cache_hit_rate"] = (stats["cache_hits"] / total_requests) if total_requests else 0.0
+            stats["timestamp"] = time.time()
+            self._last_prices_stats = dict(stats)
 
     def _price_for_symbol(self, symbol: str) -> float:
         sym_str = "" if symbol is None else str(symbol)
@@ -1213,6 +1278,7 @@ class MarketDataProvider:
                 pass
             try:
                 route = self._route_from_env()
+                self._stat_increment("dex_calls")
                 bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 return self._apply_price_sanity("DIEM", price)
@@ -1227,6 +1293,7 @@ class MarketDataProvider:
                 route_override = self._route_optional_from_env("VVV_PRICE_PATH") or self._route_optional_from_env("VVV_TRADE_PATH")
                 if route_override:
                     try:
+                        self._stat_increment("dex_calls")
                         bp = self.best_price(route_override, amount_in_decimal=1.0, label_symbol=su)
                         price = float(bp.get("price") or 0.0)
                         if self._valid_price(price):
@@ -1234,6 +1301,7 @@ class MarketDataProvider:
                     except Exception:
                         pass
                 try:
+                    self._stat_increment("dex_calls")
                     bp = self.best_price(make_route([token, quote]), amount_in_decimal=1.0)
                     price = float(bp.get("price") or 0.0)
                     if self._valid_price(price):
@@ -1242,6 +1310,7 @@ class MarketDataProvider:
                     pass
                 try:
                     weth = self._weth_address()
+                    self._stat_increment("dex_calls")
                     bp2 = self.best_price(make_route([token, weth, quote]), amount_in_decimal=1.0)
                     price = float(bp2.get("price") or 0.0)
                     if self._valid_price(price):
@@ -1281,6 +1350,7 @@ class MarketDataProvider:
                     probe_sizes = (1e-6, 1e-5, 1e-4, 1e-3, 0.01, 0.1, 1.0)
                     for amt in probe_sizes:
                         try:
+                            self._stat_increment("dex_calls")
                             bp = self.best_price(route, amount_in_decimal=float(amt), label_symbol=su)
                         except Exception:
                             continue
@@ -1320,6 +1390,7 @@ class MarketDataProvider:
             try:
                 weth = self._weth_address()
                 quote = self._quote_token_address()
+                self._stat_increment("dex_calls")
                 bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 if self._valid_price(price):

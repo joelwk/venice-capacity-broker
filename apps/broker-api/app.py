@@ -1562,6 +1562,48 @@ try:
     # --- Admin: per-tenant broker limits (caps/labels) ---
 
     # --- Market data (prices/signals) ---
+    @app.get("/v1/env-and-prices")
+    @_traceable("broker.env_and_prices")
+    def env_and_prices(
+        symbols: str = Query(default="VVV,DIEM,ETH,USDC,WBTC", description="Comma-separated symbols"),
+    ) -> dict:
+        syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
+        if not syms:
+            syms = ["VVV", "DIEM", "ETH", "USDC", "WBTC"]
+        start_total = time.perf_counter()
+        outcome = "ok"
+        meta: Dict[str, Any] = {"symbols": syms}
+        try:
+            env_payload = env_status()
+            try:
+                from services.marketdata.provider import MarketDataProvider  # type: ignore
+            except Exception as import_err:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"provider unavailable: {import_err}")
+            mdp = MarketDataProvider()
+            prices_payload = mdp.prices(syms)
+            try:
+                stats = mdp.last_prices_stats()
+            except Exception:
+                stats = {}
+            if isinstance(stats, dict):
+                for key in ("cache_hits", "cache_misses", "cache_hit_rate", "dex_calls", "duration_seconds"):
+                    if key in stats:
+                        meta[key] = stats[key]
+            duration = time.perf_counter() - start_total
+            meta["latency_ms"] = round(duration * 1000.0, 3)
+            return {"env": env_payload, "prices": prices_payload, "meta": meta}
+        except HTTPException:
+            outcome = "error"
+            raise
+        except Exception as exc:  # noqa: BLE001
+            outcome = "error"
+            raise HTTPException(status_code=500, detail=str(exc))
+        finally:
+            duration = time.perf_counter() - start_total
+            if _metrics_inc:
+                request_labels = {"outcome": outcome, "count": str(len(syms))}
+                _metrics_inc("env_prices_requests_total", labels=request_labels)
+
     @app.get("/v1/market/prices")
     @_traceable("broker.market_prices")
     def market_prices(

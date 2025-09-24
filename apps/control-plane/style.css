@@ -298,3 +298,25 @@ footer{padding:16px;color:var(--muted);text-align:center}
   .page-grid{ grid-template-columns:1fr; }
   .pricing-card{ position:static; }
 }
+.skeleton-row td {
+  padding: 10px 10px;
+}
+.skeleton-block {
+  display: inline-block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0.08) 100%);
+  background-size: 200% 100%;
+  animation: skeleton-wave 1.6s ease-in-out infinite;
+  opacity: 0.8;
+}
+.skeleton-w-1 { width: 48px; }
+.skeleton-w-2 { width: 72px; }
+.skeleton-w-3 { width: 96px; }
+.skeleton-w-4 { width: 120px; }
+@keyframes skeleton-wave {
+  0% { background-position: 200% 0; }
+  50% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+

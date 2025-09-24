@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 
 @dataclass
@@ -123,6 +123,9 @@ class MarketPricingEngine:
         except Exception:
             self._max_u = 1_000_000.0
 
+        self._prefetched_prices: Optional[Dict[str, float]] = None
+        self._prefetched_provider: Optional[Any] = None
+
     @staticmethod
     def _valid_price(value: Optional[float]) -> bool:
         try:
@@ -130,6 +133,17 @@ class MarketPricingEngine:
         except (TypeError, ValueError):
             return False
         return 1e-6 < v < 1e6
+
+    def set_prefetched_prices(self, provider: Any, prices: Dict[str, float]) -> None:
+        cleaned: Dict[str, float] = {}
+        if prices:
+            for key, value in prices.items():
+                try:
+                    cleaned[str(key).upper()] = float(value)
+                except Exception:
+                    continue
+        self._prefetched_prices = cleaned if cleaned else None
+        self._prefetched_provider = provider
 
     def price_from_budget(self, budget_amount: float, asset: str) -> QuoteDraft:
         try:
@@ -186,18 +200,26 @@ class MarketPricingEngine:
         eth_usd = 0.0
         wbtc_usd = 0.0
 
+        prefetched = self._prefetched_prices or None
+        pref_provider = self._prefetched_provider
+        self._prefetched_prices = None
+        self._prefetched_provider = None
+
         try:
             from services.marketdata.provider import MarketDataProvider  # lazy import
 
-            mdp = MarketDataProvider()
-            px = mdp.prices(["DIEM", "ETH", "USDC", "WBTC"]) or {}
-            if isinstance(px, dict):
-                if _valid(px.get("DIEM")):
-                    diem_usd = float(px["DIEM"])  # type: ignore[index]
-                if _valid(px.get("ETH")):
-                    eth_usd = float(px["ETH"])  # type: ignore[index]
-                if _valid(px.get("WBTC")):
-                    wbtc_usd = float(px["WBTC"])  # type: ignore[index]
+            if pref_provider is not None and hasattr(pref_provider, "prices"):
+                mdp = pref_provider  # type: ignore[assignment]
+            else:
+                mdp = MarketDataProvider()
+            px_source = prefetched if prefetched is not None else (mdp.prices(["DIEM", "ETH", "USDC", "WBTC"]) or {})
+            px = dict(px_source) if isinstance(px_source, dict) else {}
+            if _valid(px.get("DIEM")):
+                diem_usd = float(px["DIEM"])  # type: ignore[index]
+            if _valid(px.get("ETH")):
+                eth_usd = float(px["ETH"])  # type: ignore[index]
+            if _valid(px.get("WBTC")):
+                wbtc_usd = float(px["WBTC"])  # type: ignore[index]
             if not self._valid_price(diem_usd):
                 try:
                     alt = mdp.diem_price_with_fallback()

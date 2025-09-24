@@ -8,6 +8,9 @@ const state = {
   purchaseId: null,
   quoteUsdPerDiem: null,
   quoteAsset: null,
+  pricesLoading: false,
+  lastQuoteLatencyMs: null,
+  pricesMeta: null,
 };
 
 const assetDecimals = {
@@ -22,6 +25,7 @@ const QUOTE_ENDPOINT = "/v1/quotes";
 const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const ENV_ENDPOINT = "/v1/env";
+const ENV_AND_PRICES_ENDPOINT = "/v1/env-and-prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
 const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC,WBTC";
 const VENICE_API_BASE_URL = "https://api.venice.ai/api/v1";
 const TEST_MODELS_ENDPOINT = `${VENICE_API_BASE_URL}/models`;
@@ -29,6 +33,11 @@ const TEST_CHAT_ENDPOINT = `${VENICE_API_BASE_URL}/chat/completions`;
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
 const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
+const PRICING_SKELETON_HTML = [
+  '<tr class="skeleton-row"><td><span class="skeleton-block skeleton-w-1"></span></td><td><span class="skeleton-block skeleton-w-2"></span></td><td><span class="skeleton-block skeleton-w-3"></span></td><td><span class="skeleton-block skeleton-w-4"></span></td></tr>',
+  '<tr class="skeleton-row"><td><span class="skeleton-block skeleton-w-2"></span></td><td><span class="skeleton-block skeleton-w-3"></span></td><td><span class="skeleton-block skeleton-w-4"></span></td><td><span class="skeleton-block skeleton-w-1"></span></td></tr>',
+  '<tr class="skeleton-row"><td><span class="skeleton-block skeleton-w-3"></span></td><td><span class="skeleton-block skeleton-w-4"></span></td><td><span class="skeleton-block skeleton-w-1"></span></td><td><span class="skeleton-block skeleton-w-2"></span></td></tr>'
+].join('');
 const JSON_GET_HEADERS = { Accept: "application/json" };
 const JSON_POST_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
 
@@ -50,6 +59,13 @@ function clearAlert(el) {
   el.textContent = "";
   el.classList.add("hidden");
   el.classList.remove("alert-info", "alert-success", "alert-error");
+}
+
+function nowMs() {
+  if (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
 }
 
 function formatUsd(value) {
@@ -115,7 +131,15 @@ function renderPricingTable() {
   if (!table || !tbody || !empty) return;
 
   const prices = state.prices;
-  if (!prices || Object.keys(prices).length === 0) {
+  const hasPrices = prices && Object.keys(prices).length > 0;
+  if (state.pricesLoading && !hasPrices) {
+    table.classList.remove("hidden");
+    empty.classList.add("hidden");
+    if (note) note.textContent = 'Fetching live prices...';
+    tbody.innerHTML = PRICING_SKELETON_HTML;
+    return;
+  }
+  if (!hasPrices) {
     table.classList.add("hidden");
     tbody.innerHTML = "";
     empty.classList.remove("hidden");
@@ -154,7 +178,9 @@ function renderPricingTable() {
   empty.textContent = rows.length > 0 ? "" : "Market data unavailable.";
 
   if (note) {
-    if (state.quoteUsdPerDiem && state.quoteAsset) {
+    if (state.pricesLoading) {
+      note.textContent = 'Refreshing market data...';
+    } else if (state.quoteUsdPerDiem && state.quoteAsset) {
       const discount = (Number.isFinite(diemUsd) && diemUsd > 0)
         ? ((diemUsd - state.quoteUsdPerDiem) / diemUsd) * 100
         : null;
@@ -162,6 +188,21 @@ function renderPricingTable() {
       note.textContent = `Latest quote (${state.quoteAsset}): ${formatUsd(state.quoteUsdPerDiem)} per DIEM${formattedDiscount}.`;
     } else {
       note.textContent = "Generate a quote to compare mint pricing against the market.";
+    }
+    if (!state.pricesLoading && state.pricesMeta) {
+      const metaParts = [];
+      const latencyRaw = Number(state.pricesMeta.latency_ms ?? state.pricesMeta.latencyMs);
+      if (Number.isFinite(latencyRaw) && latencyRaw > 0) {
+        metaParts.push(`last refresh ${Math.round(latencyRaw)} ms`);
+      }
+      const hitRateRaw = Number(state.pricesMeta.cache_hit_rate ?? state.pricesMeta.cacheHitRate);
+      if (Number.isFinite(hitRateRaw) && hitRateRaw > 0 && hitRateRaw <= 1) {
+        metaParts.push(`cache hit ${(hitRateRaw * 100).toFixed(1)}%`);
+      }
+      if (metaParts.length > 0) {
+        const metaText = metaParts.join(', ');
+        note.textContent = note.textContent ? `${note.textContent} (${metaText})` : metaText;
+      }
     }
   }
 }
@@ -360,7 +401,11 @@ function applyQuote(result) {
   }
   details.classList.remove("hidden");
   if (refreshBtn) refreshBtn.hidden = false;
-  showAlert($("quote-status"), "success", "Quote ready. Send the payment before it expires.");
+  const latencyValue = Number(state.lastQuoteLatencyMs);
+  const latencyText = Number.isFinite(latencyValue) && latencyValue > 0
+    ? `Quote ready in ${latencyValue} ms. `
+    : '';
+  showAlert($("quote-status"), "success", `${latencyText}Send the payment before it expires.`);
   enableStep2(true);
   resetStep3();
   startQuoteTimer();
@@ -388,6 +433,7 @@ async function requestQuote() {
   resetStep3();
   clearAlert(status);
   clearAlert($("verify-status"));
+  state.lastQuoteLatencyMs = null;
 
   const unitsRaw = unitsInput ? Number(unitsInput.value) : DEFAULT_UNITS;
   if (!Number.isFinite(unitsRaw) || unitsRaw <= 0) {
@@ -406,12 +452,16 @@ async function requestQuote() {
     const params = new URLSearchParams();
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
+    const startedAt = nowMs();
     const res = await fetch(`${QUOTE_ENDPOINT}?${params.toString()}`, { headers: JSON_GET_HEADERS });
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || "Quote request failed");
     }
     const body = await res.json();
+    const latencyMs = Math.round(nowMs() - startedAt);
+    state.lastQuoteLatencyMs = latencyMs;
+    console.debug(`[quote] fetched in ${latencyMs} ms`);
     applyQuote(body);
     updateVerifyButtonState();
   } catch (err) {
@@ -640,32 +690,66 @@ async function connectWallet() {
   updateVerifyButtonState();
 }
 
+function applyEnvPayload(payload) {
+  const body = payload || {};
+  state.env = body;
+  const payments = (body && body.payments) || {};
+  state.treasury = payments.treasury_address || "";
+  populateAssets(payments.accepted_assets);
+  if (!state.treasury) {
+    showAlert($("quote-status"), "error", "Treasury address missing in server config.");
+  }
+  const feats = (body && body.features) || {};
+  if (feats && feats.quotes === false) {
+    const btn = $("quote-btn");
+    if (btn) btn.disabled = true;
+    showAlert($("quote-status"), "error", "Quotes are disabled by the server.");
+  }
+  if (feats && feats.purchases === false) {
+    enableStep2(false, { keepVisible: true });
+    showAlert($("verify-status"), "error", "Purchases are disabled by the server.");
+  }
+}
+
 async function loadEnv() {
   try {
     const res = await fetch(ENV_ENDPOINT, { headers: JSON_GET_HEADERS });
     if (!res.ok) return;
     const body = await res.json();
-    state.env = body || {};
-    const payments = (body && body.payments) || {};
-    state.treasury = payments.treasury_address || "";
-    populateAssets(payments.accepted_assets);
-    if (!state.treasury) {
-      showAlert($("quote-status"), "error", "Treasury address missing in server config.");
-    }
-    const feats = (body && body.features) || {};
-    if (feats && feats.quotes === false) {
-      const btn = $("quote-btn");
-      if (btn) btn.disabled = true;
-      showAlert($("quote-status"), "error", "Quotes are disabled by the server.");
-    }
-    if (feats && feats.purchases === false) {
-      enableStep2(false, { keepVisible: true });
-      showAlert($("verify-status"), "error", "Purchases are disabled by the server.");
-    }
+    applyEnvPayload(body || {});
   } catch {
     showAlert($("quote-status"), "error", "Failed to load server configuration.");
   }
 }
+
+async function loadEnvAndPrices() {
+  state.pricesMeta = null;
+  try {
+    const res = await fetch(ENV_AND_PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Combined env/prices request failed");
+    }
+    const body = await res.json();
+    const envPayload = body && body.env;
+    const pricePayload = body && body.prices;
+    if (!envPayload || !pricePayload) {
+      throw new Error("Combined payload missing env or prices");
+    }
+    applyEnvPayload(envPayload || {});
+    state.prices = pricePayload || {};
+    state.pricesMeta = body && body.meta ? body.meta : null;
+    state.pricesLoading = false;
+    computeQuoteMetrics();
+    renderPricingTable();
+    return true;
+  } catch (err) {
+    state.pricesMeta = null;
+    console.warn('Combined env/prices fetch failed', err);
+    return false;
+  }
+}
+
 
 function populateAssets(assets) {
   const select = $("quote-asset");
@@ -682,6 +766,12 @@ function populateAssets(assets) {
 }
 
 async function fetchPrices() {
+  const hadPrices = state.prices && Object.keys(state.prices).length > 0;
+  state.pricesLoading = true;
+  state.pricesMeta = null;
+  if (!hadPrices) {
+    renderPricingTable();
+  }
   try {
     const res = await fetch(PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
     if (!res.ok) {
@@ -690,11 +780,11 @@ async function fetchPrices() {
     const body = await res.json();
     state.prices = (body && body.prices) || {};
   } catch (err) {
-    // keep previous prices on failure but surface the message in console for debugging
     if (err) {
       console.warn('Market price fetch failed', err);
     }
   } finally {
+    state.pricesLoading = false;
     computeQuoteMetrics();
     renderPricingTable();
   }
@@ -954,10 +1044,13 @@ async function init() {
   initDefaults();
   setupEventHandlers();
   enableStep2(false);
-  await loadEnv();
-  await fetchPrices();
-  schedulePriceRefresh();
+  state.pricesLoading = true;
   renderPricingTable();
+  const combinedLoaded = await loadEnvAndPrices();
+  if (!combinedLoaded) {
+    await Promise.all([loadEnv(), fetchPrices()]);
+  }
+  schedulePriceRefresh();
   updateVerifyButtonState();
 }
 

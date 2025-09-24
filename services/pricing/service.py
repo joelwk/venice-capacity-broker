@@ -7,7 +7,7 @@ import importlib
 import os
 from libs.pricing.engine import StaticPricingEngine, MarketPricingEngine
 from db.session import get_session, create_db_and_tables
-
+from libs.telemetry.events import emit as emit_event
 
 def _refresh_session_bindings() -> None:
     """Ensure db.session helpers point to the real module (tests may stub earlier)."""
@@ -208,72 +208,135 @@ class PricingService:
         asset: str,
         budget_usd: Optional[float] = None,
     ) -> Dict[str, object]:
-        if units is not None and budget_usd is not None:
-            raise ValueError("provide either units or budget, not both")
-        if budget_usd is not None:
-            budget_value = float(budget_usd)
-            asset_u = asset.strip().upper()
+        start_time = time.perf_counter()
+        outcome = "ok"
+        prefetched_prices: Dict[str, float] = {}
+        mdp_stats: Dict[str, Any] = {}
+        discount_meta: Dict[str, Any] = {}
+        try:
             if isinstance(self.engine, MarketPricingEngine):
                 try:
-                    _, price_map = self.engine._resolve_prices()  # type: ignore[attr-defined]
-                except Exception:  # noqa: BLE001
-                    price_map = {}
-                if asset_u in {"ETH", "WETH"}:
-                    eth_usd = float(price_map.get("ETH") or price_map.get("WETH") or 0.0)
-                    if not (eth_usd and eth_usd > 0):
-                        raise ValueError("ETH pricing unavailable for budget sizing")
-                    budget_value = budget_value / float(eth_usd)
-                elif asset_u == "WBTC":
-                    wbtc_usd = float(price_map.get("WBTC") or 0.0)
-                    if not (wbtc_usd and wbtc_usd > 0):
-                        raise ValueError("WBTC pricing unavailable for budget sizing")
-                    budget_value = budget_value / float(wbtc_usd)
-            draft = self.engine.price_from_budget(budget_value, asset)  # type: ignore[attr-defined]
-        else:
-            if units is None:
-                raise ValueError("units must be greater than zero")
-            draft = self.engine.price(float(units), asset)
-        # Utilization-aware adjustment
-        util = self._utilization_ratio()
-        alpha = float(os.getenv("PRICE_UTIL_ALPHA", "0.5") or 0.5)
-        mult = 1.0 + max(0.0, min(1.0, util)) * alpha
-        unit_price_markup = int(round(draft.unit_price * mult))
-        unit_price, discount_meta = self._apply_discount(
-            asset=draft.asset,
-            markup_multiplier=mult,
-            draft=draft,
-            unit_price_with_markup=unit_price_markup,
-        )
-        total_price = int(round(unit_price * float(draft.units)))
-        from datetime import datetime
-        quote_model = self._get_quote_model()
-        with next(get_session()) as s:  # type: ignore[call-arg]
-            q = quote_model(
-                quote_id=draft.quote_id,
-                units=float(draft.units),
+                    from services.marketdata.provider import MarketDataProvider  # lazy import
+
+                    mdp = MarketDataProvider()
+                    symbols = ["DIEM", "ETH", "USDC", "WBTC", "VVV"]
+                    prefetched = mdp.prices(symbols) or {}
+                    prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
+                    mdp_stats = mdp.last_prices_stats()
+                    if hasattr(self.engine, "set_prefetched_prices"):
+                        self.engine.set_prefetched_prices(mdp, prefetched_prices)
+                except Exception:
+                    prefetched_prices = {}
+                    mdp_stats = {}
+            if units is not None and budget_usd is not None:
+                raise ValueError("provide either units or budget, not both")
+            if budget_usd is not None:
+                budget_value = float(budget_usd)
+                asset_u = asset.strip().upper()
+                price_map: Dict[str, float] = {}
+                if isinstance(self.engine, MarketPricingEngine):
+                    price_map = dict(prefetched_prices)
+                    if not price_map:
+                        try:
+                            _, price_map = self.engine._resolve_prices()  # type: ignore[attr-defined]
+                        except Exception:  # noqa: BLE001
+                            price_map = {}
+                    if asset_u in {"ETH", "WETH"}:
+                        eth_usd = float(price_map.get("ETH") or price_map.get("WETH") or 0.0)
+                        if not (eth_usd and eth_usd > 0):
+                            raise ValueError("ETH pricing unavailable for budget sizing")
+                        budget_value = budget_value / float(eth_usd)
+                    elif asset_u == "WBTC":
+                        wbtc_usd = float(price_map.get("WBTC") or 0.0)
+                        if not (wbtc_usd and wbtc_usd > 0):
+                            raise ValueError("WBTC pricing unavailable for budget sizing")
+                        budget_value = budget_value / float(wbtc_usd)
+                draft = self.engine.price_from_budget(budget_value, asset)  # type: ignore[attr-defined]
+            else:
+                if units is None:
+                    raise ValueError("units must be greater than zero")
+                draft = self.engine.price(float(units), asset)
+            util = self._utilization_ratio()
+            alpha = float(os.getenv("PRICE_UTIL_ALPHA", "0.5") or 0.5)
+            mult = 1.0 + max(0.0, min(1.0, util)) * alpha
+            unit_price_markup = int(round(draft.unit_price * mult))
+            unit_price, discount_meta = self._apply_discount(
                 asset=draft.asset,
-                unit_price=unit_price,
-                total_price=total_price,
-                accepted_min=draft.accepted_min,
-                accepted_max=draft.accepted_max,
-                expires_at=datetime.utcfromtimestamp(draft.expires_at_epoch),
-                status="open",
+                markup_multiplier=mult,
+                draft=draft,
+                unit_price_with_markup=unit_price_markup,
             )
-            s.add(q)
-            s.commit()
-        return {
-            "quoteId": draft.quote_id,
-            "units": float(draft.units),
-            "asset": draft.asset,
-            "unitPrice": unit_price,
-            "totalPrice": total_price,
-            "acceptedMin": draft.accepted_min,
-            "acceptedMax": draft.accepted_max,
-            "expiresAt": draft.expires_at_epoch,
-            "discountBps": discount_meta.get("totalBps"),
-            "discount": discount_meta,
-            "unitPriceBeforeDiscount": unit_price_markup,
-        }
+            total_price = int(round(unit_price * float(draft.units)))
+            from datetime import datetime
+            quote_model = self._get_quote_model()
+            with next(get_session()) as s:  # type: ignore[call-arg]
+                q = quote_model(
+                    quote_id=draft.quote_id,
+                    units=float(draft.units),
+                    asset=draft.asset,
+                    unit_price=unit_price,
+                    total_price=total_price,
+                    accepted_min=draft.accepted_min,
+                    accepted_max=draft.accepted_max,
+                    expires_at=datetime.utcfromtimestamp(draft.expires_at_epoch),
+                    status="open",
+                )
+                s.add(q)
+                s.commit()
+            return {
+                "quoteId": draft.quote_id,
+                "units": float(draft.units),
+                "asset": draft.asset,
+                "unitPrice": unit_price,
+                "totalPrice": total_price,
+                "acceptedMin": draft.accepted_min,
+                "acceptedMax": draft.accepted_max,
+                "expiresAt": draft.expires_at_epoch,
+                "discountBps": discount_meta.get("totalBps"),
+                "discount": discount_meta,
+                "unitPriceBeforeDiscount": unit_price_markup,
+            }
+        except Exception:
+            outcome = "error"
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            try:
+                payload: Dict[str, Any] = {
+                    "outcome": outcome,
+                    "latency_ms": round(duration_ms, 3),
+                    "asset": asset.strip().upper(),
+                    "engine": "market" if isinstance(self.engine, MarketPricingEngine) else "static",
+                }
+                payload["quoteLatencyMs"] = payload["latency_ms"]
+                if units is not None:
+                    payload["units"] = float(units)
+                if budget_usd is not None:
+                    payload["budgetUsd"] = float(budget_usd)
+                if discount_meta:
+                    total_bps = discount_meta.get("totalBps")
+                    if total_bps is not None:
+                        payload["discountBps"] = total_bps
+                if prefetched_prices:
+                    payload["prefetch"] = True
+                if mdp_stats:
+                    cache_hits = mdp_stats.get("cache_hits")
+                    cache_misses = mdp_stats.get("cache_misses")
+                    hit_rate = mdp_stats.get("cache_hit_rate")
+                    dex_calls = mdp_stats.get("dex_calls")
+                    if cache_hits is not None:
+                        payload["cacheHits"] = cache_hits
+                    if cache_misses is not None:
+                        payload["cacheMisses"] = cache_misses
+                    if hit_rate is not None:
+                        payload["cacheHitRate"] = hit_rate
+                    if dex_calls is not None:
+                        payload["dexCalls"] = dex_calls
+                    if "duration_seconds" in mdp_stats:
+                        payload["pricesDurationSec"] = mdp_stats.get("duration_seconds")
+                emit_event("pricing.quote", payload)
+            except Exception:
+                pass
 
     def _utilization_ratio(self) -> float:
         """Compute recent utilization ratio as used/capacity in lookback window.

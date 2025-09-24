@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence
 import inspect
 
@@ -521,9 +523,35 @@ class UniswapV3DexProvider(DexProvider):
 class DexAggregator:
     def __init__(self, providers: List[DexProvider]) -> None:
         self.providers = providers
+        self._lock = Lock()
         self._circ_failures = int((os.getenv("DEX_CIRCUIT_FAILURES") or "3").strip() or 3)
         self._circ_cool = int((os.getenv("DEX_CIRCUIT_COOL_OFF_SECONDS") or "60").strip() or 60)
         self._circ: Dict[str, Dict[str, float | int]] = {}
+        try:
+            self._timeout = float((os.getenv("DEX_PROVIDER_TIMEOUT_SECONDS") or "0.5").strip() or 0.5)
+        except Exception:
+            self._timeout = 0.5
+        if self._timeout < 0:
+            self._timeout = 0.0
+        try:
+            worker_env = os.getenv("DEX_AGGREGATOR_MAX_WORKERS")
+            configured_workers = int(worker_env.strip()) if worker_env else 0
+        except Exception:
+            configured_workers = 0
+        default_workers = len(self.providers) if self.providers else 1
+        self._max_workers = max(1, configured_workers or default_workers)
+        try:
+            self._circ_backoff = float((os.getenv("DEX_CIRCUIT_BACKOFF_MULT") or "2.0").strip() or 2.0)
+        except Exception:
+            self._circ_backoff = 2.0
+        if self._circ_backoff < 1.0:
+            self._circ_backoff = 1.0
+        try:
+            self._circ_max_cool = float((os.getenv("DEX_CIRCUIT_MAX_COOL_SECONDS") or "300").strip() or 300.0)
+        except Exception:
+            self._circ_max_cool = 300.0
+        if self._circ_max_cool <= 0:
+            self._circ_max_cool = float(self._circ_cool)
 
     @staticmethod
     def _invoke_provider(provider: DexProvider, method: str, route: RoutePlan, *args):
@@ -550,42 +578,69 @@ class DexAggregator:
             return False
 
     def _circ_is_open(self, provider: str) -> bool:
-        st = self._circ.get(provider)
-        if not st:
-            return False
-        ou = float(st.get("open_until", 0.0))
-        return bool(ou and time.time() < ou)
+        with self._lock:
+            st = self._circ.get(provider)
+            if not st:
+                return False
+            ou = float(st.get("open_until", 0.0))
+            return bool(ou and time.time() < ou)
 
     def _circ_on_success(self, provider: str) -> None:
-        st = self._circ.get(provider)
-        if st:
-            st["failures"] = 0
-            st["open_until"] = 0.0
+        with self._lock:
+            st = self._circ.get(provider)
+            if st:
+                st["failures"] = 0
+                st["open_until"] = 0.0
 
-    def _circ_on_failure(self, provider: str) -> None:
-        st = self._circ.setdefault(provider, {"open_until": 0.0, "failures": 0})
-        st["failures"] = int(st.get("failures", 0)) + 1
-        if int(st["failures"]) >= int(self._circ_failures):
-            st["open_until"] = float(time.time() + self._circ_cool)
-            _metrics_inc("dex_circuit_open_total", labels={"provider": provider})
+    def _circ_on_failure(self, provider: str, reason: str = "error") -> None:
+        with self._lock:
+            st = self._circ.setdefault(provider, {"open_until": 0.0, "failures": 0})
+            failures = int(st.get("failures", 0)) + 1
+            st["failures"] = failures
+            if failures >= int(self._circ_failures):
+                extra = max(0, failures - self._circ_failures)
+                cool = self._circ_cool * (self._circ_backoff ** extra)
+                cool = min(cool, self._circ_max_cool)
+                st["open_until"] = float(time.time() + cool)
+                _metrics_inc("dex_circuit_open_total", labels={"provider": provider, "reason": reason, "cooldown": str(int(cool))})
+            else:
+                st["open_until"] = float(st.get("open_until", 0.0))
+
+    def _collect_quotes(self, providers: List[DexProvider], method: str, route_plan: RoutePlan, amount: int) -> List[Quote]:
+        quotes: List[Quote] = []
+        if not providers:
+            return quotes
+        max_workers = min(len(providers), self._max_workers)
+        timeout = self._timeout if self._timeout and self._timeout > 0 else None
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(self._invoke_provider, provider, method, route_plan, amount): provider for provider in providers}
+            for future, provider in future_map.items():
+                try:
+                    quote = future.result(timeout=timeout)
+                except TimeoutError:
+                    future.cancel()
+                    _metrics_inc("dex_agg_timeouts_total", labels={"provider": provider.name, "method": method})
+                    self._circ_on_failure(provider.name, reason="timeout")
+                    continue
+                except Exception:
+                    _metrics_inc("dex_agg_provider_errors_total", labels={"provider": provider.name, "method": method})
+                    self._circ_on_failure(provider.name)
+                    continue
+                if quote is not None:
+                    if quote.route is None:
+                        object.__setattr__(quote, "route", route_plan)
+                    quotes.append(quote)
+        return quotes
 
     def quote_all(self, amount_in: int, route: RouteLike) -> List[Quote]:
         route_plan = as_route_plan(route)
-        quotes: List[Quote] = []
+        active: List[DexProvider] = []
         for provider in self.providers:
             if self._circ_is_open(provider.name):
                 _metrics_inc("dex_circuit_skips_total", labels={"provider": provider.name})
                 continue
-            try:
-                quote = self._invoke_provider(provider, "quote", route_plan, amount_in)
-            except Exception:
-                self._circ_on_failure(provider.name)
-                quote = None
-            if quote is not None:
-                if quote.route is None:
-                    object.__setattr__(quote, "route", route_plan)
-                quotes.append(quote)
-        return quotes
+            active.append(provider)
+        return self._collect_quotes(active, "quote", route_plan, amount_in)
 
     def best_quote(self, amount_in: int, route: RouteLike) -> Optional[Quote]:
         quotes = self.quote_all(amount_in, route)
@@ -618,23 +673,15 @@ class DexAggregator:
 
     def quote_all_exact_out(self, amount_out: int, route: RouteLike) -> List[Quote]:
         route_plan = as_route_plan(route)
-        quotes: List[Quote] = []
+        active: List[DexProvider] = []
         for provider in self.providers:
             if not self._supports_exact_out(provider):
                 continue
             if self._circ_is_open(provider.name):
                 _metrics_inc("dex_circuit_skips_total", labels={"provider": provider.name})
                 continue
-            try:
-                quote = self._invoke_provider(provider, "quote_exact_out", route_plan, amount_out)
-            except Exception:
-                self._circ_on_failure(provider.name)
-                quote = None
-            if quote is not None:
-                if quote.route is None:
-                    object.__setattr__(quote, "route", route_plan)
-                quotes.append(quote)
-        return quotes
+            active.append(provider)
+        return self._collect_quotes(active, "quote_exact_out", route_plan, amount_out)
 
     def best_quote_exact_out(self, amount_out: int, route: RouteLike) -> Optional[Quote]:
         quotes = self.quote_all_exact_out(amount_out, route)
