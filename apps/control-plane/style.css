@@ -198,7 +198,7 @@ footer{padding:16px;color:var(--muted);text-align:center}
 
 .page-grid{
   display:grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  grid-template-columns:minmax(260px,320px) minmax(0,1fr) minmax(260px,320px);
   gap:24px;
   align-items:start;
 }
@@ -213,6 +213,48 @@ footer{padding:16px;color:var(--muted);text-align:center}
   display:flex;
   flex-direction:column;
   gap:12px;
+}
+.help-card{
+  position:sticky;
+  top:32px;
+  display:flex;
+  flex-direction:column;
+  gap:24px;
+}
+.help-section{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.help-links{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.help-link{
+  display:inline-flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 12px;
+  border-radius:8px;
+  border:1px solid var(--border);
+  background:rgba(138,180,248,0.08);
+  color:var(--accent);
+  text-decoration:none;
+  font-weight:500;
+}
+.help-link:hover{
+  background:rgba(138,180,248,0.18);
+}
+.help-form{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+#test-api-output{
+  margin:0;
+  max-height:220px;
+  white-space:pre-wrap;
 }
 .pricing-header h2{
   margin:0;
@@ -246,6 +288,12 @@ footer{padding:16px;color:var(--muted);text-align:center}
 .small{
   font-size:13px;
 }
+@media (max-width: 1240px){
+  .page-grid{ grid-template-columns:minmax(260px,320px) minmax(0,1fr); }
+  #guide-card{ grid-column:1 / -1; }
+  .help-card{ position:static; }
+}
+
 @media (max-width: 960px){
   .page-grid{ grid-template-columns:1fr; }
   .pricing-card{ position:static; }

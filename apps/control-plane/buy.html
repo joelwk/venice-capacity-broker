@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Purchase DIEM Credits</title>
+    <title>Venice Capacity Broker</title>
     <link rel="stylesheet" href="/admin/style.css" />
   </head>
   <body>
@@ -22,7 +22,7 @@
             <h2>Market Snapshot</h2>
             <p class="muted small">Live asset prices compared to DIEM.</p>
           </div>
-          <div id="pricing-empty" class="status small">Loading market data…</div>
+          <div id="pricing-empty" class="status small">Loading market dataï¿½</div>
           <table id="pricing-table" class="price-table hidden" aria-live="polite">
             <thead>
               <tr>
@@ -144,6 +144,31 @@
             </div>
           </section>
         </div>
+
+        <aside class="card help-card" id="guide-card">
+          <div class="help-section">
+            <h2>Need a quick start?</h2>
+            <p>Use these short guides to learn the basics fast.</p>
+            <div class="help-links">
+              <a class="help-link" href="https://docs.venice.ai/overview/about-venice" target="_blank" rel="noreferrer">What is Venice</a>
+              <a class="help-link" href="https://docs.venice.ai/overview/models" target="_blank" rel="noreferrer">Model catalog</a>
+              <a class="help-link" href="https://docs.venice.ai/api-reference/api-spec" target="_blank" rel="noreferrer">API reference</a>
+            </div>
+          </div>
+          <div class="help-section">
+            <h3>Test your API key</h3>
+            <p>Send a short hello call right here to confirm everything works.</p>
+            <form class="help-form" id="key-test-form">
+              <label for="test-api-key">Paste API key</label>
+              <input id="test-api-key" type="password" placeholder="vk_live_..." autocomplete="off" />
+              <label for="test-api-prompt">Prompt</label>
+              <textarea id="test-api-prompt" rows="3" placeholder="Ask Venice for a quick greeting."></textarea>
+              <button id="test-api-btn" type="button">Run test call</button>
+            </form>
+            <div id="test-api-status" class="status small" aria-live="polite"></div>
+            <pre id="test-api-output" class="mono hidden" aria-live="polite"></pre>
+          </div>
+        </aside>
       </div>
     </main>
 

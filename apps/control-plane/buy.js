@@ -23,6 +23,9 @@ const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const ENV_ENDPOINT = "/v1/env";
 const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC,WBTC";
+const VENICE_API_BASE_URL = "https://api.venice.ai/api/v1";
+const TEST_MODELS_ENDPOINT = `${VENICE_API_BASE_URL}/models`;
+const TEST_CHAT_ENDPOINT = `${VENICE_API_BASE_URL}/chat/completions`;
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
 const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
@@ -701,6 +704,193 @@ function schedulePriceRefresh() {
   setInterval(fetchPrices, PRICE_REFRESH_SECONDS * 1000);
 }
 
+function normalizeModelList(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.data && Array.isArray(payload.data.models)) return payload.data.models;
+  if (payload.data && Array.isArray(payload.data.items)) return payload.data.items;
+  if (payload.data && Array.isArray(payload.data.data)) return payload.data.data;
+  if (Array.isArray(payload.models)) return payload.models;
+  if (Array.isArray(payload.results)) return payload.results;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function pickChatModel(payload) {
+  const list = normalizeModelList(payload);
+  let fallback = null;
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = entry.id || entry.name || entry.model;
+    if (!id) continue;
+    if (!fallback) fallback = id;
+    const caps = entry.capabilities || entry.modes || entry.tags || entry.features || entry.supports;
+    if (Array.isArray(caps) && caps.some((cap) => typeof cap === "string" && cap.toLowerCase().includes("chat"))) {
+      return { id, supportsChat: true };
+    }
+    const type = entry.type || entry.category || entry.kind;
+    if (typeof type === "string" && type.toLowerCase().includes("chat")) {
+      return { id, supportsChat: true };
+    }
+  }
+  return { id: fallback, supportsChat: false };
+}
+
+function messageContentToString(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        return messageContentToString(item.text || item.content || item.value || item.message || item);
+      }
+      return "";
+    }).filter(Boolean).join(" ");
+  }
+  if (content && typeof content === "object") {
+    if (typeof content.text === "string") return content.text;
+    if (typeof content.content === "string") return content.content;
+    if (Array.isArray(content.parts)) return messageContentToString(content.parts);
+  }
+  return "";
+}
+
+function extractChatReply(body) {
+  if (!body || typeof body !== "object") return null;
+  const choices = Array.isArray(body.choices) ? body.choices : [];
+  for (const choice of choices) {
+    if (!choice) continue;
+    const message = choice.message || choice.delta || {};
+    const text = messageContentToString(message.content || message.text || choice.text || "");
+    if (text) return text;
+  }
+  const output = body.output || body.result || body.message;
+  const text = messageContentToString(output);
+  return text || null;
+}
+
+async function testApiKey() {
+  const keyField = $("test-api-key");
+  const promptField = $("test-api-prompt");
+  const statusEl = $("test-api-status");
+  const outputEl = $("test-api-output");
+  const triggerBtn = $("test-api-btn");
+  if (!keyField || !statusEl || !outputEl) return;
+
+  const apiKey = (keyField.value || "").trim();
+  const promptRaw = (promptField?.value || "").trim();
+
+  statusEl.classList.remove("error");
+  statusEl.textContent = "";
+  outputEl.textContent = "";
+  outputEl.classList.add("hidden");
+
+  if (triggerBtn) {
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = "Running test...";
+  }
+
+  if (!apiKey) {
+    statusEl.textContent = "Enter an API key to run the test.";
+    statusEl.classList.add("error");
+    if (triggerBtn) {
+      triggerBtn.disabled = false;
+      triggerBtn.textContent = "Run test call";
+    }
+    return;
+  }
+
+  const results = {};
+  statusEl.textContent = "Checking your key...";
+
+  try {
+    const modelsRes = await fetch(TEST_MODELS_ENDPOINT, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: "application/json",
+      },
+    });
+    const modelsBody = await modelsRes.json().catch(() => ({}));
+    if (!modelsRes.ok) {
+      const detail = modelsBody && (modelsBody.detail || modelsBody.message);
+      throw new Error(detail || `Key check failed (${modelsRes.status})`);
+    }
+
+    const normalized = normalizeModelList(modelsBody)
+      .map((entry) => ({
+        id: entry && (entry.id || entry.name || entry.model) || null,
+        type: entry && (entry.type || entry.category || entry.kind || null),
+      }))
+      .filter((item) => Boolean(item.id));
+    results.models = normalized.slice(0, 5);
+
+    const sampleNames = results.models.map((item) => item.id).join(", ");
+    statusEl.classList.remove("error");
+    statusEl.textContent = sampleNames
+      ? `Key works. Sample models: ${sampleNames}.`
+      : "Key works. Models endpoint responded.";
+
+    const { id: chatModelId } = pickChatModel(modelsBody);
+    if (!chatModelId) {
+      statusEl.textContent += " No chat model detected. Grab one from the docs and try again.";
+      outputEl.textContent = JSON.stringify(results, null, 2);
+      outputEl.classList.remove("hidden");
+      return;
+    }
+
+    const prompt = promptRaw || "Say hi to me in one friendly sentence.";
+    statusEl.textContent = `Key works. Sending your prompt with ${chatModelId}...`;
+
+    const chatRes = await fetch(TEST_CHAT_ENDPOINT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        model: chatModelId,
+        messages: [
+          { role: "system", content: "You are a helpful Venice assistant." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    const chatBody = await chatRes.json().catch(() => ({}));
+    if (!chatRes.ok) {
+      const detail = chatBody && (chatBody.detail || chatBody.message);
+      throw new Error(detail || `Chat call failed (${chatRes.status})`);
+    }
+
+    const reply = extractChatReply(chatBody);
+    results.chat = {
+      model: chatModelId,
+      prompt,
+      reply: reply || null,
+    };
+    if (!reply) {
+      results.chat.raw = chatBody;
+    }
+
+    statusEl.textContent = `Success. ${chatModelId} replied below.`;
+    outputEl.textContent = JSON.stringify(results, null, 2);
+    outputEl.classList.remove("hidden");
+  } catch (err) {
+    statusEl.textContent = err instanceof Error ? err.message : String(err);
+    statusEl.classList.add("error");
+    if (Object.keys(results).length > 0) {
+      outputEl.textContent = JSON.stringify(results, null, 2);
+      outputEl.classList.remove("hidden");
+    }
+  } finally {
+    if (triggerBtn) {
+      triggerBtn.disabled = false;
+      triggerBtn.textContent = "Run test call";
+    }
+  }
+}
+
 function setupEventHandlers() {
   const quoteBtn = $("quote-btn");
   if (quoteBtn) quoteBtn.addEventListener("click", requestQuote);
@@ -746,6 +936,10 @@ function setupEventHandlers() {
         await copyToClipboard(value, "API key copied to clipboard.", $("key-status"));
       }
     });
+  }
+  const testBtn = $("test-api-btn");
+  if (testBtn) {
+    testBtn.addEventListener("click", testApiKey);
   }
 }
 
