@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -621,7 +621,7 @@ def persist_metrics(m: TokenMetrics) -> None:
     with next(get_session()) as s:  # type: ignore[call-arg]
         # Upsert AssetToken
         tok = s.get(AssetToken, m.address)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if tok is None:
             tok = AssetToken(address=m.address, chain="base", symbol=m.symbol, name=m.name, decimals=m.decimals, created_at=now, updated_at=now)
             s.add(tok)

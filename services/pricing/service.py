@@ -267,7 +267,7 @@ class PricingService:
                 unit_price_with_markup=unit_price_markup,
             )
             total_price = int(round(unit_price * float(draft.units)))
-            from datetime import datetime
+            from datetime import datetime, timezone
             quote_model = self._get_quote_model()
             with next(get_session()) as s:  # type: ignore[call-arg]
                 q = quote_model(
@@ -278,7 +278,7 @@ class PricingService:
                     total_price=total_price,
                     accepted_min=draft.accepted_min,
                     accepted_max=draft.accepted_max,
-                    expires_at=datetime.utcfromtimestamp(draft.expires_at_epoch),
+                    expires_at=datetime.fromtimestamp(draft.expires_at_epoch, tz=timezone.utc),
                     status="open",
                 )
                 s.add(q)
@@ -352,8 +352,8 @@ class PricingService:
         try:
             from db.models import Counter
             from sqlmodel import select
-            from datetime import datetime, timedelta
-            now = datetime.utcnow()
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
             start = now - timedelta(minutes=lookback)
             used = 0
             with next(get_session()) as s:  # type: ignore[call-arg]

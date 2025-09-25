@@ -14,7 +14,7 @@ SQLModel is unavailable or initialization fails.
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from db.models import Tenant as DbTenant, Key as DbKey
 from db.session import get_session, create_db_and_tables
@@ -65,7 +65,7 @@ class SQLTenantStore:
                 db_t.status = t.status
                 if t.owner_address:
                     db_t.owner_address = t.owner_address
-                db_t.updated_at = datetime.utcnow()
+                db_t.updated_at = datetime.now(timezone.utc)
 
             # Insert key record (latest subkey/quota/expiry)
             expires_dt = self._parse_expires(t.expires_at)
@@ -100,7 +100,7 @@ class SQLTenantStore:
             if db_t is None:
                 return
             db_t.status = "revoked"
-            db_t.updated_at = datetime.utcnow()
+            db_t.updated_at = datetime.now(timezone.utc)
             session.add(db_t)
             session.commit()
 

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 import importlib.util
 from types import SimpleNamespace, ModuleType
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 
@@ -174,7 +174,7 @@ def test_counters_requires_admin_token(monkeypatch, tmp_path):
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
 
     # Prepare fake rows and SQL stubs
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     rows = [
         SimpleNamespace(
             tenant_id="t1",
@@ -208,7 +208,7 @@ def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants2.json")
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     rows = [
         SimpleNamespace(
             tenant_id="t1",
@@ -248,7 +248,7 @@ def test_counters_filters_limit_and_asc(tmp_path):
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
 
     # Build dataset across scopes and bucket sizes
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     rows = [
         SimpleNamespace(tenant_id="t1", scope="chat", model=None, bucket_start=now - timedelta(minutes=5), bucket_seconds=60, count=1),
         SimpleNamespace(tenant_id="t1", scope="chat", model=None, bucket_start=now - timedelta(minutes=4), bucket_seconds=60, count=2),

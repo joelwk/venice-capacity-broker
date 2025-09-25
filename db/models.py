@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 try:  # optional: only needed when building real SQL tables
     import sqlalchemy as sa  # type: ignore
@@ -29,13 +29,18 @@ except Exception:  # noqa: BLE001
         return None
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+
 class Tenant(SQLModel, table=True):  # type: ignore[call-arg]
     id: str = Field(primary_key=True)
     label: str
     status: str = Field(default="active")
     owner_address: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
-    updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class Key(SQLModel, table=True):  # type: ignore[call-arg]
@@ -46,7 +51,7 @@ class Key(SQLModel, table=True):  # type: ignore[call-arg]
     key_id: Optional[str] = Field(default=None)
     quota: int = 0
     expires_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Plan(SQLModel, table=True):  # type: ignore[call-arg]
@@ -76,7 +81,7 @@ class Counter(SQLModel, table=True):  # type: ignore[call-arg]
     bucket_start: datetime
     bucket_seconds: int = 60
     count: int = 0
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 # --- New: Quotes and Purchases for Buyer Flow ---
@@ -110,7 +115,7 @@ class Quote(SQLModel, table=True):  # type: ignore[call-arg]
         accepted_max: Optional[float] = None
     expires_at: datetime
     status: str = Field(default="open")
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
@@ -129,7 +134,7 @@ class Purchase(SQLModel, table=True):  # type: ignore[call-arg]
     subkey: Optional[str] = None
     key_id: Optional[str] = None
     expires_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
     fulfilled_at: Optional[datetime] = None
     # JSON blob with verification/audit details (tx, amounts, chain, etc.)
     receipt: Optional[str] = None
@@ -146,8 +151,8 @@ class AssetToken(SQLModel, table=True):  # type: ignore[call-arg]
     symbol: Optional[str] = None
     name: Optional[str] = None
     decimals: Optional[int] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
-    updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
 
 
 class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
@@ -158,7 +163,7 @@ class TokenSnapshot(SQLModel, table=True):  # type: ignore[call-arg]
 
     id: Optional[int] = Field(default=None, primary_key=True)
     token_address: str = Field(foreign_key="assettoken.address")
-    ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
+    ts: datetime = Field(default_factory=_utcnow, index=True)
     price_usd: Optional[float] = None
     # Use high-precision NUMERIC to avoid BIGINT overflow for large ERC-20 supplies
     # In test environments without SQLAlchemy, fall back to plain Optional[int]
@@ -186,7 +191,7 @@ class Decision(SQLModel, table=True):  # type: ignore[call-arg]
     action: str
     correlation_id: Optional[str] = None
     details: Optional[str] = None  # JSON string with context
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
 
 
 class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
@@ -197,7 +202,7 @@ class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
 
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str = Field(default="DIEM")
-    ts: datetime = Field(default_factory=lambda: datetime.utcnow(), index=True)
+    ts: datetime = Field(default_factory=_utcnow, index=True)
     price_usd: float
 
 
@@ -213,6 +218,6 @@ class Bid(SQLModel, table=True):  # type: ignore[call-arg]
     slippage_bps: int = 0
     nonce: int = 0
     status: str = Field(default="received")  # received|out_of_band|in_band|accepted_window|expired
-    created_at: datetime = Field(default_factory=lambda: datetime.utcnow())
-    updated_at: datetime = Field(default_factory=lambda: datetime.utcnow())
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
     context: Optional[str] = None  # JSON blob with extra info (e.g., last clearing price)
