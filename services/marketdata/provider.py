@@ -60,6 +60,11 @@ def _latency_bucket(seconds: float) -> str:
 
 
 DEXSCREENER_TOKEN_URL = "https://api.dexscreener.com/latest/dex/tokens/{address}"
+DEFAULT_TOKEN_ADDRESSES = {
+    "VVV": "0xacfe6019ed1a7dc6f7b508c02d1b04ec88cc21bf",
+    "DIEM": "0xf4d97f2da56e8c3098f3a8d538db630a2606a024",
+    "USDC": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+}
 
 
 class MarketDataProvider:
@@ -589,16 +594,19 @@ class MarketDataProvider:
 
         s = symbol.upper()
         if s == "DIEM":
-            return (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip() or None
+            value = (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip() or None
+            return value or DEFAULT_TOKEN_ADDRESSES.get("DIEM")
         if s == "VVV":
-            return (os.getenv("VVV_TOKEN_ADDRESS") or "").strip() or None
+            value = (os.getenv("VVV_TOKEN_ADDRESS") or "").strip() or None
+            return value or DEFAULT_TOKEN_ADDRESSES.get("VVV")
         if s in {"ETH", "WETH"}:
             try:
                 return self._weth_address()
             except Exception:
                 return None
         if s == "USDC":
-            return (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip() or None
+            value = (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip() or None
+            return value or DEFAULT_TOKEN_ADDRESSES.get("USDC")
         if s == "WBTC":
             return (
                 os.getenv("WBTC_TOKEN_ADDRESS")
