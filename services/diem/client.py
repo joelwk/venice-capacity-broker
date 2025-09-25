@@ -401,7 +401,7 @@ class DIEMService:
         idem_key: Optional[str] = None,
         corr_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Stake DIEM to realize daily API credits (\$1/day per token)."""
+        """Stake DIEM to realize daily API credits ($1/day per token)."""
 
         if dry_run:
             return {"status": "dry_run", "action": "stake_diem", "amount": int(amount)}
