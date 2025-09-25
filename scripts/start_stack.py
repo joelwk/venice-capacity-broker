@@ -65,28 +65,20 @@ def build_command_specs() -> List[CommandSpec]:
     if _truthy("AUTOSTART_ORCHESTRATOR", True):
         argv = [
             "apps/cli/main.py",
-            "run:orchestrator",
-            "--interval",
-            os.getenv("AUTOSTART_ORCHESTRATOR_INTERVAL", "5.0"),
-            "--backoff",
-            os.getenv("AUTOSTART_ORCHESTRATOR_BACKOFF", "1.0"),
-            "--max-backoff",
-            os.getenv("AUTOSTART_ORCHESTRATOR_MAX_BACKOFF", "60.0"),
+            "run:loop",
+            "--sleep",
+            os.getenv("AUTOSTART_ORCHESTRATOR_INTERVAL", "15"),
             "--max-cycles",
             "0",
         ]
-        if not _truthy("AUTOSTART_ORCHESTRATOR_LIVE", False):
-            argv.append("--dry-run")
-        specs.append(CommandSpec(name="orchestrator", argv=_python_argv(uv_bin, *argv)))
+        if _truthy("AUTOSTART_ORCHESTRATOR_LIVE", False):
+            argv.append("--enable-live")
+        specs.append(CommandSpec(name="agent-loop", argv=_python_argv(uv_bin, *argv)))
 
-    if _truthy("AUTOSTART_STAKEMASTER", True):
+    if _truthy("AUTOSTART_STAKEMASTER", False):
         argv = [
             "apps/cli/main.py",
-            "run:loop",
-            "--sleep",
-            os.getenv("AUTOSTART_STAKEMASTER_SLEEP", os.getenv("STAKEMASTER_AUTOSTART_SLEEP", "3600")),
-            "--max-cycles",
-            "0",
+            "run:stakemaster",
         ]
         if _truthy("AUTOSTART_STAKEMASTER_LIVE", False):
             argv.append("--enable-live")

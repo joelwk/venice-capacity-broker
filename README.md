@@ -52,7 +52,7 @@ ArbiDiem uses `services/marketdata/provider.py`, `services/risk/policy.py`, and 
 
 Every decision stores rationale so you can inspect `self._last_rationale` in telemetry.
 
-The Orchestrator in `graph/workflows/orchestrator.py` combines MarketDataProvider with ArbiDiem to emit structured decision records and optional SQL persistence.
+`graph/workflows/orchestrator.py` now ships a `SingleLoopOrchestrator` that runs StakeMaster → ArbiDiem → CapacityBroker each cycle, logging a consolidated record and persisting decisions when SQL is available.
 
 CapacityBroker reuses `services/venice_keys/manager.py` to mint scoped Venice sub-keys for tenants through the Broker API.
 
@@ -92,9 +92,9 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 7. Start the automation supervisor so the helpers boot with the API.
 
-   Run `make run-stack` to launch the Broker API, the orchestrator loop (dry-run by default), the StakeMaster heartbeat loop, and the token watcher in one terminal.
+   Run `make run-stack` to launch the Broker API, the single-loop agent orchestrator (dry-run by default), and the token watcher in one terminal.
 
-   Set `AUTOSTART_ORCHESTRATOR_LIVE=1` or `AUTOSTART_STAKEMASTER_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`.
+   Set `AUTOSTART_ORCHESTRATOR_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`. The legacy standalone StakeMaster loop is still available behind `AUTOSTART_STAKEMASTER=1` for targeted debugging.
 
    Keep `make run-broker` around when you only want the API without the helpers.
    On Replit, the default **Stack (dry-run)** runnable in `.replit` invokes `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`; switch to **Stack (live)** (or export `RUN_STACK_MODE=live`) when you are ready for on-chain activity, or trigger the **Run Venice Stack (dry)** / **Run Venice Stack (live)** workflows from the Workflows panel.
@@ -119,8 +119,8 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 4. Restart long-running helpers with `make run-stack` so they come up alongside the API, or launch them individually when you are debugging.
 
-   - Relaunch the orchestrator loop with `uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0`.
-   - Restart StakeMaster with `uv run python apps/cli/main.py run:stakemaster --enable-live`.
+   - Relaunch the agent loop with `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` (add `--enable-live` for on-chain mode).
+   - Run StakeMaster alone with `uv run python apps/cli/main.py run:stakemaster --enable-live` if you need a focused heartbeat check.
    - Resume the token watcher via `make watch-tokens` or its one-shot variant when you only need a single update.
 
 5. Validate live Venice connectivity and DEX pricing.
@@ -135,7 +135,7 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 The v1 scope keeps the single-agent orchestrator instead of the quorum-based topology that the plan described.
 
-`graph/workflows/orchestrator.py` owns the end-to-end DIEM decision and no weighted voting layer is wired in yet.
+`graph/workflows/orchestrator.py` owns the end-to-end DIEM decision and now exposes a combined StakeMaster → ArbiDiem → CapacityBroker loop; quorum and additional agents are still future work.
 
 `agents/ai_treasurer/agent.py` remains a lightweight helper that returns a delta without executing treasury transactions, so the richer treasury automation from the plan is still pending.
 
@@ -253,7 +253,7 @@ python apps/cli/main.py run:quorum --dry-run
 Primary v1 loop (orchestrator):
 
 ```
-python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 10
+python apps/cli/main.py run:loop --sleep 15 --max-cycles 10 --enable-live
 ```
 
 Dry-run notes:

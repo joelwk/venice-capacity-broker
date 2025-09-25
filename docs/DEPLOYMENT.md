@@ -34,9 +34,9 @@ Overview
 
 7. Start the automation supervisor so helpers stay up with the API.
 
-   Run `make run-stack` to boot the Broker API, orchestrator (dry-run by default), StakeMaster loop, and token watcher in one command.
+   Run `make run-stack` to boot the Broker API, the single-loop agent orchestrator (dry-run by default), and the token watcher in one command.
 
-   Export `AUTOSTART_ORCHESTRATOR_LIVE=1` or `AUTOSTART_STAKEMASTER_LIVE=1` before the command when you are ready for on-chain execution, or disable any component with `AUTOSTART_<NAME>=0`.
+   Export `AUTOSTART_ORCHESTRATOR_LIVE=1` before the command when you are ready for on-chain execution, or disable any component with `AUTOSTART_<NAME>=0`. The standalone StakeMaster loop is available by setting `AUTOSTART_STAKEMASTER=1` when you need it.
 
    Keep `make run-broker` around for API-only sessions.
 
@@ -56,8 +56,8 @@ Overview
 
 4. Restart the helpers that normally run in the background with `make run-stack` so they stand up beside the API, or launch them individually when you are debugging.
 
-   - Orchestrator loop as above.
-   - StakeMaster heartbeat as above.
+   - Agent loop via `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` (append `--enable-live` for on-chain).
+   - StakeMaster heartbeat only via `uv run python apps/cli/main.py run:stakemaster --enable-live`.
    - Token watcher via `make watch-tokens` or `make watch-tokens-once` for a single refresh.
 
 5. Exercise Venice connectivity and pricing once the services are up.
@@ -70,11 +70,11 @@ Overview
 
 ## Background Processes
 
-- `make run-stack` launches the Broker API, orchestrator, StakeMaster, and token watcher together via `scripts/start_stack.py`; toggle components with `AUTOSTART_*` env vars and keep it in dry-run mode unless you set the `*_LIVE` flags. The token watcher stays off unless you export `ETHERSCAN_API_KEY`/`BASESCAN_API_KEY` or opt in with `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`.
+- `make run-stack` launches the Broker API, the single-loop agent orchestrator, and the token watcher together via `scripts/start_stack.py`; toggle components with `AUTOSTART_*` env vars and keep it in dry-run mode unless you set the `*_LIVE` flags. The token watcher stays off unless you export `ETHERSCAN_API_KEY`/`BASESCAN_API_KEY` or opt in with `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`. Enable the legacy standalone StakeMaster loop by setting `AUTOSTART_STAKEMASTER=1`.
 
-- Orchestrator runs from `graph/workflows/orchestrator.py` and is exposed through the CLI `run:orchestrator` parser entry at `apps/cli/main.py:1255`.
+- The combined agent loop runs from `graph/workflows/orchestrator.py` and is exposed through the CLI `run:loop` parser entry in `apps/cli/main.py`.
 
-- StakeMaster lives in `agents/stake_master/agent.py` and the CLI `run:stakemaster` entry wires in optional live claims.
+- StakeMaster lives in `agents/stake_master/agent.py` and still has a dedicated CLI entry (`run:stakemaster`) for focused heartbeat checks.
 
 - The token watcher service in `services/marketdata/token_watcher.py` stores price and supply snapshots when you use the `make watch-tokens` target defined near line 158 of the Makefile.
 

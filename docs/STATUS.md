@@ -13,7 +13,7 @@ What's Done
  - DIEM service: on-chain `mint` and `burn` wired via AgentKit actions; optional sVVV capacity gate and lock/unlock hooks; CLI verbs `diem:mint` and `diem:burn` available.
  - Orchestrator: portfolio exposure cap wiring (env-gated) passes computed USD exposure to ArbiDiem; decision records include `ts` and `why` for debugging.
  - Broker limits self-service: tenant endpoints `GET/POST /v1/me/broker-limits` allow tenants to tighten rate limits (increase `windowSeconds`, decrease `maxRequests`); admin retains full control under `/v1/tenants/{id}/broker-limits`.
-- Automation: `scripts/start_stack.py` (surface via `make run-stack`) keeps the Broker API, orchestrator, StakeMaster, and token watcher running together with opt-in live flags.
+- Automation: `scripts/start_stack.py` (surface via `make run-stack`) now launches the Broker API, the single-loop agent orchestrator, and the token watcher together with opt-in live flags.
 
 Needs Attention
 - Migrations & recovery: ensure compaction and migration runbooks are robust.
@@ -31,7 +31,7 @@ Next Steps (Execution Order)
 
 ## Plan Gaps vs `implementation-plan.md`
 
-- The orchestrator remains single-agent and lives in `graph/workflows/orchestrator.py:27`, so the quorum governance described in Section 5 of the plan is still future work.
+- The orchestrator remains single-agent (StakeMaster → ArbiDiem → CapacityBroker) and lives in `graph/workflows/orchestrator.py`, so the quorum governance described in Section 5 of the plan is still future work.
 
 - `agents/ai_treasurer/agent.py:12` keeps the treasurer logic as a pure calculation helper; no automated treasury execution layer exists yet despite the sprint roadmap in the plan.
 

@@ -15,12 +15,12 @@ Overview
 
 - Run `make env-status` or click the Env Snapshot card after every deploy to compare live settings with your `.env` file.
 
-- Use `make run-stack` when you need to restart the Broker API and helper loops together; set `AUTOSTART_*` toggles before running.
+- Use `make run-stack` when you need to restart the Broker API and helper loops together; set `AUTOSTART_*` toggles before running. The default stack now starts the single-loop orchestrator alongside the API.
 
 - For manual spot checks you can still launch helpers individually from the shell beside the admin UI:
 
-  - `uv run python apps/cli/main.py run:stakemaster --enable-live` ensures the heartbeat described in `agents/stake_master/agent.py:26` stays active.
-  - `uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0` evaluates DIEM trades through `graph/workflows/orchestrator.py:27`.
+  - `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` exercises the combined StakeMaster â†’ ArbiDiem â†’ CapacityBroker loop (add `--enable-live` for on-chain mode).
+  - `uv run python apps/cli/main.py run:stakemaster --enable-live` focuses solely on the heartbeat described in `agents/stake_master/agent.py:26`.
   - `make watch-tokens` runs `services/marketdata/token_watcher.py:654` so the Buyer page can show up-to-date supply metrics.
 
 - When Venice connectivity becomes unstable, open the Venice card and run the inline probe or call `uv run python apps/cli/main.py venice:signals`.
@@ -138,9 +138,9 @@ Validated Front-End Flows
 
 Buyer Page
 - Navigate to `/admin/buy.html` for the Buyer flow. Cards appear once `/v1/env.features` reports `quotes=true` (Step 1) and `purchases=true` (Step 2/3).
-- Step 1 (“Get Payment Details”) requests a live quote, shows the amount/address with copy helpers, renders a USD estimate, and starts a visible expiry countdown beside the Market Snapshot sidebar.
-- Step 2 (“Confirm Transaction”) stays hidden until a quote is active, then unlocks the wallet + tx hash inputs, enables Connect Wallet, and shows inline alerts/spinner while verification runs. Expired quotes re-disable the step and prompt for a refresh.
-- Step 3 (“Receive API Key”) appears only after verification succeeds, presents a success checkmark, exposes the scoped key with a copy button, and shows the formatted expiry.
+- Step 1 (Get Payment Details) requests a live quote, shows the amount/address with copy helpers, renders a USD estimate, and starts a visible expiry countdown beside the Market Snapshot sidebar.
+- Step 2 (Confirm Transaction) stays hidden until a quote is active, then unlocks the wallet + tx hash inputs, enables Connect Wallet, and shows inline alerts/spinner while verification runs. Expired quotes re-disable the step and prompt for a refresh.
+- Step 3 (Receive API Key) appears only after verification succeeds, presents a success checkmark, exposes the scoped key with a copy button, and shows the formatted expiry.
 - All alerts now use friendly copy instead of raw JSON; copy-to-clipboard buttons acknowledge success, and verification errors keep Step 2 visible (disabled) so the message remains readable.
 Updates
 - Chat idempotency: duplicate payloads within TTL return 409. The `make chat-admin` helper sets a default Idempotency-Key automatically; override with `IDK=<value>`.
