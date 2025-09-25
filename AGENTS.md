@@ -226,6 +226,8 @@ Design the loop so a quorum coordinator can drop in later with minimal changes.&
 
 * `agents/reflex/guardian.py` halts live trading on anomalies; persist PnL, Diem used vs. wasted, and tenant utilization for long-term recall.&#x20;
 
+* Configure via `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK`, and the `REFLEX_*` guardrail envs; use `DIEM_FAKE_PRICE` / `DIEM_FAKE_MINT_RATE` for offline simulations.
+
 ## Operational policy and risk
 
 * **Sizing** — Respect pool‑take caps (e.g., `RISK_MAX_POOL_TAKE_BPS`) and slippage caps (default 150 bps).

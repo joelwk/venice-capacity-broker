@@ -93,7 +93,10 @@ This guide catalogs the production agents that operate the Venice Capacity Broke
 - Persists decision records via SQL `Decision` model when available; emits metrics and tracing spans.
 
 **Configuration requirements**
-- Orchestrator env controls: `AGENTS_PAUSED`, `AUTOSTART_ORCHESTRATOR_LIVE`, `RISK_ENABLE_PORTFOLIO_CAP`, inventory unit envs, optional quorum wiring.
+- Orchestrator env controls: `AGENTS_PAUSED`, `ORCHESTRATOR_STAKE_LIVE`, `AUTOSTART_ORCHESTRATOR_LIVE`, and `RISK_ENABLE_PORTFOLIO_CAP` with inventory envs (`DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS`).
+- Memory & reflection: `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK` tune cycle logging and critiques.
+- Reflex guardrails: `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_UTILIZATION`, `REFLEX_MAX_PRICE_DRAWDOWN`, `REFLEX_APPLY_DRY_RUN`, `REFLEX_REQUIRE_ACTIVE_STAKE` control anomaly halts.
+- Dry-run helpers: `DIEM_FAKE_PRICE`, `DIEM_FAKE_MINT_RATE` enable offline simulation.
 - Market data backing (`services/marketdata.provider.MarketDataProvider`).
 - Optional quorum object (`agents.quorum.core.Quorum`).
 

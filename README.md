@@ -238,6 +238,11 @@ Risk utilization/volatility (optional):
 - `RISK_UTIL_ALPHA`: multiplier = `1 + alpha * utilization` (default 0.5)
 - `RISK_MAX_VOLATILITY_BPS`: when >0, caps units proportionally when realized vol exceeds cap
 
+Memory & reflex (optional):
+- `AGENT_MEMORY_PATH` selects the log file for cycle persistence.
+- `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK` adjust critique verbosity.
+- `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_UTILIZATION`, `REFLEX_MAX_PRICE_DRAWDOWN`, `REFLEX_APPLY_DRY_RUN`, `REFLEX_REQUIRE_ACTIVE_STAKE` gate live execution on anomalies.
+
 Run the CLI help:
 
 ```

@@ -72,6 +72,7 @@ Security
 - UI stores token only in the browser; click Clear to remove it
 - Admin actions use the same backend auth as the `/v1/*` endpoints
  - Set `AGENTS_PAUSED=true` to pause orchestrator decisions without redeploying
+ - Tuning memory/reflex thresholds is runtime-driven: adjust `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK`, and `REFLEX_*` env values before restarting the stack.
 
 Environment & Backends
 - Store backend: SQL is default (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Set `BROKER_STORE_BACKEND=json` only for local file-based development.
