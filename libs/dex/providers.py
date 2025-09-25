@@ -603,6 +603,7 @@ class DexAggregator:
                 cool = min(cool, self._circ_max_cool)
                 st["open_until"] = float(time.time() + cool)
                 _metrics_inc("dex_circuit_open_total", labels={"provider": provider, "reason": reason, "cooldown": str(int(cool))})
+                _metrics_inc("dex_circuit_open_total", labels={"provider": provider})
             else:
                 st["open_until"] = float(st.get("open_until", 0.0))
 
