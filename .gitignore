@@ -31,6 +31,8 @@ build/
 *.sqlite-wal
 *.sqlite-journal
 apps/broker-api/tenants.json
+db/agent_memory.jsonl
+db/agent_memory.jsonl.*
 
 # Test & coverage artifacts
 .coverage
@@ -44,4 +46,5 @@ coverage/
 .hypothesis/
 
 # Logs
+logs/
 *.log
