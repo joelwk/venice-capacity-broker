@@ -167,10 +167,10 @@ Preempt lower‑priority workflows when `RiskModel` flags a hazard.
 
 ## Memory and reflection
 
-Add a memory module that logs each agent’s actions, market conditions, and outcomes.  
-After major actions, run a simple reflection process to summarise why the action was taken and whether it was optimal.  
-Store lessons in a vector store and feed them back into agent prompts so they avoid past mistakes.  
-Include a reflex agent that can halt trading or staking on anomalous conditions (e.g., market crash, API outage).
+`services/memory/store.py` now provides an append-only `MemoryStore` that records each orchestrator cycle to `db/agent_memory.jsonl` while keeping a short in-process buffer.  
+`services/memory/reflection.py` ships `ReflectionEngine`, which reviews the latest cycle plus a configurable lookback window and emits critiques that feed back into agent prompts.  
+Extend the reflection output with PnL tracking and per-tenant waste metrics before promoting the quorum flow to multi-agent execution.  
+`agents/reflex/guardian.py` implements a `ReflexGuardian` that halts live execution on drawdowns, volatility spikes, or inactive staking heartbeats; add new anomaly heuristics here as they emerge.
 
 ---
 

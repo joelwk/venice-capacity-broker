@@ -13,6 +13,7 @@ What's Done
  - DIEM service: on-chain `mint` and `burn` wired via AgentKit actions; optional sVVV capacity gate and lock/unlock hooks; CLI verbs `diem:mint` and `diem:burn` available.
  - Orchestrator: portfolio exposure cap wiring (env-gated) passes computed USD exposure to ArbiDiem; decision records include `ts` and `why` for debugging.
  - Broker limits self-service: tenant endpoints `GET/POST /v1/me/broker-limits` allow tenants to tighten rate limits (increase `windowSeconds`, decrease `maxRequests`); admin retains full control under `/v1/tenants/{id}/broker-limits`.
+- Memory & reflex: single-loop orchestrator now persists cycle logs via `services/memory`, runs `ReflectionEngine` critiques, and halts anomalies with `agents/reflex/guardian.py`.
 - Automation: `scripts/start_stack.py` (surface via `make run-stack`) now launches the Broker API, the single-loop agent orchestrator, and the token watcher together with opt-in live flags.
 
 Needs Attention
@@ -25,9 +26,10 @@ Needs Attention
 
 Next Steps (Execution Order)
 1) Stabilize market data latency and metrics (implementation plan Section 6: Market Data) so `/v1/market/prices` meets the latency target before scaling tenant traffic.
-2) Promote the quorum orchestrator from single-agent to multi-agent (implementation plan Section 5) and wire decision logging into the existing telemetry surface.
-3) Graduate the AI Treasurer from helper to automated execution per implementation plan Section 8, including guard rails and on-chain test coverage.
-4) Expand capacity resale beyond scoped keys (implementation plan Section 4) with DIEM rental logic and lifecycle runbooks.
+2) Use the new MemoryStore/ReflectionEngine to backfill vector recall and surface critiques in agent prompts before promoting the quorum orchestrator.
+3) Promote the quorum orchestrator from single-agent to multi-agent (implementation plan Section 5) and wire decision logging into the existing telemetry surface.
+4) Graduate the AI Treasurer from helper to automated execution per implementation plan Section 8, including guard rails and on-chain test coverage.
+5) Expand capacity resale beyond scoped keys (implementation plan Section 4) with DIEM rental logic and lifecycle runbooks.
 
 ## Plan Gaps vs `implementation-plan.md`
 

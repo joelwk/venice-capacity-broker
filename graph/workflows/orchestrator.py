@@ -295,6 +295,9 @@ class SingleLoopOrchestrator:
     market: Any
     quorum: Optional[Any] = None
     parent_key: Optional[str] = None
+    memory_store: Optional[Any] = None
+    reflection: Optional[Any] = None
+    reflex_guard: Optional[Any] = None
 
     def _invoke_arbi(
         self,
@@ -351,13 +354,14 @@ class SingleLoopOrchestrator:
         vol_bps: Optional[float] = None
         effective_mint_rate = float(mint_rate)
         mint_rate_source = "param"
+        prices: Dict[str, float] = {}
 
         if dry_run:
             try:
                 px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
             except Exception:
                 px = 1.0
-            prices: Dict[str, float] = {"DIEM": px, "VVV": 0.0, "USDC": 1.0}
+            prices = {"DIEM": px, "VVV": 0.0, "USDC": 1.0}
             try:
                 fake_rate = os.getenv("DIEM_FAKE_MINT_RATE") or os.getenv("DIEM_MINT_RATE")
                 if fake_rate:
@@ -445,8 +449,35 @@ class SingleLoopOrchestrator:
             except Exception:
                 current_inventory_usd = None
 
-        corr = str(uuid.uuid4())
+        correlation_id = str(uuid.uuid4())
+        reflex_info: Optional[Dict[str, Any]] = None
+        reflex_blocked = False
+        if self.reflex_guard is not None:
+            last_cycle = None
+            if self.memory_store is not None:
+                try:
+                    hist = self.memory_store.recent(1)
+                    last_cycle = hist[0] if hist else None
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"Reflex history lookup failed: {exc}")
+                    last_cycle = None
+            try:
+                reflex_info = self.reflex_guard.evaluate(
+                    price=px,
+                    utilization=utilization_ratio,
+                    vol_bps=vol_bps,
+                    stake=stake_result,
+                    dry_run=dry_run,
+                    enable_live=enable_live,
+                    last_cycle=last_cycle,
+                )
+                reflex_blocked = bool(reflex_info.get("halt"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Reflex guardian error: {exc}")
+                reflex_info = {"halt": False, "error": str(exc)}
+
         paused = _env_flag("AGENTS_PAUSED", False)
+        skip_agents = paused or reflex_blocked
         live_mode = bool(enable_live and not dry_run)
 
         signal_decision = False
@@ -454,16 +485,20 @@ class SingleLoopOrchestrator:
         quorum_info: Optional[Dict[str, Any]] = None
         execution_summary: Dict[str, Any] = {"status": "skipped", "executed": False}
 
-        if not paused:
-            sim_inventory = None if dry_run else current_inventory_usd
+        if skip_agents:
+            if paused:
+                execution_summary = {"status": "paused", "executed": False}
+            elif reflex_blocked:
+                execution_summary = {"status": "reflex_halt", "executed": False}
+        else:
             try:
                 sim_result = self._invoke_arbi(
                     px,
                     mint_rate=effective_mint_rate,
-                    current_inventory_usd=sim_inventory,
+                    current_inventory_usd=None if dry_run else current_inventory_usd,
                     utilization_ratio=utilization_ratio,
                     vol_bps=vol_bps,
-                    corr_id=corr,
+                    corr_id=correlation_id,
                     simulate=True,
                 )
             except Exception:
@@ -487,7 +522,7 @@ class SingleLoopOrchestrator:
                             current_inventory_usd=current_inventory_usd,
                             utilization_ratio=utilization_ratio,
                             vol_bps=vol_bps,
-                            corr_id=corr,
+                            corr_id=correlation_id,
                             simulate=False,
                         )
                         executed_decision = bool(live_result)
@@ -504,10 +539,11 @@ class SingleLoopOrchestrator:
                     executed_decision = False
             elif signal_decision:
                 execution_summary = {"status": "dry_run", "executed": False}
-        else:
-            logger.info("Agents paused; skipping ArbiDiem evaluation")
 
-        last_why = getattr(self.arbi, "_last_rationale", None)
+        if reflex_blocked:
+            last_why = {"decision": "hold", "reason": "reflex_guard", "details": reflex_info}
+        else:
+            last_why = getattr(self.arbi, "_last_rationale", None)
         action_label = None
         try:
             if isinstance(last_why, dict):
@@ -517,13 +553,17 @@ class SingleLoopOrchestrator:
         except Exception:
             action_label = None
 
+        if reflex_blocked:
+            signal_decision = False
+            executed_decision = False
+
         arbi_record = {
             "agent": "arbi_diem",
             "action": action_label or ("mint_sell" if signal_decision else "hold"),
             "price": px,
             "inventoryUsd": current_inventory_usd,
             "dry_run": dry_run,
-            "correlationId": corr,
+            "correlationId": None if skip_agents else correlation_id,
             "ts": cycle_ts,
             "mintRate": effective_mint_rate,
             "mintRateSource": mint_rate_source,
@@ -541,6 +581,8 @@ class SingleLoopOrchestrator:
         }
         if quorum_info is not None:
             arbi_record["quorum"] = quorum_info
+        if reflex_info is not None:
+            arbi_record["reflex"] = reflex_info
 
         try:
             _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": str(arbi_record["action"])})
@@ -562,6 +604,35 @@ class SingleLoopOrchestrator:
             "arbi": arbi_record,
             "capacity": cap_summary,
         }
+        cycle_record["agents"] = {
+            "stake_master": stake_result,
+            "arbi_diem": arbi_record,
+            "capacity_broker": cap_summary,
+        }
+        cycle_record["reflex"] = reflex_info
+
+        if self.reflection is not None:
+            try:
+                history_limit = getattr(self.reflection, "lookback", 10)
+                history = None
+                if self.memory_store is not None:
+                    history = self.memory_store.recent(int(history_limit))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Reflection history fetch failed: {exc}")
+                history = None
+            try:
+                reflection = self.reflection.reflect(cycle_record, history=history)
+                if reflection:
+                    cycle_record["reflection"] = reflection
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Reflection engine error: {exc}")
+
+        if self.memory_store is not None:
+            try:
+                self.memory_store.record_cycle(cycle_record)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"Memory store write failed: {exc}")
+
         logger.info(f"single-loop cycle: {cycle_record}")
         return cycle_record
 

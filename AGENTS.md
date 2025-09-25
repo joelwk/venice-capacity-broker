@@ -211,6 +211,8 @@ Trigger purchases of VVV/DIEM on demand spikes and sell or rent excess when slac
 The **single‑loop orchestrator** initializes wallet, staking, keys, market‑data, then runs: StakeMaster → ArbiDiem → CapacityBroker.
 Design the loop so a quorum coordinator can drop in later with minimal changes.&#x20;
 
+`agents/reflex/guardian.py` evaluates each cycle before ArbiDiem runs in live mode and halts execution when price drawdowns, volatility spikes, or inactive staking heartbeats show up.
+
 > Reference patterns: OpenAI Agents SDK treats agents as models with instructions, tools, guardrails, and **handoffs**.
 > Start simple with one agent and tools, then introduce handoffs or multi‑agent graphs only when specialization is required. ([OpenAI GitHub][3])
 
@@ -218,11 +220,11 @@ Design the loop so a quorum coordinator can drop in later with minimal changes.&
 
 ## Memory, reflexion, and logs
 
-* Log every decision, input signals, action, and outcome.
+* `services/memory/store.py` logs every decision, input signal, and outcome to `db/agent_memory.jsonl`.
 
-* After each material action, run a **reflection** step and store critiques for retrieval in later cycles.
+* `services/memory/reflection.py` runs the reflection pass after material actions and keeps a configurable hold streak critique.
 
-* Persist PnL, Diem used vs. wasted, and tenant utilization in a lightweight store; down‑sample for long‑term recall.&#x20;
+* `agents/reflex/guardian.py` halts live trading on anomalies; persist PnL, Diem used vs. wasted, and tenant utilization for long-term recall.&#x20;
 
 ## Operational policy and risk
 

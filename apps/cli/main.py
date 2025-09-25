@@ -438,6 +438,8 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     from services.venice_keys.manager import KeyManager
     from libs.venice_sdk.client import VeniceClient
     from agents.capacity_broker.agent import CapacityBroker
+    from services.memory import MemoryStore, ReflectionEngine
+    from agents.reflex.guardian import ReflexGuardian
     from graph.workflows.orchestrator import SingleLoopOrchestrator
 
     live = bool(getattr(args, "enable_live", False))
@@ -451,12 +453,19 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     capacity_agent = CapacityBroker(key_manager)
     market = MarketDataProvider()
 
+    memory_store = MemoryStore()
+    reflection = ReflectionEngine()
+    reflex_guard = ReflexGuardian()
+
     orchestrator = SingleLoopOrchestrator(
         stake_master=stake_agent,
         arbi=arbi_agent,
         capacity_broker=capacity_agent,
         market=market,
         parent_key=os.getenv("VENICE_API_KEY"),
+        memory_store=memory_store,
+        reflection=reflection,
+        reflex_guard=reflex_guard,
     )
 
     orchestrator.run_loop(
