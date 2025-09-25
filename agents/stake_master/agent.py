@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from libs.telemetry.logger import get_logger
 from services.staking.client import StakingService
@@ -30,10 +30,12 @@ class StakeMaster:
     _kv_store: Optional[object] = field(default=None, init=False, repr=False)
     _venice_cached: Optional[object] = field(default=None, init=False, repr=False)
 
-    def run_once(self, live: bool = False) -> None:
-        """Single heartbeat.
+    def run_once(self, live: bool = False) -> Dict[str, Any]:
+        """Single heartbeat cycle.
 
-        Reads status; if live is True and rewards>0, attempts a claim.
+        Reads staking status; if ``live`` and rewards are available, it attempts a
+        claim. Returns a structured summary so orchestrators can record the
+        outcome without parsing logs.
         """
         status = self.staking.status()
         logger.info(f"Status: {status}")
@@ -46,8 +48,17 @@ class StakeMaster:
                 "cooldown_remaining": status.get("cooldown", {}).get("seconds_remaining"),
             },
         )
+
+        claim_info: Dict[str, Any] = {
+            "attempted": bool(live),
+            "executed": False,
+            "tx": None,
+            "reason": None,
+        }
+        rewards = int(status.get("rewards", 0))
+
         if live:
-            if int(status.get("rewards", 0)) > 0:
+            if rewards > 0:
                 res = self.staking.claim()
                 logger.info(f"Claim result: {res}")
                 _emit_event(
@@ -55,14 +66,34 @@ class StakeMaster:
                     {
                         "status": res.get("status"),
                         "tx_hash": res.get("tx_hash"),
-                        "rewards": int(status.get("rewards", 0)),
+                        "rewards": rewards,
                     },
                 )
+                claim_info.update({
+                    "executed": True,
+                    "tx": res,
+                    "reason": "claimed",
+                })
             else:
                 logger.info("No rewards to claim (live mode)")
+                claim_info["reason"] = "no_rewards"
         else:
             logger.info("Dry-run: would claim if rewards > 0")
-        self._ensure_heartbeat(force=not bool(status.get("active_staker")))
+            claim_info["reason"] = "dry_run"
+
+        heartbeat_forced = not bool(status.get("active_staker"))
+        heartbeat_sent = self._ensure_heartbeat(force=heartbeat_forced)
+
+        return {
+            "status": "ok",
+            "live": bool(live),
+            "snapshot": status,
+            "claim": claim_info,
+            "heartbeat": {
+                "sent": heartbeat_sent,
+                "forced": heartbeat_forced,
+            },
+        }
 
     # --- heartbeat helpers -------------------------------------------------
     def _kv(self):  # lazy to keep Replit/Redis optional
@@ -112,13 +143,13 @@ class StakeMaster:
             last = 0.0
         return (now - last) >= interval_hours * 3600.0
 
-    def _ensure_heartbeat(self, *, force: bool = False) -> None:
+    def _ensure_heartbeat(self, *, force: bool = False) -> bool:
         now = time.time()
         if not self._should_send_heartbeat(now, force=force):
-            return
+            return False
         client = self._venice()
         if client is None:
-            return
+            return False
         model = os.getenv("VENICE_HEARTBEAT_MODEL", os.getenv("VENICE_DEFAULT_MODEL", "venice-pro"))
         prompt = os.getenv(
             "STAKEMASTER_HEARTBEAT_PROMPT",
@@ -133,7 +164,7 @@ class StakeMaster:
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"Heartbeat request failed: {exc}")
             _emit_event("staking.heartbeat", {"status": "error", "error": str(exc)})
-            return
+            return False
 
         store = self._kv()
         if store is not None:
@@ -149,3 +180,4 @@ class StakeMaster:
                 "response_id": response.get("id") if isinstance(response, dict) else None,
             },
         )
+        return True

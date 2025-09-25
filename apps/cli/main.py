@@ -426,32 +426,45 @@ def cmd_run_stakemaster(args: argparse.Namespace) -> None:
 
 
 def cmd_run_loop(args: argparse.Namespace) -> None:
-    """Minimal loop: StakeMaster heartbeat repeated with sleep and max-cycles.
-
-    Use --enable-live to allow on-chain claims; otherwise dry-run.
-    """
-    import time
+    """Run the v1 single-loop orchestrator (StakeMaster → ArbiDiem → CapacityBroker)."""
 
     from services.staking.client import StakingService
     from libs.agentkit_ext.actions import VVVActions
     from agents.stake_master.agent import StakeMaster
+    from services.marketdata.provider import MarketDataProvider
+    from services.diem.client import DIEMService
+    from libs.dex.providers import build_aggregator_from_env
+    from agents.arbi_diem.agent import ArbiDiem
+    from services.venice_keys.manager import KeyManager
+    from libs.venice_sdk.client import VeniceClient
+    from agents.capacity_broker.agent import CapacityBroker
+    from graph.workflows.orchestrator import SingleLoopOrchestrator
 
-    stake = StakingService(VVVActions())
-    agent = StakeMaster(stake)
-    max_cycles = int(args.max_cycles)
-    sleep_s = float(args.sleep)
     live = bool(getattr(args, "enable_live", False))
-    infinite = max_cycles <= 0
-    cycle = 0
-    while True:
-        cycle += 1
-        label = f"/{max_cycles}" if not infinite else " (infinite)"
-        logger.info(f"Loop cycle {cycle}{label} (live={live})")
-        agent.run_once(live=live)
-        if not infinite and cycle >= max_cycles:
-            break
-        if sleep_s > 0:
-            time.sleep(sleep_s)
+    dry_run = not live
+
+    stake_agent = StakeMaster(StakingService(VVVActions()))
+    aggregator = build_aggregator_from_env() if live else None
+    diem_service = DIEMService(aggregator)
+    arbi_agent = ArbiDiem(diem_service)
+    key_manager = KeyManager(VeniceClient())
+    capacity_agent = CapacityBroker(key_manager)
+    market = MarketDataProvider()
+
+    orchestrator = SingleLoopOrchestrator(
+        stake_master=stake_agent,
+        arbi=arbi_agent,
+        capacity_broker=capacity_agent,
+        market=market,
+        parent_key=os.getenv("VENICE_API_KEY"),
+    )
+
+    orchestrator.run_loop(
+        interval_s=float(args.sleep),
+        max_cycles=int(args.max_cycles),
+        dry_run=dry_run,
+        enable_live=live,
+    )
 
 
 def cmd_run_quorum(args: argparse.Namespace) -> None:

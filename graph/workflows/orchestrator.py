@@ -5,7 +5,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
@@ -17,6 +17,13 @@ except Exception:  # noqa: BLE001
         return
 
 logger = get_logger("workflow.orchestrator")
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -276,3 +283,304 @@ class Orchestrator:
                 time.sleep(max(0.0, float(interval_s)))
             if max_cycles and cycle >= int(max_cycles):
                 break
+
+
+@dataclass
+class SingleLoopOrchestrator:
+    """Sequential v1 loop: StakeMaster → ArbiDiem → CapacityBroker."""
+
+    stake_master: Any
+    arbi: Any
+    capacity_broker: Any
+    market: Any
+    quorum: Optional[Any] = None
+    parent_key: Optional[str] = None
+
+    def _invoke_arbi(
+        self,
+        price: float,
+        *,
+        mint_rate: float,
+        current_inventory_usd: Optional[float],
+        utilization_ratio: Optional[float],
+        vol_bps: Optional[float],
+        corr_id: Optional[str],
+        simulate: Optional[bool],
+    ) -> Any:
+        import inspect as _ins
+
+        params = _ins.signature(self.arbi.evaluate_and_maybe_mint).parameters  # type: ignore[attr-defined]
+        kwargs: Dict[str, Any] = {}
+        if "mint_rate" in params:
+            kwargs["mint_rate"] = mint_rate
+        if "desired_units" in params:
+            kwargs["desired_units"] = None
+        if "current_inventory_usd" in params:
+            kwargs["current_inventory_usd"] = current_inventory_usd
+        if "utilization_ratio" in params:
+            kwargs["utilization_ratio"] = utilization_ratio
+        if "vol_bps" in params:
+            kwargs["vol_bps"] = vol_bps
+        if corr_id is not None and "corr_id" in params:
+            kwargs["corr_id"] = corr_id
+        if simulate is not None and "simulate" in params:
+            kwargs["simulate"] = simulate
+        elif simulate and "simulate" not in params:
+            logger.debug("ArbiDiem evaluate lacks simulate param; running without it")
+        return self.arbi.evaluate_and_maybe_mint(price, **kwargs)
+
+    def run_cycle(
+        self,
+        *,
+        dry_run: bool = True,
+        enable_live: bool = False,
+        mint_rate: float = 1.0,
+    ) -> Dict[str, Any]:
+        cycle_ts = time.time()
+
+        # --- StakeMaster step ---
+        try:
+            stake_live = bool(enable_live and not dry_run and _env_flag("ORCHESTRATOR_STAKE_LIVE", False))
+            stake_result = self.stake_master.run_once(live=stake_live)
+        except Exception as exc:  # noqa: BLE001
+            stake_result = {"status": "error", "error": str(exc)}
+            logger.warning(f"StakeMaster step failed: {exc}")
+
+        # --- Market signals ---
+        utilization_ratio: Optional[float] = None
+        vol_bps: Optional[float] = None
+        effective_mint_rate = float(mint_rate)
+        mint_rate_source = "param"
+
+        if dry_run:
+            try:
+                px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
+            except Exception:
+                px = 1.0
+            prices: Dict[str, float] = {"DIEM": px, "VVV": 0.0, "USDC": 1.0}
+            try:
+                fake_rate = os.getenv("DIEM_FAKE_MINT_RATE") or os.getenv("DIEM_MINT_RATE")
+                if fake_rate:
+                    effective_mint_rate = float(fake_rate)
+                    mint_rate_source = "env_dry_run"
+            except Exception:
+                pass
+            try:
+                sig = self.market.unified_signals(ttl_s=30)
+                if isinstance(sig, dict):
+                    vvv = sig.get("vvv")
+                    if isinstance(vvv, dict):
+                        ur = vvv.get("utilization")
+                        if ur is not None:
+                            utilization_ratio = float(ur)
+            except Exception:
+                pass
+        else:
+            prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
+            px = float(prices.get("DIEM", 1.0))
+            try:
+                sig = self.market.unified_signals(ttl_s=30)
+                if isinstance(sig, dict):
+                    vvv = sig.get("vvv")
+                    if isinstance(vvv, dict):
+                        ur = vvv.get("utilization")
+                        if ur is not None:
+                            utilization_ratio = float(ur)
+            except Exception:
+                pass
+            try:
+                mint_info = self.market.diem_mint_rate(ttl_s=60)
+                if isinstance(mint_info, dict):
+                    candidate = mint_info.get("tokens_per_diem")
+                    if candidate not in (None, 0):
+                        effective_mint_rate = float(candidate)  # type: ignore[arg-type]
+                        mint_rate_source = str(mint_info.get("source", "market"))
+            except Exception:
+                pass
+            try:
+                hist = getattr(self, "_px_hist", [])
+                hist.append(float(px))
+                if len(hist) > 16:
+                    del hist[: len(hist) - 16]
+                setattr(self, "_px_hist", hist)
+                if hasattr(self.arbi, "risk"):
+                    vol_bps = float(self.arbi.risk.volatility_bps(hist))
+                if _env_flag("RISK_VOL_PERSIST", False):
+                    try:
+                        from db.session import create_db_and_tables, get_engine
+                        from db.models import PriceTick
+                        from sqlmodel import Session
+                        from datetime import datetime as _dt
+
+                        create_db_and_tables()
+                        eng = get_engine()
+                        with Session(eng) as s:  # type: ignore[call-arg]
+                            s.add(PriceTick(symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()))
+                            s.commit()
+                    except Exception:
+                        pass
+            except Exception:
+                vol_bps = None
+
+        current_inventory_usd: Optional[float] = None
+        if not dry_run and _env_flag("RISK_ENABLE_PORTFOLIO_CAP", False):
+            try:
+                def _i(name: str) -> int:
+                    v = os.getenv(name)
+                    try:
+                        return int(v) if v is not None and str(v).strip() != "" else 0
+                    except Exception:
+                        return 0
+
+                diem_u = _i("DIEM_INVENTORY_UNITS")
+                vvv_u = _i("VVV_INVENTORY_UNITS")
+                usdc_u = _i("USDC_INVENTORY_UNITS")
+                total_usd, _ = self.arbi.risk.exposure_usd(
+                    diem_units=diem_u,
+                    vvv_units=vvv_u,
+                    usdc_units=usdc_u,
+                    prices_usd=prices,
+                )
+                current_inventory_usd = float(total_usd)
+            except Exception:
+                current_inventory_usd = None
+
+        corr = str(uuid.uuid4())
+        paused = _env_flag("AGENTS_PAUSED", False)
+        live_mode = bool(enable_live and not dry_run)
+
+        signal_decision = False
+        executed_decision = False
+        quorum_info: Optional[Dict[str, Any]] = None
+        execution_summary: Dict[str, Any] = {"status": "skipped", "executed": False}
+
+        if not paused:
+            sim_inventory = None if dry_run else current_inventory_usd
+            try:
+                sim_result = self._invoke_arbi(
+                    px,
+                    mint_rate=effective_mint_rate,
+                    current_inventory_usd=sim_inventory,
+                    utilization_ratio=utilization_ratio,
+                    vol_bps=vol_bps,
+                    corr_id=corr,
+                    simulate=True,
+                )
+            except Exception:
+                sim_result = px > 0
+            signal_decision = bool(sim_result)
+
+            if signal_decision and live_mode:
+                quorum_allowed = True
+                if self.quorum is not None:
+                    try:
+                        quorum_allowed = bool(self.quorum.decide())
+                        quorum_info = {"status": "approved" if quorum_allowed else "blocked"}
+                    except Exception as exc:  # noqa: BLE001
+                        quorum_allowed = False
+                        quorum_info = {"status": "error", "error": str(exc)}
+                if quorum_allowed:
+                    try:
+                        live_result = self._invoke_arbi(
+                            px,
+                            mint_rate=effective_mint_rate,
+                            current_inventory_usd=current_inventory_usd,
+                            utilization_ratio=utilization_ratio,
+                            vol_bps=vol_bps,
+                            corr_id=corr,
+                            simulate=False,
+                        )
+                        executed_decision = bool(live_result)
+                        execution_summary = {
+                            "status": "executed" if executed_decision else "no_action",
+                            "executed": executed_decision,
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        execution_summary = {"status": "error", "error": str(exc), "executed": False}
+                        executed_decision = False
+                        signal_decision = False
+                else:
+                    execution_summary = {"status": quorum_info.get("status", "blocked"), "executed": False}
+                    executed_decision = False
+            elif signal_decision:
+                execution_summary = {"status": "dry_run", "executed": False}
+        else:
+            logger.info("Agents paused; skipping ArbiDiem evaluation")
+
+        last_why = getattr(self.arbi, "_last_rationale", None)
+        action_label = None
+        try:
+            if isinstance(last_why, dict):
+                lbl = last_why.get("decision")
+                if isinstance(lbl, str) and lbl:
+                    action_label = lbl
+        except Exception:
+            action_label = None
+
+        arbi_record = {
+            "agent": "arbi_diem",
+            "action": action_label or ("mint_sell" if signal_decision else "hold"),
+            "price": px,
+            "inventoryUsd": current_inventory_usd,
+            "dry_run": dry_run,
+            "correlationId": corr,
+            "ts": cycle_ts,
+            "mintRate": effective_mint_rate,
+            "mintRateSource": mint_rate_source,
+            "limits": {
+                "slippage_bps_cap": getattr(self.arbi.risk, "slippage_bps_cap", None),
+                "max_trade_usd": getattr(self.arbi.risk, "max_trade_usd", None),
+                "max_inventory_usd": getattr(self.arbi.risk, "max_inventory_usd", None),
+                "max_trade_units": getattr(self.arbi.risk, "max_trade_units", None),
+            },
+            "signals": {"utilization_ratio": utilization_ratio, "vol_bps": vol_bps},
+            "outcome": bool(signal_decision if (dry_run or not live_mode) else executed_decision),
+            "why": last_why,
+            "execution": execution_summary,
+            "signalDecision": bool(signal_decision),
+        }
+        if quorum_info is not None:
+            arbi_record["quorum"] = quorum_info
+
+        try:
+            _metrics_inc("agent_decisions_total", labels={"agent": "arbi_diem", "action": str(arbi_record["action"])})
+        except Exception:
+            pass
+        try:
+            annotate_span({"single_loop": arbi_record}, name="vvv.orchestrator.single_loop")
+        except Exception:
+            pass
+
+        try:
+            cap_summary = self.capacity_broker.run_once(parent_key=self.parent_key)
+        except Exception as exc:  # noqa: BLE001
+            cap_summary = {"status": "error", "error": str(exc)}
+
+        cycle_record = {
+            "ts": cycle_ts,
+            "stake": stake_result,
+            "arbi": arbi_record,
+            "capacity": cap_summary,
+        }
+        logger.info(f"single-loop cycle: {cycle_record}")
+        return cycle_record
+
+    def run_loop(
+        self,
+        *,
+        interval_s: float = 15.0,
+        max_cycles: int = 0,
+        dry_run: bool = True,
+        enable_live: bool = False,
+        mint_rate: float = 1.0,
+    ) -> None:
+        cycle = 0
+        while True:
+            cycle += 1
+            try:
+                self.run_cycle(dry_run=dry_run, enable_live=enable_live, mint_rate=mint_rate)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"single-loop error: {exc}")
+            if max_cycles and cycle >= max_cycles:
+                break
+            time.sleep(max(0.0, float(interval_s)))

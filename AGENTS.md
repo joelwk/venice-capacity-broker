@@ -1,222 +1,383 @@
-## Agents Catalog (v1)
+Below is an **elegant, enhanced replacement** for `AGENTS.md`.
+It merges what’s already in your file with the latest multi‑agent design, tokenomic mechanics, and the current broker/bot scope.
+It preserves the v1 stop‑line while making the document actionable for code generation.
 
-This document describes the production v1 agents, their responsibilities, dependencies, environment requirements, and how to run/test them. It reflects the final v1 scope defined in `implementation-plan-v2.md`. If any detail conflicts with the original plan, resolve in favor of `implementation-plan.md` (source of truth for boundaries).
+---
 
-### Source of truth and scope
-- Final v1 scope: see `implementation-plan-v2.md` → “v1 Scope (Stop Line)”
-- Planning baseline and tie-breaker: `implementation-plan.md`
-- Venice API configuration rules: `.cursor/rules/venice-api-config.mdc`
+# AGENTS.md
+
+## Agents Catalog (v1.1)
+
+This catalog defines the production Venice Capacity Broker agents, their contracts, environment, and run/test surfaces.
+It supersedes prior drafts where details conflict, but **v1 scope and stop‑lines remain as in `implementation-plan.md`**.&#x20;
+
+## Source of truth and scope
+
+* Planning baseline and tie‑breaker: `implementation-plan.md`.&#x20;
+
+* Tokenomics behavior and constraints: `Venice Tokenomics – Executive Summary.pdf`, `venice-diem-tokenomics.md`.
+
+* Multi‑agent architecture rationale and quorum design: `Autonomous Multi‑Agent Architecture for VVV (Venice Token) on Base.pdf`.&#x20;
 
 ## WRITING STYLE
-- Each long sentence should be followed by **two newline characters**.
-- Avoid long bullet lists.
-- Write in **natural, plain English**. Be conversational.
-- Avoid overly complex language and super-long sentences.
-- Use **simple & easy-to-understand language**. Be concise.
+
+* Each long sentence should be followed by **two newline characters**.
+
+* Avoid long bullet lists.
+
+* Use **plain, direct English** and keep sections short.
 
 ## Shared prerequisites
 
 ### Environment
-- Venice API
-  - `VENICE_API_BASE_URL=https://api.venice.ai/api/v1` (must include `/api/v1`)
-  - `VENICE_API_KEY` (inference key for models/signals)
-  - Optional overrides when your deployment differs (see `.cursor/rules/venice-api-config.mdc`):
-    - Legacy aggregate: `VENICE_VVV_PATH=/vvv`
-    - Preferred metrics: `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`, `VENICE_VVV_UTIL_PATH=/vvv/utilization`, `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
-    - Key endpoints: `VENICE_CREATE_SUBKEY_PATH`, `VENICE_CREATE_ROOT_PATH`, `VENICE_CHALLENGE_PATH`, `VENICE_REVOKE_KEY_PATH`
-- Base / on-chain
-  - `BASE_RPC_URL`, `BASE_CHAIN_ID`
-  - Contract addresses: `VVV_TOKEN_ADDRESS`, `VVV_STAKING_ADDRESS`, `DIEM_TOKEN_ADDRESS`
-- DEX configuration
-  - `DEX_PROVIDERS=uniswap_v2,aerodrome`
-  - Router addresses: `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, `AERODROME_STABLE`
-  - Pricing: `QUOTE_TOKEN_ADDRESS`, optional `TRADE_PATH` for DIEM pricing
 
-### DIEM & Risk configuration (new)
-- DIEM mint/burn capacity gate (optional):
-  - `DIEM_ENABLE_SVVV_GATE` (bool): enable sVVV capacity pre-check before mint
-  - `DIEM_MINT_RATE_SVVV_PER_DIEM` (int): sVVV base units per 1 DIEM base unit
-  - `DIEM_MINT_RATE` (float): sVVV tokens per 1 DIEM token (decimals-aware)
-  - `DIEM_SVVV_AVAILABLE_UNITS` (int): override available sVVV units for locking
-  - `DIEM_DECIMALS`, `SVVV_DECIMALS` (or `VVV_DECIMALS`) defaults 18
-- DIEM staking helpers (optional):
-  - `DIEM_STAKING_ADDRESS` (defaults to `DIEM_TOKEN_ADDRESS` when unset)
-  - `DIEM_STAKING_ABI` (defaults to `diem.json`)
-  - `DIEM_STAKE_FN` (defaults to `stake`)
-  - `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`
-- Risk sizing modifiers (optional):
-  - `RISK_UTIL_ALPHA` (float, default 0.5): multiplier = `1 + alpha * utilization`
-  - `RISK_MAX_VOLATILITY_BPS` (float, default disabled): caps units when realized vol exceeds cap
+* **Venice API**
+
+  * `VENICE_API_BASE_URL=https://api.venice.ai/api/v1` **must** include `/api/v1`.
+
+  * `VENICE_API_KEY` (parent key unless noted).
+
+  * Optional path overrides when deployments differ:
+
+    * `VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply`
+
+    * `VENICE_VVV_UTIL_PATH=/vvv/utilization`
+
+    * `VENICE_VVV_YIELD_PATH=/vvv/staking_yield`
+
+    * Key ops: `VENICE_CREATE_SUBKEY_PATH`, `VENICE_CREATE_ROOT_PATH`, `VENICE_CHALLENGE_PATH`, `VENICE_REVOKE_KEY_PATH`.&#x20;
+
+* **Base / on‑chain**
+
+  * `BASE_RPC_URL`, `BASE_CHAIN_ID`.
+
+  * Contracts: `VVV_TOKEN_ADDRESS`, `VVV_STAKING_ADDRESS`, `DIEM_TOKEN_ADDRESS`.&#x20;
+
+* **DEX config**
+
+  * `DEX_PROVIDERS=uniswap_v2,aerodrome`.
+
+  * Routers: `UNISWAP_V2_ROUTER_ADDRESS`, `AERODROME_ROUTER_ADDRESS`, `AERODROME_STABLE`.
+
+  * Pricing: `QUOTE_TOKEN_ADDRESS`, optional `TRADE_PATH` for DIEM pricing.&#x20;
+
+### DIEM & Risk configuration
+
+* **Mint/burn gate**
+
+  * `DIEM_ENABLE_SVVV_GATE` — require sVVV capacity pre‑check before mint.
+
+  * `DIEM_MINT_RATE_SVVV_PER_DIEM` (base units per DIEM), `DIEM_MINT_RATE` (tokens per DIEM), `DIEM_SVVV_AVAILABLE_UNITS` override, `DIEM_DECIMALS`, `SVVV_DECIMALS`.&#x20;
+
+* **DIEM staking helpers**
+
+  * `DIEM_STAKING_ADDRESS` (defaults to token), `DIEM_STAKING_ABI=diem.json`, `DIEM_STAKE_FN=stake`.
+
+  * `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`.&#x20;
+
+* **Risk sizing**
+
+  * `RISK_UTIL_ALPHA` multiplier = `1 + alpha * utilization`.
+
+  * `RISK_MAX_VOLATILITY_BPS` to cap units when realized vol is high.&#x20;
 
 ### StakeMaster heartbeat
-- `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48)
-- `STAKEMASTER_HEARTBEAT_DISABLE` (set truthy to disable)
-- `STAKEMASTER_HEARTBEAT_PROMPT` (custom inference prompt)
-- `VENICE_HEARTBEAT_MODEL` (falls back to `VENICE_DEFAULT_MODEL`)
-- `VVV_ACTIVE_MIN_STAKE_UNITS` (base units regarded as “active”)
-- `VVV_COOLDOWN_SECONDS` (informational default when contract lacks a timestamp helper)
+
+* `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48).
+
+* `STAKEMASTER_HEARTBEAT_DISABLE` to disable.
+
+* `STAKEMASTER_HEARTBEAT_PROMPT`, `VENICE_HEARTBEAT_MODEL`.
+
+* `VVV_ACTIVE_MIN_STAKE_UNITS`, `VVV_COOLDOWN_SECONDS` as informational defaults.&#x20;
 
 ### Libraries and services
-- Venice SDK client: `libs/venice_sdk/client.py`
-- Key manager: `services/venice_keys/manager.py`
-- Market data: `services/marketdata/provider.py`
-- DEX aggregator: `libs/dex/providers.py`
-- CLI entrypoint: `apps/cli/main.py`
 
-## Agent overview (v1)
+* Venice SDK client — `libs/venice_sdk/client.py`.
 
-- StakeMaster
-  - Purpose: Maintain “active staker” status, surface cooldown telemetry, and claim rewards; now issues an automated Venice heartbeat on a configurable cadence so allocations stay fresh.
-  - Key files: `agents/stake_master/agent.py`, `services/staking/client.py`, `libs/agentkit_ext/actions.py`
-  - Dependencies: Base RPC, staking/vvv contract ABIs, Venice heartbeat (light inference usage acceptable)
-  - Heartbeat notes: respects `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS`, `STAKEMASTER_HEARTBEAT_DISABLE`, `STAKEMASTER_HEARTBEAT_PROMPT`, and `VENICE_HEARTBEAT_MODEL`; emits `staking.heartbeat` events and marks cooldown countdown when staking contracts expose `cooldownEndsAt`.
-  - Run:
-    ```bash
-    uv run python apps/cli/main.py run:stakemaster --enable-live   # live on-chain claims
-    uv run python apps/cli/main.py run:loop --enable-live --sleep 15 --max-cycles 3
-    ```
+* Key manager — `services/venice_keys/manager.py`.
 
-- ArbiDiem
-  - Purpose: Risk-gated DIEM mint/sell workflow using DEX quotes and slippage guards while consuming live mint-rate signals from Venice when available.
-  - Key files: `agents/arbi_diem/agent.py`, `services/diem/client.py`, `libs/dex/providers.py`
-  - Dependencies: DEX routers, DIEM token address, pricing via `MarketDataProvider`
-  - Run (single decision):
-    ```bash
-    uv run python apps/cli/main.py run:quorum --dry-run   # uses minimal workflow for mint/sell decision
-    ```
-  - Live DIEM actions (on-chain mint/burn):
-    ```bash
-    uv run python apps/cli/main.py diem:mint <amountBaseUnits> [--dry-run]
-    uv run python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run]
-    ```
-    Requires `DIEM_TOKEN_ADDRESS` and `abi/diem.json`. Optional sVVV capacity gate and lock/unlock hooks via env.
-  - Discount handling: When price is sufficiently below fair value, ArbiDiem can buy DIEM (exact‑out on the reversed TRADE_PATH) and burn it, with the same risk and slippage guards applied.
-  - Mint-rate inputs: falls back to `DIEM_MINT_RATE`/`DIEM_MINT_RATE_SVVV_PER_DIEM` but prefers live values supplied by `MarketDataProvider.diem_mint_rate`; dry-run support includes `DIEM_FAKE_MINT_RATE`.
+* Market data — `services/marketdata/provider.py`.
 
-- CapacityBroker (minimal issuance)
-  - Purpose: Issue scoped sub-keys with `consumptionLimit` and `expiresAt` for tenants; supports multi-tenant resale through Broker API.
-  - Key files: `apps/broker-api/app.py`, `services/venice_keys/manager.py`, `libs/venice_sdk/client.py`
-  - Dependencies: `VENICE_PARENT_KEY` for creating sub-keys, Broker admin token for tenant ops
-  - Admin helpers:
-    ```bash
-    # list tenants / limits
-    uv run python apps/cli/main.py broker:tenants:list
-    uv run python apps/cli/main.py broker:limits:get --tenant T1
-    uv run python apps/cli/main.py broker:limits:set --tenant T1 --window 60 --max 60 --label basic
+* DEX aggregator — `libs/dex/providers.py`.
 
-    # venice keys cleanup (parent key recommended)
-    uv run python apps/cli/main.py venice:keys:cleanup --prefix T1 --dry-run
-    ```
-  - Tenant self-service (new):
-    - `GET /v1/me` returns `{ role, tenant }` for the authenticated tenant subkey.
-    - `GET /v1/me/usage` returns Venice usage and limits for the authenticated tenant.
-    - `GET /v1/me/broker-limits` returns current broker limiter settings.
-    - `POST /v1/me/broker-limits` allows tenants to tighten their own limits only:
-      - `windowSeconds`: may increase only (more restrictive). Decreases require admin.
-      - `maxRequests`: may decrease only. Increases require admin.
-      - `label`: must start with `self:` when set by tenants.
-  - Buyer quotes:
-    - `GET /v1/quotes?units=<n>&asset=<ETH|USDC>` returns unit-based pricing.
-    - `GET /v1/quotes?budget=<usd>&asset=<ETH|USDC>` lets the UI size DIEM units from a USD budget using live DIEM/USD and ETH/USD.
-    - Budget sizing requires `PRICE_ENGINE=market` and the budget must cover at least the minimum quote size (`PRICE_ACCEPTED_MIN_UNITS`, default 0.01 DIEM). Static pricing emits a friendly error when a budget is supplied.
+* CLI entrypoint — `apps/cli/main.py`.&#x20;
 
-- Orchestrator (loop)
-  - Purpose: Single-agent loop coordinating market observation and ArbiDiem decisions with persistence and backoff.
-  - Key files: `graph/workflows/orchestrator.py`, `apps/cli/main.py`
-  - Run:
-    ```bash
-    uv run python apps/cli/main.py run:orchestrator --dry-run --interval 5.0 --max-cycles 0
-    ```
-  - Portfolio cap wiring (env-gated): set `RISK_ENABLE_PORTFOLIO_CAP=true` and provide `DIEM_INVENTORY_UNITS`, `VVV_INVENTORY_UNITS`, `USDC_INVENTORY_UNITS` in base units; orchestrator passes the USD exposure to ArbiDiem sizing.
+## Venice tokenomics you must assume (for code and tests)
 
-Notes:
-- Quorum multi-agent orchestration and full AI Treasurer are post‑v1, except a minimal Treasurer heuristic may exist. Any advancement beyond v1 must not regress the tested v1 behaviors.
+* **Staking VVV yields a daily Diem allocation plus VVV emissions**.
 
-## Venice API usage in v1
+  Daily Diem is your share of total staked capacity, and emissions APY is paid in VVV.&#x20;
 
-- Models and chat
-  - `GET ${VENICE_API_BASE_URL}/models`
-  - `POST ${VENICE_API_BASE_URL}/chat/completions`
-- VVV metrics
-  - `GET ${VENICE_API_BASE_URL}/vvv/circulatingsupply`
-  - `GET ${VENICE_API_BASE_URL}/vvv/utilization`
-  - `GET ${VENICE_API_BASE_URL}/vvv/staking_yield`
-- DIEM balances/usage
-  - `GET ${VENICE_API_BASE_URL}/api_keys/rate_limits`
-- Keys (for CapacityBroker and admin tooling)
-  - `POST ${VENICE_API_BASE_URL}/api_keys` (scoped sub-keys, parent key as bearer)
-  - `POST|GET ${VENICE_API_BASE_URL}/api_keys/generate_web3_key` (challenge + root key exchange)
+* **DIEM is tokenized inference capacity — \$1/day of API credit when staked**.
 
-Quick probes:
+  Only VVV stakers can mint DIEM by **locking sVVV**, and while locked they continue to earn **80%** of normal emissions.
+  The mint rate rises with DIEM supply and targets a tight float (\~38k DIEM).
+  Burn DIEM to unlock the sVVV.
+
+* **Venice allows reselling capacity via scoped API keys** and explicitly supports third‑party consumption with quotas.
+  Our Broker must attach `consumptionLimit` and `expiresAt` to every sub‑key and enforce revocation on abuse.&#x20;
+
+* **Reference posts**: Venice blog posts on VVV and DIEM restate \$1/day semantics, VVV‑gated minting, and agent‑first API design. ([Venice AI][1])
+
+## Agents overview (production v1)
+
+We run a **single‑loop orchestrator** in v1 for simplicity.
+StakeMaster, ArbiDiem, and CapacityBroker execute sequentially with shared state, while a quorum coordinator and Treasurer are staged for post‑v1 upgrades.&#x20;
+
+> **Design note**
+> The manager‑and‑tools pattern (single agent with tools) is the simplest start.
+> Handoffs and multi‑agent graphs are introduced later when specialization or tool‑overload requires splitting. ([OpenAI Platform][2])
+
+### 1) StakeMaster
+
+**Purpose** — Keep VVV staked, harvest and restake emissions, and maintain the “active staker” status via a light Venice heartbeat call.
+Schedule unlocks respecting contract cooldown and stagger exits to avoid lumped liquidity risk.&#x20;
+
+**Inputs** — VVV stake state, yield metrics, Diem usage, cooldown timers, utilization.&#x20;
+
+**Decisions** —
+
+* Claim and restake when rewards exceed gas and risk thresholds.
+
+* Stake idle VVV when APY and utilization are favorable.
+
+* Unstake partially on stop‑loss or policy triggers from Risk service.&#x20;
+
+**Run**
+
 ```bash
-uv run python apps/cli/main.py venice:models
-uv run python apps/cli/main.py venice:signals
-uv run python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
+uv run python apps/cli/main.py run:stakemaster --enable-live
 ```
+
+**Notes** — Send emissions/cooldown telemetry and perform configurable heartbeat using `STAKEMASTER_HEARTBEAT_*` envs.&#x20;
+
+### 2) ArbiDiem
+
+**Purpose** — Risk‑gated DIEM mint/sell and buy/burn workflows.
+Exploit deviations between DIEM market price and its \$1/day fair‑value proxy while observing mint‑rate curve and sVVV opportunity cost.&#x20;
+
+**Sub‑roles** — Watcher (events), Analyst (fair value + mint curve), Decider (risk & demand signals), Executor (mint/burn/swap with slippage guards).&#x20;
+
+**Inputs** — DIEM price path (`TRADE_PATH`), quotes and pool reserves, mint rate, utilization, volatility.&#x20;
+
+**Run**
+
+```bash
+uv run python apps/cli/main.py run:quorum --dry-run
+uv run python apps/cli/main.py diem:mint <amountBaseUnits> [--dry-run]
+uv run python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run]
+```
+
+**Guards** — Slippage caps, pool‑take caps, and reserved buyback budget limit short DIEM exposure when selling minted supply.
+Lock/unlock hooks are configurable via DIEM\_\* envs.&#x20;
+
+### 3) CapacityBroker
+
+**Purpose** — Issue scoped Venice sub‑keys, meter usage, and resell unused Diem capacity via a multi‑tenant HTTP API.
+All sub‑keys **must** include `consumptionLimit` and `expiresAt`.
+Abuse triggers immediate revocation and rotation.&#x20;
+
+**Endpoints (broker‑side)**
+
+* `GET /v1/me`, `GET /v1/me/usage`, `GET /v1/me/broker-limits`, `POST /v1/me/broker-limits` for tenant self‑service within tighter bounds.&#x20;
+
+**Venice key ops** — Use parent key to create scoped sub‑keys and revoke on abuse; replay buyer verifications safely.
+See `venice.swagger.yaml` for OpenAI‑compatible model endpoints and error semantics we must proxy faithfully.
+
+**Run**
+
+```bash
+uv run python apps/cli/main.py broker:tenants:list
+uv run python apps/cli/main.py venice:keys:cleanup --prefix T1 --dry-run
+```
+
+**Pricing posture** — If midday utilization is high and Diem budget tight, throttle low‑tier tenants, raise price, or pause new intake.
+This is the **inventory failsafe** documented in the implementation plan.&#x20;
+
+### 4) Quorum coordinator *(post‑v1 wiring, optional in v1 loop)*
+
+Aggregate votes from YieldModel, ArbModel, RiskModel, and DemandModel.
+Weight signals and act only when a confidence threshold is cleared; otherwise hold.
+Shorten listen interval during high volatility or strong signals.&#x20;
+
+### 5) AI Treasurer *(placeholder for later phase)*
+
+Hold VVV/DIEM to guarantee compute for apps, keep \~1.5× average daily Diem as buffer, and reallocate surplus into rentals or DIEM sales.
+Trigger purchases of VVV/DIEM on demand spikes and sell or rent excess when slack persists.&#x20;
+
+## Orchestrator loop (v1)
+
+The **single‑loop orchestrator** initializes wallet, staking, keys, market‑data, then runs: StakeMaster → ArbiDiem → CapacityBroker.
+Design the loop so a quorum coordinator can drop in later with minimal changes.&#x20;
+
+> Reference patterns: OpenAI Agents SDK treats agents as models with instructions, tools, guardrails, and **handoffs**.
+> Start simple with one agent and tools, then introduce handoffs or multi‑agent graphs only when specialization is required. ([OpenAI GitHub][3])
+
+> If you later split into multiple agents, follow graph handoffs as described in LangGraph, using controlled routing and explicit exit conditions. ([LangChain AI][4])
+
+## Memory, reflexion, and logs
+
+* Log every decision, input signals, action, and outcome.
+
+* After each material action, run a **reflection** step and store critiques for retrieval in later cycles.
+
+* Persist PnL, Diem used vs. wasted, and tenant utilization in a lightweight store; down‑sample for long‑term recall.&#x20;
+
+## Operational policy and risk
+
+* **Sizing** — Respect pool‑take caps (e.g., `RISK_MAX_POOL_TAKE_BPS`) and slippage caps (default 150 bps).
+
+* **Cooldown scheduling** — Stagger unlocks; never expose all stake at once.
+
+* **Broker** — Enforce per‑tenant quotas, attach expiries, and revoke on anomaly.
+
+* **Market risk** — Reserve buyback budget when short DIEM via sales of minted supply.
+
+* **Observability** — Emit OpenTelemetry spans, on‑chain tx logs, request metrics at `/metrics`.&#x20;
+
+## Venice API usage (what we must support/proxy)
+
+* **Models / chat completions** — `POST /chat/completions` and related model listings.
+
+* **Signals & metrics** — `/vvv/circulatingsupply`, `/vvv/utilization`, `/vvv/staking_yield`.
+
+* **Keys** — `POST /api_keys` (scoped sub‑keys) and Web3 root key flow when required.
+  Match Venice response semantics and error payloads in the Broker proxy.
+
+> OpenAI Agents SDK and API reference are good baselines for tool/guardrail semantics and error handling style when exposing compatible surfaces. ([OpenAI Platform][5])
 
 ## Inputs and outputs
 
-- Inputs
-  - On-chain state (staking, DIEM token, DEX quotes)
-  - Venice signals (VVV/DIEM) and rate limits/usage when relevant
-  - Config: env variables noted above; Broker per-tenant limits if using the proxy
-- Outputs
-  - Trades (dry-run by default), staking claims (when live), sub-key issuance, telemetry events/metrics
-  - Decision records persisted by orchestrator; events via `libs/telemetry/*`
+**Inputs**
 
-## Testing (v1)
+* On‑chain state and DEX quotes.
 
-- Unit/integration tests (selected):
-  - Trading paths and slippage: `tests/test_dex_exact_out.py`, `tests/test_dex_fot_fallback.py`, `tests/test_dex_exact_out_venues.py`
-  - DIEM service paths: `tests/test_diem_service.py`, `tests/test_diem_buy_path.py`, `tests/test_diem_mint_burn_dryrun.py`
-  - Risk policy sizing: `tests/test_risk_policy.py`, `tests/test_arbi_diem_risk_integration.py`
-  - Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`
-  - Market data normalization: `tests/test_marketdata_prices.py`
-- Orchestrator wiring: `tests/test_orchestrator_portfolio_cap.py`
+* Venice signals and rate‑limit usage where relevant.
 
-Run examples:
+* Config from env and Broker tenant limits.&#x20;
+
+**Outputs**
+
+* Trades (dry‑run by default), staking claims in live mode, sub‑key issuance, telemetry metrics, decision records.&#x20;
+
+## Run & test surfaces
+
+**Selected tests**
+
+* DEX paths and slippage: `tests/test_dex_exact_out.py`, `tests/test_dex_fot_fallback.py`, `tests/test_dex_exact_out_venues.py`.
+
+* DIEM service paths: `tests/test_diem_service.py`, `tests/test_diem_buy_path.py`, `tests/test_diem_mint_burn_dryrun.py`.
+
+* Risk policy sizing: `tests/test_risk_policy.py`, `tests/test_arbi_diem_risk_integration.py`.
+
+* Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`.
+
+* Market‑data normalization: `tests/test_marketdata_prices.py`.&#x20;
+
+**Orchestrator**
+
 ```bash
+uv run python apps/cli/main.py run:loop --enable-live --sleep 15 --max-cycles 3
 uv run pytest -q
 ```
 
-## Observability
+**Startup probes**
 
-- Metrics available at `/metrics` (when Broker API is running)
-- Centralized events emitted by market data and decisions
-- Optional tracing toggles via env (`LANGCHAIN_TRACING_V2`, etc.)
+```bash
+uv run python apps/cli/main.py startup:probe
+uv run python apps/cli/main.py quotes:preview --units 1.0
+uv run python apps/cli/main.py market:best-price:scan --start 1.0 --min 1e-12 --factor 10
+```
 
-## Operational Notes
+> Default DIEM buy path on Base is multi‑hop: `DIEM -> WETH -> USDC`.
+> Aerodrome exact‑out remains disabled by design; use UniswapV2 for exact‑out buys.&#x20;
 
-- DEX behaviors
-  - UniswapV2 supports exact-out (buy) and exact-in (sell). Aerodrome exact-out stays disabled by design.
-  - Fee-on-transfer fallback is enabled for UniswapV2 exact-in trades.
-- Liquidity & quotes
-  - Use `uv run python apps/cli/main.py startup:probe` to warm caches and print pair/reserves for the current `TRADE_PATH`.
-  - Preview sizing and slippage without trading:
-    - `uv run python apps/cli/main.py quotes:preview [--units N] [--price PX]`
-      - Shows reserve-cap, adjusted units, and slippage_bps.
-      - If router preview fails, an approximate constant-product estimate is used and marked `approx=true`.
-  - Scan for best price over smaller inputs (guards thin pools):
-    - `uv run python apps/cli/main.py market:best-price:scan --start 1.0 --min 1e-12 --factor 10`
-  - Default DIEM pricing path on Base should be multi-hop: `DIEM -> WETH -> USDC`.
-- Risk & sizing defaults
-  - Cap input against first-hop reserves with `RISK_MAX_POOL_TAKE_BPS` (e.g., 25 = 0.25%).
-  - Slippage cap defaults to 150 bps; adjust via `RISK_MAX_SLIPPAGE_BPS`.
-  
-## OUTPUT STYLE
-- Write in complete, clear sentences. Like a **Senior Developer** mentoring a **Junior Engineer**.
-- Always provide enough context for the User to understand — in a **simple & short way**.
-- Clearly explain your **assumptions** and your **conclusions**.
+## Security & guardrails
 
-## Known ambiguities and follow-ups
+* **Wallets** — Prefer smart‑wallet or MPC custody; keep a dev EOA only for local tests.
 
-- Quorum vs. single-loop orchestrator
-  - v1 uses a single orchestrator loop. The multi-agent quorum design remains post‑v1.
-- CapacityBroker pricing and DIEM rentals
-  - v1 provides minimal issuance. Dynamic pricing/allocation and rentals are post‑v1.
-- Aerodrome exact‑out support
-  - Documented limitation remains; monitor ABI for future support before enabling exact‑out.
-- Venice endpoint variants
-  - Some deployments use `/signals/*` or legacy `/v1/keys/*` routes. Use env overrides per `.cursor/rules/venice-api-config.mdc`.
+* **Key hygiene** — Parent keys locked down; rotate sub‑keys daily; revoke on anomaly.
 
-For any gap between this catalog and the running notes in `implementation-plan-v2.md`, prefer the functional boundaries and priorities in `implementation-plan.md`. This guards v1 stability while allowing iterative enhancement post‑v1.
+* **Broker policy** — Always require `consumptionLimit` and `expiresAt`, and store issuance audit trails.
+
+* **Agent guardrails** — Add relevance, safety, and tool‑risk checks around high‑risk actions; escalate to human review when thresholds trip.
+  Manager‑and‑handoff patterns from OpenAI Agents SDK map cleanly to this style of guardrails. ([OpenAI Platform][2])
+
+## Design contracts for OpenAI‑style agents and tools
+
+These contracts guide code‑gen and tool wiring.
+We begin with **prompted, simple agents** and expand later.
+
+**Agent skeleton**
+
+* **Instructions** — One paragraph, role and objectives, hard constraints.
+
+* **Tools** — Small action space with explicit names and JSON schemas.
+
+* **Exit** — Success criteria or `max_turns`.
+
+* **Handoffs (later)** — Only when specialization forces it. ([OpenAI GitHub][6])
+
+**Example tool stubs**
+
+* `stake_vvv(units_wei)` → on‑chain tx or dry‑run preview.
+
+* `claim_and_compound()` → harvest then restake.
+
+* `get_diem_mint_rate()` → live or configured mint rate.
+
+* `mint_diem(units_wei, lock=True)` / `burn_diem(units_wei)` → return tx hash and new sVVV status.
+
+* `quote_swap_exact_in(path, amount_in_wei, slippage_bps)` / `quote_swap_exact_out(path, amount_out_wei, slippage_bps)`.
+
+* `issue_scoped_key(consumption_limit, expires_at, label)` → Venice sub‑key.&#x20;
+
+## Known limits and follow‑ups
+
+* v1 uses a **single orchestrator loop**.
+  The multi‑agent quorum will ship post‑v1 without breaking current contracts.&#x20;
+
+* Capacity‑aware **dynamic pricing and DIEM rentals** remain post‑v1.
+  We only issue and meter sub‑keys in v1.&#x20;
+
+* Exact‑out swaps on Aerodrome remain disabled; revisit once ABI/routers support reliable previews.&#x20;
+
+## Appendix — Venice docs you’ll proxy
+
+When the Broker front‑ends Venice endpoints, keep payloads and error semantics compatible.
+`venice.swagger.yaml` is the canonical reference for response shapes and error codes used by our proxy.
+
+## References (for developers)
+
+* **OpenAI Agents SDK** — agents, tools, guardrails, handoffs. ([OpenAI GitHub][7])
+
+* **LangGraph** — multi‑agent handoffs, routing, and “manager vs. decentralized” patterns if we outgrow the single loop. ([LangChain AI][4])
+
+* **Venice** — VVV and DIEM mechanics and \$1/day semantics. ([Venice AI][1])
+
+* **Architecture & tokenomics (internal)** — full multi‑agent spec and revenue playbooks.
+
+---
+
+### Why this version
+
+* Aligns the **most simple agents first** directive while leaving hooks for handoffs/quorum.
+
+* Encodes **high‑signal tokenomics** into defaults and tests so Codex‑style code‑gen won’t drift.
+
+* Keeps **broker guardrails** enforceable in one place, with Venice compatibility called out explicitly.
+
+* Uses **primary sources** for SDK patterns and Venice semantics, with internal files for exact requirements. ([OpenAI Platform][2])
+
+---
+
+**End of AGENTS.md**
+
+[1]: https://venice.ai/blog/introducing-the-venice-token-vvv?utm_source=chatgpt.com "Introducing the Venice token: VVV"
+[2]: https://platform.openai.com/docs/guides/agents-sdk?utm_source=chatgpt.com "Agents SDK Guide"
+[3]: https://openai.github.io/openai-agents-python/ref/agent/?utm_source=chatgpt.com "OpenAI Agents SDK"
+[4]: https://langchain-ai.github.io/langgraph/concepts/multi_agent/?utm_source=chatgpt.com "LangGraph Multi-Agent Systems - Overview"
+[5]: https://platform.openai.com/docs/api-reference/introduction?utm_source=chatgpt.com "API Reference - OpenAI API"
+[6]: https://openai.github.io/openai-agents-python/agents/?utm_source=chatgpt.com "Agents - OpenAI Agents SDK"
+[7]: https://openai.github.io/openai-agents-python/?utm_source=chatgpt.com "OpenAI Agents SDK"
