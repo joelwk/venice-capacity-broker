@@ -1327,8 +1327,14 @@ class MarketDataProvider:
                             return combo
                 except Exception:
                     pass
+                external = self._external_price('VVV')
+                if self._valid_price(external):
+                    return self._apply_price_sanity('VVV', float(external))
                 return 0.0
             except Exception:
+                external = self._external_price('VVV')
+                if self._valid_price(external):
+                    return self._apply_price_sanity('VVV', float(external))
                 return 0.0
         if su == "WBTC":
             try:
