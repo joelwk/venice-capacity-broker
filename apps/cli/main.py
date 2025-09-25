@@ -447,15 +447,18 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
 
     stake_agent = StakeMaster(StakingService(VVVActions()))
     aggregator = build_aggregator_from_env() if live else None
-    diem_service = DIEMService(aggregator)
-    arbi_agent = ArbiDiem(diem_service)
+    market = MarketDataProvider()
+    diem_service = DIEMService(aggregator, market_data=market)
+    arbi_agent = ArbiDiem(diem_service, market=market)
     key_manager = KeyManager(VeniceClient())
     capacity_agent = CapacityBroker(key_manager)
-    market = MarketDataProvider()
 
     memory_store = MemoryStore()
     reflection = ReflectionEngine()
-    reflex_guard = ReflexGuardian()
+    allow_inactive = bool(getattr(args, "allow_inactive_stake", False))
+    if not allow_inactive:
+        allow_inactive = str(os.getenv("REFLEX_ALLOW_INACTIVE_STAKE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    reflex_guard = ReflexGuardian(require_active_stake=not allow_inactive)
 
     orchestrator = SingleLoopOrchestrator(
         stake_master=stake_agent,
@@ -485,8 +488,8 @@ def cmd_run_quorum(args: argparse.Namespace) -> None:
     from graph.workflows.revenue_streams import DiemMintSellWorkflow
 
     market = MarketDataProvider()
-    diem = DIEMService(build_aggregator_from_env())
-    arbi = ArbiDiem(diem)
+    diem = DIEMService(build_aggregator_from_env(), market_data=market)
+    arbi = ArbiDiem(diem, market=market)
     flow = DiemMintSellWorkflow(market=market, arbi=arbi)
     decided = flow.run_once(dry_run=args.dry_run)
     logger.info(f"Quorum/flow decision (dry={args.dry_run}): {decided}")
@@ -504,8 +507,8 @@ def cmd_run_orchestrator(args: argparse.Namespace) -> None:
 
     market = MarketDataProvider()
     # Avoid initializing DEX/web3 in dry-run to prevent platform-specific crashes
-    diem = DIEMService(build_aggregator_from_env() if not args.dry_run else None)
-    arbi = ArbiDiem(diem)
+    diem = DIEMService(build_aggregator_from_env() if not args.dry_run else None, market_data=market)
+    arbi = ArbiDiem(diem, market=market)
     orch = Orchestrator(market=market, arbi=arbi)
 
     orch.run_loop(
@@ -974,6 +977,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--sleep", default=15, type=float, help="Seconds to sleep between cycles")
     sp.add_argument("--max-cycles", default=3, type=int, help="Maximum cycles to run")
     sp.add_argument("--enable-live", action="store_true", default=False, help="Allow live actions (claim)")
+    sp.add_argument("--allow-inactive-stake", action="store_true", default=False, help="Skip reflex active-stake requirement (testing)")
     sp.set_defaults(func=cmd_run_loop)
 
     sp = sub.add_parser("test:challenge-offline", help="Offline test: sign a dummy challenge and echo payloads")
@@ -1021,18 +1025,18 @@ def build_parser() -> argparse.ArgumentParser:
 
         path = _require_trade_path()
         risk = RiskPolicy.from_env()
+        market = MarketDataProvider()
         # Determine market price (record if fallback was used)
         used_price_fallback = False
         if args.price is not None:
             px = float(args.price)
         else:
-            md = MarketDataProvider()
             try:
-                bp = md.best_price(path, amount_in_decimal=1.0)
+                bp = market.best_price(path, amount_in_decimal=1.0)
                 px = float(bp.get('price') or 0.0)
             except Exception:
-                # Fallback: derive DIEM price using mid-price × WETH->QUOTE when available
-                px = float(md.diem_price_with_fallback() or 0.0)
+                # Fallback: derive DIEM price using mid-price WETH->QUOTE when available
+                px = float(market.diem_price_with_fallback() or 0.0)
                 used_price_fallback = True
         if px <= 0:
             logger.error('Could not resolve market price. Set --price or ensure DEX providers are configured.')
@@ -1046,15 +1050,14 @@ def build_parser() -> argparse.ArgumentParser:
         if units <= 0:
             logger.error('Desired/allowed units is zero. Adjust env caps or pass --units.')
             return
-        svc = DIEMService(build_aggregator_from_env())
-        arbi = ArbiDiem(diem=svc, risk=risk)
+        svc = DIEMService(build_aggregator_from_env(), market_data=market)
+        arbi = ArbiDiem(diem=svc, risk=risk, market=market)
         # Reserve-cap sizing (best-effort)
         try:
             cap_bps = int((os.getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
         except Exception:
             cap_bps = 100
-        md2 = MarketDataProvider()
-        cap_units = md2.reserve_cap_units(path, take_bps=cap_bps)
+        cap_units = market.reserve_cap_units(path, take_bps=cap_bps)
         if isinstance(cap_units, int) and cap_units > 0:
             logger.info(f"reserve-cap: take_bps={cap_bps} units_cap={cap_units}")
             units = min(units, cap_units)
@@ -1063,8 +1066,7 @@ def build_parser() -> argparse.ArgumentParser:
         approx_used = False
         if last_bps is None and adjusted > 0:
             try:
-                md3 = MarketDataProvider()
-                exec_px_approx = md3.approx_exec_price(adjusted, path)
+                exec_px_approx = market.approx_exec_price(adjusted, path)
                 if exec_px_approx and exec_px_approx > 0:
                     slip = risk.check_slippage(exec_px_approx, px)
                     last_bps = float(slip.get('slippage_bps', 0.0)) if isinstance(slip, dict) else None

@@ -299,6 +299,47 @@ class SingleLoopOrchestrator:
     reflection: Optional[Any] = None
     reflex_guard: Optional[Any] = None
 
+    def _summarize_capacity(self, cap_summary: Any) -> Dict[str, Any]:
+        if not isinstance(cap_summary, dict):
+            return {"status": cap_summary}
+        summary: Dict[str, Any] = {"status": cap_summary.get("status")}
+        violations = cap_summary.get("violations")
+        if isinstance(violations, list):
+            summary["violations"] = len(violations)
+        enforce = cap_summary.get("enforce_limits")
+        if enforce is not None:
+            summary["enforce_limits"] = bool(enforce)
+        usage = cap_summary.get("usage")
+        if isinstance(usage, dict):
+            data = usage.get("data")
+            if isinstance(data, list):
+                summary["usage_items"] = len(data)
+            obj = usage.get("object")
+            if isinstance(obj, str):
+                summary["usage_object"] = obj
+        limits = cap_summary.get("limits")
+        if isinstance(limits, dict):
+            keys = list(limits.keys())
+            summary["limit_section_count"] = len(keys)
+            if keys:
+                summary["limit_sections"] = keys[:4]
+        warning = cap_summary.get("warningMessage")
+        if warning:
+            summary["warning"] = str(warning)
+        return summary
+
+    def _log_cycle_payload(self, cycle_record: Dict[str, Any]) -> Dict[str, Any]:
+        log_cycle = dict(cycle_record)
+        cap_summary = self._summarize_capacity(cycle_record.get("capacity"))
+        log_cycle["capacity"] = cap_summary
+        agents = log_cycle.get("agents")
+        if isinstance(agents, dict):
+            agents_copy = dict(agents)
+            if "capacity_broker" in agents_copy:
+                agents_copy["capacity_broker"] = cap_summary
+            log_cycle["agents"] = agents_copy
+        return log_cycle
+
     def _invoke_arbi(
         self,
         price: float,
@@ -633,7 +674,8 @@ class SingleLoopOrchestrator:
             except Exception as exc:  # noqa: BLE001
                 logger.debug(f"Memory store write failed: {exc}")
 
-        logger.info(f"single-loop cycle: {cycle_record}")
+        log_payload = self._log_cycle_payload(cycle_record)
+        logger.info(f"single-loop cycle: {log_payload}")
         return cycle_record
 
     def run_loop(

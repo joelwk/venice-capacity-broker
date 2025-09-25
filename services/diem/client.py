@@ -17,10 +17,14 @@ except Exception:  # noqa: BLE001
 @dataclass
 class DIEMService:
     aggregator: DexAggregator
+    market_data: Any | None = None
+    _market_cached: Any | None = None
 
-    def __init__(self, aggregator: Optional[DexAggregator] = None) -> None:
+    def __init__(self, aggregator: Optional[DexAggregator] = None, market_data: Any | None = None) -> None:
         # DEX aggregator for quotes/trades (optional; lazily used)
         self.aggregator = aggregator  # may be None in tests or dry flows
+        self.market_data = market_data
+        self._market_cached = None
         # On-chain actions via AgentKit-compatible helpers
         # Lazily resolve DIEMACTIONS at call time to avoid importing web3 in tests
         self._actions = None  # type: ignore[assignment]
@@ -37,6 +41,15 @@ class DIEMService:
         if self._actions is None:
             self._actions = self._actions_factory()
         return self._actions
+
+    def _market_provider(self):  # lazy to avoid heavy imports during tests
+        if self.market_data is not None:
+            return self.market_data
+        if self._market_cached is None:
+            from services.marketdata.provider import MarketDataProvider  # lazy import
+
+            self._market_cached = MarketDataProvider()
+        return self._market_cached
 
     # --- optional capacity gating (sVVV locking rules) ---
     def _env_flag(self, name: str, default: bool = False) -> bool:
@@ -114,9 +127,7 @@ class DIEMService:
                 return None
         # Fall back to market data mint rate if available
         try:
-            from services.marketdata.provider import MarketDataProvider  # lazy import
-
-            info = MarketDataProvider().diem_mint_rate(ttl_s=120)
+            info = self._market_provider().diem_mint_rate(ttl_s=120)
             if isinstance(info, dict):
                 units = info.get("svvv_units_per_diem")
                 if units not in (None, 0):
@@ -552,7 +563,7 @@ class DIEMService:
         from services.marketdata.provider import MarketDataProvider
 
         try:
-            info = MarketDataProvider().diem_mint_rate(ttl_s=ttl_s)
+            info = self._market_provider().diem_mint_rate(ttl_s=ttl_s)
         except Exception as exc:  # noqa: BLE001
             return {"status": "error", "error": str(exc)}
 

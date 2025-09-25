@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from libs.telemetry.logger import get_logger
 from importlib import import_module
@@ -21,6 +22,17 @@ class ArbiDiem:
     diem: DIEMService
     discount_rate_apy: float = 0.2
     risk: RiskPolicy = field(default_factory=RiskPolicy.from_env)
+    market: object | None = None
+    _market_cached: object | None = field(default=None, init=False, repr=False)
+
+    def _market_provider(self) -> Any:
+        if self.market is not None:
+            return self.market
+        if self._market_cached is None:
+            from services.marketdata.provider import MarketDataProvider  # lazy import
+
+            self._market_cached = MarketDataProvider()
+        return self._market_cached
 
     def _desired_units(self) -> int:
         try:
@@ -267,9 +279,7 @@ class ArbiDiem:
             reserve_cap: int | None = None
             pool_take_bps: int | None = None
             try:
-                from services.marketdata.provider import MarketDataProvider  # lazy import
-
-                md = MarketDataProvider()
+                md = self._market_provider()
                 path = self.diem._path_from_env()
                 try:
                     pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
@@ -345,9 +355,7 @@ class ArbiDiem:
             reserve_cap: int | None = None
             pool_take_bps: int | None = None
             try:
-                from services.marketdata.provider import MarketDataProvider  # lazy import
-
-                md = MarketDataProvider()
+                md = self._market_provider()
                 path_buy = list(reversed(self.diem._path_from_env()))
                 try:
                     pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)

@@ -251,6 +251,22 @@ class MarketDataProvider:
 
     def _apply_price_sanity(self, symbol: str, price: Optional[float]) -> float:
         label = self._norm_symbol_label(symbol)
+        stats = getattr(self, '_active_stats', None)
+
+        def _store_event(reason: str, diff_val: Optional[float], threshold_val: Optional[float]) -> dict[str, float | str | None]:
+            event = {
+                "symbol": label,
+                "reason": reason,
+                "internal_price": float(price) if price is not None else None,
+                "external_price": float(ext_price),
+                "diff": diff_val,
+                "threshold": threshold_val,
+                "ts": time.time(),
+            }
+            if isinstance(stats, dict):
+                stats.setdefault("price_sanity_events", []).append(event)
+            return event
+
         try:
             ext_price = self._external_price(symbol)
         except Exception:
@@ -259,13 +275,15 @@ class MarketDataProvider:
             return float(price or 0.0)
         if not self._valid_price(price):
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "external_replace", "reason": "invalid_internal"})
-            _logger.warning("price sanity: replacing invalid internal price", extra={"symbol": label, "external_price": ext_price, "internal_price": price})
+            evt = _store_event("invalid_internal", None, None)
+            _logger.warning("price sanity: replacing invalid internal price", extra={"sanity": evt})
             return float(ext_price)
         threshold = self._price_sanity_threshold()
         diff = abs(float(price) - float(ext_price)) / float(ext_price)
         if diff > threshold:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
-            _logger.warning("price sanity: clamp applied", extra={"symbol": label, "internal_price": float(price), "external_price": float(ext_price), "diff": diff, "threshold": threshold})
+            evt = _store_event("drift", diff, threshold)
+            _logger.warning("price sanity: clamp applied", extra={"sanity": evt})
             return float(ext_price)
         return float(price)
 
