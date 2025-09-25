@@ -153,14 +153,24 @@ class DIEMService:
             "mint_rate_svvv_per_diem": int(rate),
         }
 
-    def _maybe_lock_before_mint(self, amount: int, gate: Dict[str, Any], corr_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _maybe_lock_before_mint(
+        self,
+        amount: int,
+        gate: Dict[str, Any],
+        corr_id: Optional[str],
+        *,
+        enable_lock: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Attempt to lock sVVV before mint if enabled via env.
 
         Env:
           - DIEM_LOCK_ON_MINT=true|1
           - DIEM_UNLOCK_COOLDOWN_SECONDS (optional; metadata only)
         """
-        if not self._env_flag("DIEM_LOCK_ON_MINT", default=False):
+        should_lock = enable_lock
+        if should_lock is None:
+            should_lock = self._env_flag("DIEM_LOCK_ON_MINT", default=False)
+        if not should_lock:
             return None
         try:
             required = gate.get("required_svvv")
@@ -210,6 +220,7 @@ class DIEMService:
         dry_run: bool = False,
         idem_key: Optional[str] = None,
         corr_id: Optional[str] = None,
+        lock_override: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Mint DIEM on-chain using configured wallet provider.
 
@@ -241,7 +252,7 @@ class DIEMService:
         # Optional lock step
         lock_info: Optional[Dict[str, Any]] = None
         try:
-            lock_info = self._maybe_lock_before_mint(amount, gate, corr_id)
+            lock_info = self._maybe_lock_before_mint(amount, gate, corr_id, enable_lock=lock_override)
         except Exception:
             pass
         try:
@@ -275,6 +286,25 @@ class DIEMService:
             pass
         self._last_mint = dict({"amount": int(amount)}, **dict(res))
         return res
+
+    def mint_diem(
+        self,
+        amount: int,
+        *,
+        lock: Optional[bool] = None,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compatibility alias that exposes plan-aligned signature."""
+
+        return self.mint(
+            amount,
+            dry_run=dry_run,
+            idem_key=idem_key,
+            corr_id=corr_id,
+            lock_override=lock,
+        )
 
     def burn(
         self,
@@ -351,6 +381,18 @@ class DIEMService:
         self._last_burn = dict({"amount": int(amount)}, **dict(res))
         return res
 
+    def burn_diem(
+        self,
+        amount: int,
+        *,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Compatibility alias for implementation plan terminology."""
+
+        return self.burn(amount, dry_run=dry_run, idem_key=idem_key, corr_id=corr_id)
+
     def stake_for_api(
         self,
         amount: int,
@@ -401,6 +443,18 @@ class DIEMService:
         self._last_stake = dict({"amount": int(amount)}, **dict(res))
         return res
 
+    def stake_diem_for_api(
+        self,
+        amount: int,
+        *,
+        dry_run: bool = False,
+        idem_key: Optional[str] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Alias that mirrors implementation-plan naming."""
+
+        return self.stake_for_api(amount, dry_run=dry_run, idem_key=idem_key, corr_id=corr_id)
+
     def _path_from_env(self) -> List[str]:
         raw_paths = os.getenv("TRADE_PATHS")
         if raw_paths:
@@ -422,17 +476,28 @@ class DIEMService:
             raise EnvironmentError("TRADE_PATH must be set: comma-separated token addresses (in,out)")
         return [p.strip() for p in path_env.split(",")]
 
-    def trade(self, side: str, amount: int, *, corr_id: Optional[str] = None) -> Dict[str, Any]:
+    def trade(
+        self,
+        side: str,
+        amount: int,
+        *,
+        slippage_bps: Optional[int] = None,
+        corr_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         side_l = side.lower()
         # Path may not be set in tests; allow empty path for fake aggregators
         try:
             base_path = self._path_from_env()
         except Exception:
             base_path = []
-        slippage_bps = int(os.getenv("SLIPPAGE_BPS", "100"))
+        slippage = (
+            int(slippage_bps)
+            if slippage_bps is not None
+            else int(os.getenv("SLIPPAGE_BPS", "100"))
+        )
         if side_l == "sell":
             if self.aggregator is not None:
-                res = self.aggregator.trade_best(amount, slippage_bps, base_path)
+                res = self.aggregator.trade_best(amount, slippage, base_path)
             else:
                 # Fallback to actions if aggregator unavailable (test/mocked path)
                 res = self._get_actions().trade("sell", amount)
@@ -451,7 +516,7 @@ class DIEMService:
             # Prefer aggregator if supports exact-out; else fall back to AgentKit actions
             if (self.aggregator is not None) and hasattr(self.aggregator, "trade_best_exact_out"):
                 try:
-                    res = self.aggregator.trade_best_exact_out(amount, slippage_bps, path_buy)  # type: ignore[attr-defined]
+                    res = self.aggregator.trade_best_exact_out(amount, slippage, path_buy)  # type: ignore[attr-defined]
                     out = {"status": "sent", **res}
                     try:
                         payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
