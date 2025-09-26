@@ -106,6 +106,19 @@ Tracing and metrics:
 - Emit events for every service call and agent decision with context.
 - Persist per‑stream PnL, wasted Diem, and tenant utilisation for analysis.
 
+
+### Debugging instrumentation
+
+Enable `DIEM_DEBUG_ROUTES=1` when tracing routing or DEX liquidity issues so the runtime log records normalized trade paths and provider responses.
+
+
+Enable `MARKETDATA_DEBUG_SANITY=1` when investigating price drift so clamps include symbol, internal price, and external reference.
+
+
+Use `python -m pytest tests/test_logging_debug.py -q` after touching instrumentation to ensure the log contracts stay intact.
+
+
+
 ---
 
 ## Agents and their responsibilities
@@ -185,4 +198,3 @@ Follow the sprint plan outlined in the implementation document:
 - **Sprint 4 – Quorum & treasury**: quorum coordinator and initial AI Treasurer actions.
 - **Sprint 5 – Hardening & scale**: abuse prevention, SLAs, autoscaling, and advanced risk management (e.g., price hedging).
 
-Throughout implementation, respect the unstake cooldown, cap DIEM short exposure, and ensure all tenant keys have `consumptionLimit` and `expiresAt`.

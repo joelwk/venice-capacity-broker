@@ -183,6 +183,11 @@ We encode each revenue stream as a **LangGraph workflow** with nodes for observa
 
 ## 8) Security, risk, ops
 
+* **Troubleshooting**: set `DIEM_DEBUG_ROUTES=1` to emit normalized trade paths plus DEX provider responses, and `MARKETDATA_DEBUG_SANITY=1` to print price-clamp context in the broker logs.
+
+  Run `python -m pytest tests/test_logging_debug.py -q` after instrumentation changes to verify logging expectations.
+
+
 * **Wallets**: CDP Smart Wallet default (MPC, gas abstractions); ETH account only for dev. ([GitHub][1])
 * **Cooldown scheduling**: stagger stakes so not all unlock at once; CI checks on any code that touches “unstake”. ([Venice AI][9])
 * **Quotas**: all tenant keys must have `consumptionLimit` + `expiresAt`; revoke immediately on anomaly; rotate daily. ([docs.venice.ai][2])

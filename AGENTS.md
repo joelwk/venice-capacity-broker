@@ -56,6 +56,22 @@ It supersedes prior drafts where details conflict, but **v1 scope and stop-lines
 
   * Pricing: `QUOTE_TOKEN_ADDRESS`, optional `TRADE_PATH` for DIEM pricing`.
 
+* **Debug instrumentation**
+
+  * `DIEM_DEBUG_ROUTES=1`.
+
+    Shows normalized trade routes and DEX aggregator diagnostics in `runtime.log`.
+
+    Disable after troubleshooting.
+
+  * `MARKETDATA_DEBUG_SANITY=1`.
+
+    Emits price sanity clamp context with symbol, internal price, and external reference.
+
+    Leave off in production unless chasing a data drift incident.
+
+
+
 ### DIEM & Risk configuration
 
 * **Mint/burn gate**
