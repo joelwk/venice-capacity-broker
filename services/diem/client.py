@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.dex.providers import DexAggregator, build_aggregator_from_env
-from libs.dex.routes import RoutePlan
+from libs.dex.routes import RoutePlan, make_route
 from importlib import import_module
 try:
     from libs.telemetry.events import emit as _emit_event
@@ -491,29 +491,78 @@ class DIEMService:
 
     def trade_routes(self) -> List[RoutePlan]:
         plans = self._route_plans_from_env()
+        provider = self._market_provider()
         try:
-            diem_addr = (self._market_provider()._address_for_symbol("DIEM") or "").strip().lower()  # type: ignore[attr-defined]
+            diem_addr = (provider._address_for_symbol("DIEM") or "").strip().lower()  # type: ignore[attr-defined]
         except Exception:
             diem_addr = (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip().lower()
         if not diem_addr:
             return plans
+
+        def _alias_lookup(symbol: str) -> Optional[str]:
+            try:
+                value = provider._address_for_symbol(symbol)  # type: ignore[attr-defined]
+            except Exception:
+                value = None
+            if value:
+                return str(value).strip().lower()
+            env_key = f"{symbol.upper()}_TOKEN_ADDRESS"
+            env_val = (os.getenv(env_key) or "").strip()
+            return env_val.lower() if env_val else None
+
+        addr_vvv = _alias_lookup("VVV")
+        addr_usdc = _alias_lookup("USDC")
+        addr_eth = _alias_lookup("ETH")
+        addr_weth = _alias_lookup("WETH") or addr_eth
+        quote_env = (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip().lower()
+        alias_map: Dict[str, Optional[str]] = {
+            "diem": diem_addr,
+            "in": diem_addr,
+            "vvv": addr_vvv,
+            "svvv": addr_vvv,
+            "usdc": addr_usdc,
+            "quote": addr_usdc or quote_env or None,
+            "out": addr_usdc,
+            "weth": addr_weth,
+            "eth": addr_eth,
+        }
+
+        def _resolve_token(addr: str) -> str:
+            token = (addr or "").strip()
+            lowered = token.lower()
+            alias_key = ""
+            if lowered.startswith("0x"):
+                tail = lowered[2:]
+                if not tail or any(c not in "0123456789abcdef" for c in tail):
+                    alias_key = tail
+            else:
+                alias_key = lowered
+            mapped = alias_map.get(alias_key)
+            return mapped or lowered
+
         selected: List[RoutePlan] = []
         seen: set[tuple[tuple[str, str, int | None], ...]] = set()
         for plan in plans:
-            tokens = plan.tokens
-            if not tokens:
+            raw_tokens = plan.tokens
+            if not raw_tokens:
                 continue
-            candidate = plan
-            if tokens[0].lower() != diem_addr and tokens[-1].lower() == diem_addr:
-                candidate = plan.reversed()
-                tokens = candidate.tokens
-            if tokens[0].lower() != diem_addr:
+            resolved_tokens = [_resolve_token(tok) for tok in raw_tokens]
+            tokens_lower = [tok.lower() for tok in resolved_tokens]
+            adjusted_plan = plan
+            if tokens_lower != [tok.lower() for tok in raw_tokens]:
+                fees = [hop.fee for hop in plan.hops]
+                adjusted_plan = make_route(resolved_tokens, fees)
+                tokens_lower = [tok.lower() for tok in adjusted_plan.tokens]
+            if tokens_lower[0] != diem_addr and tokens_lower[-1] == diem_addr:
+                adjusted_plan = adjusted_plan.reversed()
+                tokens_lower = [tok.lower() for tok in adjusted_plan.tokens]
+            if tokens_lower[0] != diem_addr:
                 continue
-            key = tuple((hop.token_in.lower(), hop.token_out.lower(), hop.fee) for hop in candidate.hops)
+            key = tuple((hop.token_in.lower(), hop.token_out.lower(), hop.fee) for hop in adjusted_plan.hops)
             if key in seen:
                 continue
             seen.add(key)
-            selected.append(candidate)
+            selected.append(adjusted_plan)
         if not selected:
             raise EnvironmentError("Configured trade paths do not start with DIEM token")
         return selected

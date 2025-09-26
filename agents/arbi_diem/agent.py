@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+import math
 
 from libs.telemetry.logger import get_logger
 from importlib import import_module
@@ -168,47 +169,62 @@ class ArbiDiem:
         Returns (adjusted_units, last_slippage_bps or None if no preview).
         Does nothing if no aggregator preview is available.
         """
-        # If no units or no price, bail fast
         if units_in <= 0 or market_price <= 0:
             return 0, None
-        # Try preview once; if unavailable, keep original units
         exec_px = self._preview_exec_price(units_in)
         if exec_px <= 0:
             return units_in, None
         slip = self.risk.check_slippage(exec_px, market_price)
         bps = float(slip.get("slippage_bps", 0.0)) if isinstance(slip, dict) else 0.0
-        if bool(slip.get("ok", False)):
+        epsilon = 1e-6
+        try:
+            cap = float(getattr(self.risk, "slippage_bps_cap", 0.0))
+        except Exception:
+            cap = 0.0
+        threshold = cap - epsilon if cap > epsilon else cap
+
+        def _within_cap(bps_val: float, slip_ok: bool) -> bool:
+            if not slip_ok:
+                return False
+            try:
+                val = float(bps_val)
+            except Exception:
+                return False
+            if not math.isfinite(val):
+                return False
+            if cap <= epsilon:
+                return val <= cap
+            return val <= threshold
+
+        if _within_cap(bps, bool(slip.get("ok", False))):
             try:
                 _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "false"})
                 _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(bps)})
             except Exception:
                 pass
             return int(units_in), bps
-        # If not ok, reduce progressively (binary-like) up to a few steps
         adjusted = int(units_in)
-        last_bps = bps
-        last_px = exec_px
-        for _ in range(6):  # up to 6 halvings (~1.5% of original)
+        last_bps: float | None = bps
+        for _ in range(6):
             adjusted = max(0, adjusted // 2)
             if adjusted <= 0:
                 break
             px = self._preview_exec_price(adjusted)
             if px <= 0:
-                # cannot preview smaller size; stop
                 break
             slip2 = self.risk.check_slippage(px, market_price)
-            bps2 = float(slip2.get("slippage_bps", 0.0)) if isinstance(slip2, dict) else float("inf")
-            last_bps, last_px = bps2, px
-            if bool(slip2.get("ok", False)):
+            bps2 = float(slip2.get("slippage_bps", float("inf"))) if isinstance(slip2, dict) else float("inf")
+            prev_bps = last_bps
+            last_bps = bps2
+            if _within_cap(bps2, bool(slip2.get("ok", False))):
                 try:
                     _metrics_inc("risk_liquidity_checks_total", labels={"adjusted": "true"})
                     _metrics_inc("risk_liquidity_slippage_bucket_total", labels={"bucket": self._slippage_bucket(bps2)})
                 except Exception:
                     pass
                 return int(adjusted), bps2
-            # If slippage does not improve materially, break to avoid infinite loop
             try:
-                if abs(bps2 - bps) < 1e-6:
+                if prev_bps is not None and abs(bps2 - prev_bps) < 1e-6:
                     break
             except Exception:
                 pass
