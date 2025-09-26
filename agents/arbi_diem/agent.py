@@ -34,6 +34,23 @@ class ArbiDiem:
             self._market_cached = MarketDataProvider()
         return self._market_cached
 
+    def _trade_routes(self):
+        try:
+            routes = self.diem.trade_routes()
+            if routes:
+                return routes
+        except Exception:
+            pass
+        try:
+            tokens = self.diem._path_from_env()
+            if tokens:
+                from libs.dex.routes import make_route
+
+                return [make_route(tokens)]
+        except Exception:
+            return []
+        return []
+
     def _desired_units(self) -> int:
         try:
             return int((__import__("os").getenv("ARBI_DIEM_MINT_UNITS") or "1000").strip() or 1000)
@@ -46,7 +63,8 @@ class ArbiDiem:
             from libs.agentkit_ext.web3_utils import get_contract, get_web3
             from web3 import Web3  # type: ignore
 
-            path = self.diem._path_from_env()
+            routes = self._trade_routes()
+            path = routes[0].tokens if routes else []
             w3 = get_web3()
             erc20 = get_contract(w3, Web3.to_checksum_address(path[-1]), "erc20.json")
             return int(erc20.functions.decimals().call())
@@ -59,20 +77,29 @@ class ArbiDiem:
 
         Uses aggregator.best_quote; falls back to None (0.0) when unavailable.
         """
-        try:
-            path = self.diem._path_from_env()
-            q = self.diem.aggregator.best_quote(units_in, path)
-            if q is None:
-                return 0.0
-            dec_in = self.risk._diem_decimals()
-            dec_out = self._decimals_out()
-            amt_in = q.amount_in / float(10 ** dec_in)
-            amt_out = q.amount_out / float(10 ** dec_out)
-            if amt_in <= 0:
-                return 0.0
-            return float(amt_out / amt_in)
-        except Exception:
+        if self.diem.aggregator is None:
             return 0.0
+        routes = self._trade_routes()
+        if not routes:
+            return 0.0
+        for route in routes:
+            try:
+                quote = self.diem.aggregator.best_quote(units_in, route)
+            except Exception:
+                continue
+            if quote is None:
+                continue
+            try:
+                dec_in = self.risk._diem_decimals()
+                dec_out = self._decimals_out()
+                amt_in = quote.amount_in / float(10 ** dec_in)
+                amt_out = quote.amount_out / float(10 ** dec_out)
+                if amt_in <= 0:
+                    continue
+                return float(amt_out / amt_in)
+            except Exception:
+                continue
+        return 0.0
 
     def _erc20_decimals(self, address: str) -> int:
         try:
@@ -91,25 +118,30 @@ class ArbiDiem:
         Uses aggregator.best_quote_exact_out on the reversed TRADE_PATH (QUOTE->...->DIEM).
         Returns 0.0 when unavailable.
         """
-        try:
-            if self.diem.aggregator is None:
-                return 0.0
-            # Build reversed path so output is DIEM
-            path = list(reversed(self.diem._path_from_env()))
-            q = self.diem.aggregator.best_quote_exact_out(units_out, path)  # type: ignore[attr-defined]
-            if q is None:
-                return 0.0
-            # Input is QUOTE token (e.g., USDC), output is DIEM
-            dec_in = self._erc20_decimals(path[0])
-            dec_out = self.risk._diem_decimals()
-            amt_in = q.amount_in / float(10 ** dec_in)
-            amt_out = q.amount_out / float(10 ** dec_out)
-            if amt_out <= 0:
-                return 0.0
-            # USD per DIEM
-            return float(amt_in / amt_out)
-        except Exception:
+        if self.diem.aggregator is None or not hasattr(self.diem.aggregator, "best_quote_exact_out"):
             return 0.0
+        routes = self._trade_routes()
+        if not routes:
+            return 0.0
+        for route in routes:
+            try:
+                rev_route = route.reversed()
+                quote = self.diem.aggregator.best_quote_exact_out(units_out, rev_route)  # type: ignore[attr-defined]
+            except Exception:
+                continue
+            if quote is None:
+                continue
+            try:
+                dec_in = self._erc20_decimals(rev_route.tokens[0])
+                dec_out = self.risk._diem_decimals()
+                amt_in = quote.amount_in / float(10 ** dec_in)
+                amt_out = quote.amount_out / float(10 ** dec_out)
+                if amt_out <= 0:
+                    continue
+                return float(amt_in / amt_out)
+            except Exception:
+                continue
+        return 0.0
 
     def _slippage_bucket(self, bps: float) -> str:
         try:
@@ -280,12 +312,13 @@ class ArbiDiem:
             pool_take_bps: int | None = None
             try:
                 md = self._market_provider()
-                path = self.diem._path_from_env()
+                routes = self._trade_routes()
+                path = routes[0] if routes else None
                 try:
                     pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
                 except Exception:
                     pool_take_bps = 100
-                reserve_cap = md.reserve_cap_units(path, take_bps=pool_take_bps)
+                reserve_cap = md.reserve_cap_units(path, take_bps=pool_take_bps) if path else None
             except Exception:
                 reserve_cap = None
             try:
@@ -356,12 +389,13 @@ class ArbiDiem:
             pool_take_bps: int | None = None
             try:
                 md = self._market_provider()
-                path_buy = list(reversed(self.diem._path_from_env()))
+                routes = self._trade_routes()
+                path_buy = routes[0].reversed() if routes else None
                 try:
                     pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
                 except Exception:
                     pool_take_bps = 100
-                reserve_cap = md.reserve_cap_units(path_buy, take_bps=pool_take_bps)
+                reserve_cap = md.reserve_cap_units(path_buy, take_bps=pool_take_bps) if path_buy else None
             except Exception:
                 reserve_cap = None
             try:

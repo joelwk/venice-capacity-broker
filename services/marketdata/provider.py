@@ -1156,31 +1156,6 @@ class MarketDataProvider:
             if self._valid_price(total):
                 return total
 
-        vvv = (self._address_for_symbol("VVV") or "").strip()
-        if vvv:
-            diem_to_vvv = self._hop_price(diem, vvv)
-            if self._valid_price(diem_to_vvv):
-                v_routes = [r for r in routes if r.tokens and r.tokens[0].lower() == vvv.lower()]
-                for v_route in v_routes:
-                    price_tail = self._price_via_segments(v_route)
-                    if not self._valid_price(price_tail):
-                        continue
-                    total_tail = float(price_tail)
-                    last_token = v_route.tokens[-1]
-                    if last_token.lower() != quote.lower():
-                        extra = self._hop_price(last_token, quote)
-                        if not self._valid_price(extra):
-                            continue
-                        total_tail *= float(extra)
-                    combined = float(diem_to_vvv) * total_tail
-                    if self._valid_price(combined):
-                        return combined
-                vvv_to_quote = self._hop_price(vvv, quote)
-                if self._valid_price(vvv_to_quote):
-                    combined = float(diem_to_vvv) * float(vvv_to_quote)
-                    if self._valid_price(combined):
-                        return combined
-
         direct = self._hop_price(diem, quote)
         if self._valid_price(direct):
             return float(direct)

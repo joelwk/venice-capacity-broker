@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.dex.providers import DexAggregator, build_aggregator_from_env
+from libs.dex.routes import RoutePlan
 from importlib import import_module
 try:
     from libs.telemetry.events import emit as _emit_event
@@ -466,26 +467,62 @@ class DIEMService:
 
         return self.stake_for_api(amount, dry_run=dry_run, idem_key=idem_key, corr_id=corr_id)
 
+    def _route_plans_from_env(self) -> List[RoutePlan]:
+        provider = self._market_provider()
+        plans: List[RoutePlan] = []
+        try:
+            plans.extend(provider._collect_trade_paths())  # type: ignore[attr-defined]
+        except Exception:
+            plans = []
+        if not plans:
+            raw = os.getenv("TRADE_PATH")
+            if not raw:
+                raise EnvironmentError("TRADE_PATH must be set for DIEM routing")
+            plans.append(provider._parse_route_spec(raw))  # type: ignore[attr-defined]
+        seen: set[tuple[tuple[str, str, int | None], ...]] = set()
+        uniq: List[RoutePlan] = []
+        for plan in plans:
+            key = tuple((hop.token_in.lower(), hop.token_out.lower(), hop.fee) for hop in plan.hops)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(plan)
+        return uniq
+
+    def trade_routes(self) -> List[RoutePlan]:
+        plans = self._route_plans_from_env()
+        try:
+            diem_addr = (self._market_provider()._address_for_symbol("DIEM") or "").strip().lower()  # type: ignore[attr-defined]
+        except Exception:
+            diem_addr = (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip().lower()
+        if not diem_addr:
+            return plans
+        selected: List[RoutePlan] = []
+        seen: set[tuple[tuple[str, str, int | None], ...]] = set()
+        for plan in plans:
+            tokens = plan.tokens
+            if not tokens:
+                continue
+            candidate = plan
+            if tokens[0].lower() != diem_addr and tokens[-1].lower() == diem_addr:
+                candidate = plan.reversed()
+                tokens = candidate.tokens
+            if tokens[0].lower() != diem_addr:
+                continue
+            key = tuple((hop.token_in.lower(), hop.token_out.lower(), hop.fee) for hop in candidate.hops)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(candidate)
+        if not selected:
+            raise EnvironmentError("Configured trade paths do not start with DIEM token")
+        return selected
+
     def _path_from_env(self) -> List[str]:
-        raw_paths = os.getenv("TRADE_PATHS")
-        if raw_paths:
-            try:
-                import json
-                from services.marketdata.provider import MarketDataProvider
-
-                parsed = json.loads(raw_paths)
-                if isinstance(parsed, list) and parsed:
-                    spec = MarketDataProvider._coerce_route_entry(parsed[0])
-                    if spec:
-                        route = MarketDataProvider._parse_route_spec(spec)
-                        return [str(token) for token in route.tokens]
-            except Exception:
-                pass
-
-        path_env = os.getenv("TRADE_PATH")
-        if not path_env:
-            raise EnvironmentError("TRADE_PATH must be set: comma-separated token addresses (in,out)")
-        return [p.strip() for p in path_env.split(",")]
+        routes = self.trade_routes()
+        if not routes:
+            raise EnvironmentError("TRADE_PATH must be set for DIEM routing")
+        return [str(token) for token in routes[0].tokens]
 
     def trade(
         self,
@@ -496,19 +533,36 @@ class DIEMService:
         corr_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         side_l = side.lower()
-        # Path may not be set in tests; allow empty path for fake aggregators
         try:
-            base_path = self._path_from_env()
+            routes = self.trade_routes()
         except Exception:
-            base_path = []
+            routes = []
         slippage = (
             int(slippage_bps)
             if slippage_bps is not None
             else int(os.getenv("SLIPPAGE_BPS", "100"))
         )
         if side_l == "sell":
-            if self.aggregator is not None:
-                res = self.aggregator.trade_best(amount, slippage, base_path)
+            if self.aggregator is not None and routes:
+                last_exc: Exception | None = None
+                for route in routes:
+                    try:
+                        res = self.aggregator.trade_best(amount, slippage, route)
+                        out = {"status": "sent", **res, "route": list(route.tokens)}
+                        try:
+                            payload = {"side": side_l, "amount_in": int(amount), **dict(out)}
+                            if corr_id:
+                                payload["correlationId"] = str(corr_id)
+                            _emit_event("diem.trade", payload)
+                        except Exception:
+                            pass
+                        return out
+                    except Exception as exc:  # noqa: BLE001
+                        last_exc = exc
+                        continue
+                if last_exc is not None:
+                    raise last_exc
+                raise RuntimeError("No quotes available from configured DEX providers")
             else:
                 # Fallback to actions if aggregator unavailable (test/mocked path)
                 res = self._get_actions().trade("sell", amount)
@@ -522,23 +576,26 @@ class DIEMService:
                 pass
             return out
         if side_l == "buy":
-            # For buy, reverse the TRADE_PATH so output is DIEM at the end.
-            path_buy = list(reversed(base_path)) if base_path else []
-            # Prefer aggregator if supports exact-out; else fall back to AgentKit actions
-            if (self.aggregator is not None) and hasattr(self.aggregator, "trade_best_exact_out"):
-                try:
-                    res = self.aggregator.trade_best_exact_out(amount, slippage, path_buy)  # type: ignore[attr-defined]
-                    out = {"status": "sent", **res}
+            if (self.aggregator is not None) and hasattr(self.aggregator, "trade_best_exact_out") and routes:
+                last_exc: Exception | None = None
+                for route in routes:
                     try:
-                        payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
-                        if corr_id:
-                            payload["correlationId"] = str(corr_id)
-                        _emit_event("diem.trade", payload)
-                    except Exception:
-                        pass
-                    return out
-                except Exception:
-                    pass
+                        rev_route = route.reversed()
+                        res = self.aggregator.trade_best_exact_out(amount, slippage, rev_route)  # type: ignore[attr-defined]
+                        out = {"status": "sent", **res, "route": list(rev_route.tokens)}
+                        try:
+                            payload = {"side": side_l, "amount_out": int(amount), **dict(out)}
+                            if corr_id:
+                                payload["correlationId"] = str(corr_id)
+                            _emit_event("diem.trade", payload)
+                        except Exception:
+                            pass
+                        return out
+                    except Exception as exc:  # noqa: BLE001
+                        last_exc = exc
+                        continue
+                if last_exc is not None:
+                    raise last_exc
             # Fallback path
             act = self._get_actions()
             res = act.trade("buy", amount)
@@ -580,19 +637,30 @@ class DIEMService:
 
     def quote(self, side: str, amount: int) -> Dict[str, Any]:
         try:
-            path = self._path_from_env()
+            routes = self.trade_routes()
         except Exception:
-            path = []
+            routes = []
         side_l = side.lower()
         if side_l == "sell":
             if self.aggregator is None:
                 quotes = []
             else:
-                quotes = self.aggregator.quote_all(amount, path)
+                quotes = []
+                for route in routes:
+                    try:
+                        quotes.extend(self.aggregator.quote_all(amount, route))
+                    except Exception:
+                        continue
         elif side_l == "buy":
             # amount is desired amount_out
             if (self.aggregator is not None) and hasattr(self.aggregator, "quote_all_exact_out"):
-                quotes = self.aggregator.quote_all_exact_out(amount, path)  # type: ignore[attr-defined]
+                quotes = []
+                for route in routes:
+                    try:
+                        rev_route = route.reversed()
+                        quotes.extend(self.aggregator.quote_all_exact_out(amount, rev_route))  # type: ignore[attr-defined]
+                    except Exception:
+                        continue
             else:
                 quotes = []
         else:

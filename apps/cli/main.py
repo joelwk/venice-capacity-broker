@@ -790,6 +790,112 @@ def cmd_market_diem(args: argparse.Namespace) -> None:
     logger.info(f"diem_balance: {res}")
 
 
+def cmd_market_validate_trade_paths(args: argparse.Namespace) -> None:
+    from services.marketdata.provider import MarketDataProvider
+
+    md = MarketDataProvider()
+    try:
+        plans = md._collect_trade_paths()  # type: ignore[attr-defined]
+    except Exception:
+        plans = []
+    if not plans:
+        try:
+            plans = [md._route_from_env("TRADE_PATH")]  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"No trade paths configured: {exc}")
+            raise SystemExit(1) from exc
+    seen: set[tuple[str, ...]] = set()
+    reports = []
+    for plan in plans:
+        tokens = tuple(str(t) for t in plan.tokens)
+        if not tokens or tokens in seen:
+            continue
+        seen.add(tokens)
+        try:
+            discovery = md.discover_trade_path(list(tokens))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"discover_trade_path failed for {'->'.join(tokens)}: {exc}")
+            raise SystemExit(1) from exc
+        hop_details = []
+        all_hops_ok = True
+        for hop in discovery.get("hops", []) or []:
+            venues = []
+            hop_ok = False
+            for venue_key, venue_label in (
+                ("uniswap_v2", "uniswap_v2"),
+                ("aerodrome_vol", "aerodrome_vol"),
+                ("aerodrome_stable", "aerodrome_stable"),
+            ):
+                ent = hop.get(venue_key) or {}
+                pair = ent.get("pair")
+                reserves = ent.get("reserves")
+                has_reserves = False
+                if isinstance(reserves, (tuple, list)) and len(reserves) >= 2:
+                    try:
+                        has_reserves = (int(reserves[0]) > 0) and (int(reserves[1]) > 0)
+                    except Exception:
+                        has_reserves = False
+                if pair and has_reserves:
+                    hop_ok = True
+                venues.append({
+                    "venue": venue_label,
+                    "pair": pair,
+                    "reserves": reserves,
+                    "has_liquidity": bool(pair) and has_reserves,
+                })
+            hop_details.append({
+                "from": hop.get("from"),
+                "to": hop.get("to"),
+                "ok": hop_ok,
+                "venues": venues,
+            })
+            if not hop_ok:
+                all_hops_ok = False
+        price_preview = None
+        price_error = None
+        if not args.skip_quotes:
+            try:
+                preview = md.best_price(plan, amount_in_decimal=float(args.amount))
+                price_preview = float(preview.get("price")) if preview else None
+            except Exception as exc:  # noqa: BLE001
+                price_error = str(exc)
+        reports.append({
+            "tokens": list(tokens),
+            "hops": hop_details,
+            "ok": all_hops_ok,
+            "price": price_preview,
+            "price_error": price_error,
+        })
+
+    if not reports:
+        logger.error("No unique trade paths found in configuration")
+        raise SystemExit(1)
+
+    all_ok = True
+    for idx, info in enumerate(reports, start=1):
+        print(f"route[{idx}]: {' -> '.join(info['tokens'])}")
+        if info.get("price") is not None:
+            print(f"  preview_price={info['price']:.8f} (amount={args.amount})")
+        elif info.get("price_error"):
+            print(f"  preview_error={info['price_error']}")
+        for hop_idx, hop in enumerate(info.get("hops") or [], start=1):
+            status = "ok" if hop.get("ok") else "missing"
+            print(f"  hop[{hop_idx}] {hop.get('from')} -> {hop.get('to')} :: {status}")
+            for venue in hop.get("venues") or []:
+                pair = venue.get("pair")
+                if pair:
+                    reserves = venue.get("reserves")
+                    if isinstance(reserves, (tuple, list)) and len(reserves) >= 2:
+                        print(f"    {venue['venue']}: pair={pair} reserves={reserves[0]},{reserves[1]}")
+                    else:
+                        print(f"    {venue['venue']}: pair={pair} reserves=(n/a)")
+                else:
+                    print(f"    {venue['venue']}: (no pair)")
+        all_ok = all_ok and bool(info.get("ok"))
+    if not all_ok:
+        raise SystemExit(1)
+
+
 def cmd_diem_mint(args: argparse.Namespace) -> None:
     """Mint DIEM via DIEMService with optional dry-run and idempotency."""
     from services.diem.client import DIEMService
@@ -999,6 +1105,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("market:diem", help="Fetch DIEM signals via Venice API")
     sp.set_defaults(func=cmd_market_diem)
+
+    sp = sub.add_parser("market:trade-paths:validate", help="Validate configured trade paths against on-chain pairs")
+    sp.add_argument("--amount", required=False, default=1.0, type=float, help="Decimal input amount for quote preview")
+    sp.add_argument("--skip-quotes", action="store_true", default=False, help="Skip aggregator quote preview")
+    sp.set_defaults(func=cmd_market_validate_trade_paths)
 
     # DIEM direct actions (base units)
     sp = sub.add_parser("diem:mint", help="Mint DIEM (amount in base units); honors capacity gate if enabled")
