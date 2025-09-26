@@ -506,10 +506,13 @@ class DIEMService:
         provider = self._market_provider()
         debug = _debug_enabled()
         if debug:
-            try:
-                _logger.debug("trade_routes raw", extra={"routes": [list(plan.tokens) for plan in plans]})
-            except Exception:
-                _logger.debug("trade_routes raw=%s", [list(getattr(plan, 'tokens', [])) for plan in plans])
+            raw_routes: List[List[str]] = []
+            for plan in plans:
+                try:
+                    raw_routes.append(list(plan.tokens))
+                except Exception:
+                    raw_routes.append([])
+            _logger.info("DIEM trade_routes raw=%s", raw_routes)
         try:
             diem_addr = (provider._address_for_symbol("DIEM") or "").strip().lower()  # type: ignore[attr-defined]
         except Exception:
@@ -566,10 +569,11 @@ class DIEMService:
                 continue
             resolved_tokens = [_resolve_token(tok) for tok in raw_tokens]
             if debug:
-                try:
-                    _logger.debug("trade_routes resolved", extra={"raw": list(raw_tokens), "resolved": list(resolved_tokens)})
-                except Exception:
-                    _logger.debug("trade_routes resolved raw=%s resolved=%s", list(raw_tokens), list(resolved_tokens))
+                _logger.info(
+                    "DIEM trade_routes resolved raw=%s resolved=%s",
+                    list(raw_tokens),
+                    list(resolved_tokens),
+                )
             tokens_lower = [tok.lower() for tok in resolved_tokens]
             adjusted_plan = plan
             if tokens_lower != [tok.lower() for tok in raw_tokens]:
@@ -589,10 +593,10 @@ class DIEMService:
         if not selected:
             raise EnvironmentError("Configured trade paths do not start with DIEM token")
         if debug:
-            try:
-                _logger.debug("trade_routes selected", extra={"routes": [list(plan.tokens) for plan in selected]})
-            except Exception:
-                _logger.debug("trade_routes selected=%s", [list(plan.tokens) for plan in selected])
+            _logger.info(
+                "DIEM trade_routes selected=%s",
+                [list(plan.tokens) for plan in selected],
+            )
         return selected
 
     def _path_from_env(self) -> List[str]:

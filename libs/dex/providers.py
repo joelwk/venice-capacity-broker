@@ -630,19 +630,28 @@ class DexAggregator:
                 except TimeoutError:
                     future.cancel()
                     if _debug_routes_enabled():
-                        try:
-                            _logger.warning("dex aggregator timeout", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount)})
-                        except Exception:
-                            _logger.warning("dex aggregator timeout provider=%s method=%s route=%s", provider.name, method, list(route_plan.tokens))
+                        route_tokens = list(route_plan.tokens)
+                        _logger.warning(
+                            "dex aggregator timeout provider=%s method=%s route=%s amount=%s",
+                            provider.name,
+                            method,
+                            route_tokens,
+                            int(amount),
+                        )
                     _metrics_inc("dex_agg_timeouts_total", labels={"provider": provider.name, "method": method})
                     self._circ_on_failure(provider.name, reason="timeout")
                     continue
                 except Exception as exc:
                     if _debug_routes_enabled():
-                        try:
-                            _logger.warning("dex aggregator error", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount), "error": str(exc)})
-                        except Exception:
-                            _logger.warning("dex aggregator error provider=%s method=%s route=%s err=%s", provider.name, method, list(route_plan.tokens), exc)
+                        route_tokens = list(route_plan.tokens)
+                        _logger.warning(
+                            "dex aggregator error provider=%s method=%s route=%s amount=%s error=%s",
+                            provider.name,
+                            method,
+                            route_tokens,
+                            int(amount),
+                            exc,
+                        )
                     _metrics_inc("dex_agg_provider_errors_total", labels={"provider": provider.name, "method": method})
                     self._circ_on_failure(provider.name)
                     continue
@@ -651,10 +660,8 @@ class DexAggregator:
                         object.__setattr__(quote, "route", route_plan)
                     quotes.append(quote)
                 elif _debug_routes_enabled():
-                    try:
-                        _logger.debug("dex aggregator empty quote", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount)})
-                    except Exception:
-                        _logger.debug("dex aggregator empty quote provider=%s method=%s route=%s", provider.name, method, list(route_plan.tokens))
+                    route_tokens = list(route_plan.tokens)
+                    _logger.info("dex aggregator empty quote provider=%s method=%s route=%s amount=%s", provider.name, method, route_tokens, int(amount))
         return quotes
 
     def quote_all(self, amount_in: int, route: RouteLike) -> List[Quote]:
@@ -671,10 +678,8 @@ class DexAggregator:
         quotes = self.quote_all(amount_in, route)
         if not quotes:
             if _debug_routes_enabled():
-                try:
-                    _logger.warning("dex aggregator no quotes", extra={"route": list(as_route_plan(route).tokens), "amount_in": int(amount_in), "mode": "exact_in"})
-                except Exception:
-                    _logger.warning("dex aggregator no quotes route=%s amount_in=%s", list(as_route_plan(route).tokens), amount_in)
+                tokens = list(as_route_plan(route).tokens)
+                _logger.warning("dex aggregator no quotes route=%s amount_in=%s mode=exact_in", tokens, int(amount_in))
             _metrics_inc("dex_agg_no_quotes_total")
             return None
         best = max(quotes, key=lambda q: q.amount_out)
@@ -717,10 +722,8 @@ class DexAggregator:
         quotes = self.quote_all_exact_out(amount_out, route)
         if not quotes:
             if _debug_routes_enabled():
-                try:
-                    _logger.warning("dex aggregator no quotes", extra={"route": list(as_route_plan(route).tokens), "amount_out": int(amount_out), "mode": "exact_out"})
-                except Exception:
-                    _logger.warning("dex aggregator no quotes exact_out route=%s amount_out=%s", list(as_route_plan(route).tokens), amount_out)
+                tokens = list(as_route_plan(route).tokens)
+                _logger.warning("dex aggregator no quotes route=%s amount_out=%s mode=exact_out", tokens, int(amount_out))
             _metrics_inc("dex_agg_no_quotes_total", labels={"mode": "exact_out"})
             return None
         best = min(quotes, key=lambda q: q.amount_in)

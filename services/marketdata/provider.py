@@ -285,24 +285,18 @@ class MarketDataProvider:
         if not self._valid_price(price):
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "external_replace", "reason": "invalid_internal"})
             evt = _store_event("invalid_internal", None, None)
-            _logger.warning("price sanity: replacing invalid internal price", extra={"sanity": evt})
+            _logger.warning("price sanity: replacing invalid internal price symbol=%s internal=%s external=%s", label, price, ext_price)
             if _debug_sanity_enabled():
-                try:
-                    _logger.debug("price sanity debug replace invalid", extra={"symbol": label, "internal": float(price) if price is not None else None, "external": float(ext_price)})
-                except Exception:
-                    _logger.debug("price sanity replace invalid symbol=%s internal=%s external=%s", label, price, ext_price)
+                _logger.info("price sanity debug replace invalid symbol=%s event=%s", label, evt)
             return float(ext_price)
         threshold = self._price_sanity_threshold()
         diff = abs(float(price) - float(ext_price)) / float(ext_price)
         if diff > threshold:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
             evt = _store_event("drift", diff, threshold)
-            _logger.warning("price sanity: clamp applied", extra={"sanity": evt})
+            _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
             if _debug_sanity_enabled():
-                try:
-                    _logger.debug("price sanity debug clamp", extra={"symbol": label, "internal": float(price), "external": float(ext_price), "diff": float(diff), "threshold": float(threshold)})
-                except Exception:
-                    _logger.debug("price sanity clamp symbol=%s internal=%s external=%s diff=%s threshold=%s", label, price, ext_price, diff, threshold)
+                _logger.info("price sanity debug clamp symbol=%s event=%s", label, evt)
             return float(ext_price)
         return float(price)
 
