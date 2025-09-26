@@ -58,14 +58,18 @@ def test_dex_aggregator_no_quotes_logs_route(monkeypatch):
     monkeypatch.setattr(providers_mod, "_logger", CaptureLogger())
 
     agg = DexAggregator([])
+    diem_path = [
+        "0xf4d97f2da56e8c3098f3a8d538db630a2606a024",
+        "0x4200000000000000000000000000000000000006",
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    ]
     with pytest.raises(RuntimeError):
-        agg.trade_best(123, 100, make_route([
-            "0xf4d97f2da56e8c3098f3a8d538db630a2606a024",
-            "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-        ]))
+        agg.trade_best(123, 100, make_route(diem_path))
 
     combined = " ".join(records)
     assert "dex aggregator no quotes route" in combined
+    for token in diem_path:
+        assert token in combined
     assert "amount_in=123" in combined
 
 
