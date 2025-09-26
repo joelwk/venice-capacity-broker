@@ -40,6 +40,15 @@ except Exception:  # noqa: BLE001
 Address = str
 
 
+
+
+def _debug_routes_enabled() -> bool:
+    flag = os.getenv("DIEM_DEBUG_ROUTES")
+    if flag is None:
+        return False
+    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _bucket_latency(operation: str, provider: str, latency_seconds: float) -> None:
     """Helper to record latency metrics by bucket."""
     try:
@@ -620,10 +629,20 @@ class DexAggregator:
                     quote = future.result(timeout=timeout)
                 except TimeoutError:
                     future.cancel()
+                    if _debug_routes_enabled():
+                        try:
+                            _logger.warning("dex aggregator timeout", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount)})
+                        except Exception:
+                            _logger.warning("dex aggregator timeout provider=%s method=%s route=%s", provider.name, method, list(route_plan.tokens))
                     _metrics_inc("dex_agg_timeouts_total", labels={"provider": provider.name, "method": method})
                     self._circ_on_failure(provider.name, reason="timeout")
                     continue
-                except Exception:
+                except Exception as exc:
+                    if _debug_routes_enabled():
+                        try:
+                            _logger.warning("dex aggregator error", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount), "error": str(exc)})
+                        except Exception:
+                            _logger.warning("dex aggregator error provider=%s method=%s route=%s err=%s", provider.name, method, list(route_plan.tokens), exc)
                     _metrics_inc("dex_agg_provider_errors_total", labels={"provider": provider.name, "method": method})
                     self._circ_on_failure(provider.name)
                     continue
@@ -631,6 +650,11 @@ class DexAggregator:
                     if quote.route is None:
                         object.__setattr__(quote, "route", route_plan)
                     quotes.append(quote)
+                elif _debug_routes_enabled():
+                    try:
+                        _logger.debug("dex aggregator empty quote", extra={"provider": provider.name, "method": method, "route": list(route_plan.tokens), "amount": int(amount)})
+                    except Exception:
+                        _logger.debug("dex aggregator empty quote provider=%s method=%s route=%s", provider.name, method, list(route_plan.tokens))
         return quotes
 
     def quote_all(self, amount_in: int, route: RouteLike) -> List[Quote]:
@@ -646,6 +670,11 @@ class DexAggregator:
     def best_quote(self, amount_in: int, route: RouteLike) -> Optional[Quote]:
         quotes = self.quote_all(amount_in, route)
         if not quotes:
+            if _debug_routes_enabled():
+                try:
+                    _logger.warning("dex aggregator no quotes", extra={"route": list(as_route_plan(route).tokens), "amount_in": int(amount_in), "mode": "exact_in"})
+                except Exception:
+                    _logger.warning("dex aggregator no quotes route=%s amount_in=%s", list(as_route_plan(route).tokens), amount_in)
             _metrics_inc("dex_agg_no_quotes_total")
             return None
         best = max(quotes, key=lambda q: q.amount_out)
@@ -687,6 +716,11 @@ class DexAggregator:
     def best_quote_exact_out(self, amount_out: int, route: RouteLike) -> Optional[Quote]:
         quotes = self.quote_all_exact_out(amount_out, route)
         if not quotes:
+            if _debug_routes_enabled():
+                try:
+                    _logger.warning("dex aggregator no quotes", extra={"route": list(as_route_plan(route).tokens), "amount_out": int(amount_out), "mode": "exact_out"})
+                except Exception:
+                    _logger.warning("dex aggregator no quotes exact_out route=%s amount_out=%s", list(as_route_plan(route).tokens), amount_out)
             _metrics_inc("dex_agg_no_quotes_total", labels={"mode": "exact_out"})
             return None
         best = min(quotes, key=lambda q: q.amount_in)

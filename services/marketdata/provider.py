@@ -39,6 +39,15 @@ except Exception:  # pragma: no cover - logging optional
     _logger = _NullLogger()
 
 
+def _debug_sanity_enabled() -> bool:
+    flag = os.getenv("MARKETDATA_DEBUG_SANITY")
+    if flag is None:
+        flag = os.getenv("DIEM_DEBUG_ROUTES")
+    if flag is None:
+        return False
+    return str(flag).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _latency_bucket(seconds: float) -> str:
     try:
         s = float(seconds)
@@ -277,6 +286,11 @@ class MarketDataProvider:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "external_replace", "reason": "invalid_internal"})
             evt = _store_event("invalid_internal", None, None)
             _logger.warning("price sanity: replacing invalid internal price", extra={"sanity": evt})
+            if _debug_sanity_enabled():
+                try:
+                    _logger.debug("price sanity debug replace invalid", extra={"symbol": label, "internal": float(price) if price is not None else None, "external": float(ext_price)})
+                except Exception:
+                    _logger.debug("price sanity replace invalid symbol=%s internal=%s external=%s", label, price, ext_price)
             return float(ext_price)
         threshold = self._price_sanity_threshold()
         diff = abs(float(price) - float(ext_price)) / float(ext_price)
@@ -284,6 +298,11 @@ class MarketDataProvider:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
             evt = _store_event("drift", diff, threshold)
             _logger.warning("price sanity: clamp applied", extra={"sanity": evt})
+            if _debug_sanity_enabled():
+                try:
+                    _logger.debug("price sanity debug clamp", extra={"symbol": label, "internal": float(price), "external": float(ext_price), "diff": float(diff), "threshold": float(threshold)})
+                except Exception:
+                    _logger.debug("price sanity clamp symbol=%s internal=%s external=%s diff=%s threshold=%s", label, price, ext_price, diff, threshold)
             return float(ext_price)
         return float(price)
 
