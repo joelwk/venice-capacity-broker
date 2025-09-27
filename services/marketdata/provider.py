@@ -89,12 +89,17 @@ class MarketDataProvider:
     _price_cache_lock = Lock()
     _warm_thread_lock = Lock()
     _warm_thread_started: bool = False
+    _warm_thread_logged: bool = False
     _warm_symbols: Tuple[str, ...] = ()
     _warm_interval_seconds: float = 0.0
     _last_prices_latency: float = 0.0
     _last_prices_latency_ts: float = 0.0
     _external_price_cache: Dict[str, Tuple[float, float]] = {}
     _external_price_lock: Lock = Lock()
+    _price_source_lock: Lock = Lock()
+    _last_price_sources: Dict[str, Dict[str, Any]] = {}
+    _price_clamp_lock: Lock = Lock()
+    _price_clamp_events: Dict[str, Dict[str, Any]] = {}
 
 
     def _price_cache_key(self, symbol: str) -> str:
@@ -288,6 +293,8 @@ class MarketDataProvider:
             _logger.warning("price sanity: replacing invalid internal price symbol=%s internal=%s external=%s", label, price, ext_price)
             if _debug_sanity_enabled():
                 _logger.info("price sanity debug replace invalid symbol=%s event=%s", label, evt)
+            type(self)._record_price_clamp(label, "invalid_internal")
+            type(self)._record_price_source(label, "external_invalid", {"valid": True})
             return float(ext_price)
         threshold = self._price_sanity_threshold()
         diff = abs(float(price) - float(ext_price)) / float(ext_price)
@@ -297,6 +304,8 @@ class MarketDataProvider:
             _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
             if _debug_sanity_enabled():
                 _logger.info("price sanity debug clamp symbol=%s event=%s", label, evt)
+            type(self)._record_price_clamp(label, "drift")
+            type(self)._record_price_source(label, "external_clamp", {"valid": True})
             return float(ext_price)
         return float(price)
 
@@ -318,6 +327,25 @@ class MarketDataProvider:
                 self._warm_route_liquidity(route.tokens)
             except Exception:
                 _logger.debug("trade path warm attempt failed", exc_info=True)
+            try:
+                report = self.discover_trade_path(list(adjusted_plan.tokens))
+            except Exception:
+                _logger.debug("trade path verification failed", extra={"path": list(adjusted_plan.tokens)}, exc_info=True)
+            else:
+                if isinstance(report, dict):
+                    hops = report.get("hops") or []
+                    pairs = []
+                    for hop in hops:
+                        uv2 = (hop or {}).get("uniswap_v2") or {}
+                        pair_addr = uv2.get("pair")
+                        if pair_addr:
+                            pairs.append(str(pair_addr))
+                    if pairs:
+                        _logger.info("trade path verified", extra={"path": list(adjusted_plan.tokens), "pairs": pairs})
+                    else:
+                        _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens)})
+                else:
+                    _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens)})
 
     def _check_wbtc_configuration(self) -> None:
         try:
@@ -414,6 +442,76 @@ class MarketDataProvider:
         except Exception:
             return
 
+
+    @classmethod
+    def _record_price_source(cls, symbol: str, source: str, detail: Optional[Dict[str, Any]] = None) -> None:
+        sym = str(symbol or "").strip()
+        if not sym:
+            return
+        key = sym.upper()
+        payload: Dict[str, Any] = {"source": str(source or "").strip(), "ts": time.time()}
+        if detail:
+            for k, v in detail.items():
+                if v is not None:
+                    payload[k] = v
+        with cls._price_source_lock:
+            cls._last_price_sources[key] = payload
+
+    @classmethod
+    def _record_price_clamp(cls, symbol: str, reason: str) -> None:
+        sym = str(symbol or "").strip()
+        if not sym:
+            return
+        key = sym.upper()
+        with cls._price_clamp_lock:
+            cls._price_clamp_events[key] = {"ts": time.time(), "reason": str(reason or "")}
+
+    def price_health(self, symbol: str, max_age: float = 120.0) -> Dict[str, Any]:
+        sym = str(symbol or "").strip()
+        key = sym.upper()
+        now = time.time()
+        with type(self)._price_source_lock:
+            source_info = dict(type(self)._last_price_sources.get(key) or {})
+        with type(self)._price_clamp_lock:
+            clamp_info = dict(type(self)._price_clamp_events.get(key) or {})
+        ts = source_info.get("ts")
+        age = None
+        if isinstance(ts, (int, float)):
+            age = max(0.0, now - float(ts))
+        source_label = source_info.get("source")
+        if not isinstance(source_label, str) or not source_label.strip():
+            source_label = "unknown"
+        else:
+            source_label = source_label.strip()
+        valid = source_info.get("valid")
+        stale = age is not None and age > max_age
+        clamp_ts = clamp_info.get("ts")
+        clamp_age = None
+        clamped = False
+        if isinstance(clamp_ts, (int, float)):
+            clamp_age = max(0.0, now - float(clamp_ts))
+            clamped = clamp_age <= max_age
+        clamp_reason = clamp_info.get("reason")
+        valid_flag: bool
+        if isinstance(valid, bool):
+            valid_flag = valid
+        elif valid is not None:
+            try:
+                valid_flag = bool(valid)
+            except Exception:
+                valid_flag = False
+        else:
+            valid_flag = False
+        return {
+            "symbol": key or sym,
+            "source": source_label,
+            "age": age,
+            "stale": stale,
+            "valid": valid_flag,
+            "clamped": clamped,
+            "clamp_reason": clamp_reason,
+            "clamp_age": clamp_age,
+        }
     def _mark_last_latency(self, latency: float) -> None:
         cls = type(self)
         try:
@@ -462,10 +560,12 @@ class MarketDataProvider:
                     _logger.warning("marketdata warm loop failed", exc_info=True)
             thread = Thread(target=_runner, name="marketdata-warm-cache", daemon=True)
             thread.start()
-            try:
-                _logger.info("marketdata warm cache thread started", extra={"symbols": list(symbols), "interval": interval})
-            except Exception:
-                pass
+            if not cls._warm_thread_logged:
+                try:
+                    _logger.info("marketdata warm cache thread started", extra={"symbols": list(symbols), "interval": interval})
+                except Exception:
+                    pass
+                cls._warm_thread_logged = True
 
     def _warm_loop(self) -> None:
         cls = type(self)
@@ -1121,18 +1221,19 @@ class MarketDataProvider:
         return None
 
     def diem_price_with_fallback(self) -> Optional[float]:
-        """Return DIEM price quoted in the configured QUOTE asset.
+        """Return DIEM price quoted in the configured QUOTE asset."""
+        symbol = "DIEM"
+        source = "missing"
+        selected: Optional[float] = None
 
-        Supports multi-venue paths by multiplying hop prices when routers do not
-        share liquidity (e.g., Aerodrome for DIEM/VVV followed by Uniswap for
-        VVV/WETH→USDC).
-        """
         try:
             diem = (self._address_for_symbol("DIEM") or "").strip()
             quote = self._quote_token_address().strip()
         except Exception:
+            type(self)._record_price_source(symbol, source, {"valid": False, "reason": "lookup_failed"})
             return None
         if not diem or not quote:
+            type(self)._record_price_source(symbol, source, {"valid": False, "reason": "missing_env"})
             return None
 
         routes = self._collect_trade_paths()
@@ -1145,7 +1246,7 @@ class MarketDataProvider:
 
         seen: set[tuple[str, ...]] = set()
         for route in routes:
-            tokens = [t.strip() for t in route.tokens if t.strip()]
+            tokens = [t.strip() for t in route.tokens if t and t.strip()]
             if not tokens or tokens[0].lower() != diem.lower():
                 continue
             key = tuple(t.lower() for t in tokens)
@@ -1153,26 +1254,50 @@ class MarketDataProvider:
                 continue
             seen.add(key)
 
-            price = self._try_path_direct(route)
-            if price is None:
-                price = self._price_via_segments(route)
-            if not self._valid_price(price):
+            total: Optional[float] = None
+            local_source = None
+            direct_price = self._try_path_direct(route)
+            if self._valid_price(direct_price):
+                local_source = "aggregator_direct"
+                total = float(direct_price)
+            else:
+                seg_price = self._price_via_segments(route)
+                if self._valid_price(seg_price):
+                    local_source = "aggregator_segments"
+                    total = float(seg_price)
+            if total is None:
                 continue
 
-            total = float(price)
             final_token = tokens[-1]
             if final_token.lower() != quote.lower():
                 tail = self._hop_price(final_token, quote)
                 if not self._valid_price(tail):
                     continue
                 total *= float(tail)
-            if self._valid_price(total):
-                return total
+                if local_source:
+                    local_source = f"{local_source}_tail"
+                else:
+                    local_source = "aggregator_tail"
 
-        direct = self._hop_price(diem, quote)
-        if self._valid_price(direct):
-            return float(direct)
+            if not self._valid_price(total):
+                continue
+            selected = float(total)
+            source = local_source or "aggregator"
+            break
+
+        if not self._valid_price(selected):
+            direct = self._hop_price(diem, quote)
+            if self._valid_price(direct):
+                selected = float(direct)
+                source = "hop"
+
+        if self._valid_price(selected):
+            type(self)._record_price_source(symbol, source, {"valid": True})
+            return float(selected)
+
+        type(self)._record_price_source(symbol, "missing", {"valid": False})
         return None
+
 
     def prices(self, symbols: List[str]) -> Dict[str, float]:
         """Return prices for requested symbols with caching and telemetry."""
@@ -1295,8 +1420,11 @@ class MarketDataProvider:
                 self._stat_increment("dex_calls")
                 bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
+                price_valid = self._valid_price(price)
+                type(self)._record_price_source("DIEM", "route_direct", {"valid": price_valid})
                 return self._apply_price_sanity("DIEM", price)
             except Exception:
+                type(self)._record_price_source("DIEM", "missing", {"valid": False, "reason": "route_error"})
                 return self._apply_price_sanity("DIEM", 0.0)
         if su == "VVV":
             try:

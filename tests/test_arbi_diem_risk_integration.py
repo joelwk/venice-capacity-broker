@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from importlib import import_module
 
+from libs.dex.routes import make_route
+
 
 def test_arbi_diem_risk_limits_mint_size(monkeypatch):
     # Arrange fake DIEM actions to capture units
@@ -28,11 +30,41 @@ def test_arbi_diem_risk_limits_mint_size(monkeypatch):
     risk_mod = import_module("services.risk.policy")
     arbi_mod = import_module("agents.arbi_diem.agent")
     pricing_mod = import_module("libs.pricing.diem")
+    qmod = import_module("libs.dex.providers")
 
     # Make fair/day = 1.0 so a price >1.05 triggers mint
     monkeypatch.setattr(pricing_mod, "fair_value_per_diem", lambda alpha: 365.0, raising=True)
 
-    svc = svc_mod.DIEMService(aggregator=None)  # aggregator unused in this path
+    class FakeAgg:
+        def best_quote(self, amount_in, route):  # noqa: ANN001
+            return qmod.Quote(
+                provider="stub",
+                amount_in=int(amount_in),
+                amount_out=int(amount_in * 2),
+                route=route,
+            )
+
+        def trade_best(self, amount_in, slippage_bps, route):  # noqa: ANN001
+            calls.append(("trade", int(amount_in)))
+            return {"provider": "stub", "tx_hash": "0xtrade"}
+
+    route_tokens = [
+        "0xf4d97f2da56e8c3098f3a8d538db630a2606a024",
+        "0x4200000000000000000000000000000000000006",
+        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    ]
+    route_plan = make_route(route_tokens)
+
+    def fake_trade_routes(self):  # noqa: ANN001
+        return [route_plan]
+
+    def fake_path_from_env(self):  # noqa: ANN001
+        return list(route_plan.tokens)
+
+    monkeypatch.setattr(svc_mod.DIEMService, "trade_routes", fake_trade_routes, raising=True)
+    monkeypatch.setattr(svc_mod.DIEMService, "_path_from_env", fake_path_from_env, raising=True)
+
+    svc = svc_mod.DIEMService(aggregator=FakeAgg())
 
     # Configure policy to limit to 50 USD per trade and set decimals=18
     os.environ["RISK_MAX_DIEM_TRADE_USD"] = "50"

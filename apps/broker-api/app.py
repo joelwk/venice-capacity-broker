@@ -2150,6 +2150,10 @@ try:
                 discountBps: int | None = None
                 discount: Dict[str, Any] | None = None
                 unitPriceBeforeDiscount: int | None = None
+                priceHealth: Dict[str, Any] | None = None
+                priceGuard: Dict[str, Any] | None = None
+
+            QuoteResponse.model_rebuild()
 
             @app.get("/v1/quotes", response_model=QuoteResponse)
             def get_quote(

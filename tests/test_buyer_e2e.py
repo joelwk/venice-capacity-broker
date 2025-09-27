@@ -77,6 +77,8 @@ def test_buyer_lifecycle_quote_verify_subkey(monkeypatch, tmp_path):
     data = q.json()
     tx_payload["value"] = hex(int(data["totalPrice"]))
     assert int(data["units"]) == 5 and data["asset"] == "ETH"
+    assert data.get("priceHealth") is None
+    assert data.get("priceGuard") is None
     # Verify purchase with a fake tx hash
     v = client.post(
         "/v1/purchases/verify",
@@ -143,6 +145,8 @@ def test_purchase_fractional_units_limit(monkeypatch, tmp_path):
     assert quote.status_code == 200, quote.text
     data = quote.json()
     tx_payload["value"] = hex(int(data["totalPrice"]))
+    assert data.get("priceHealth") is None
+    assert data.get("priceGuard") is None
 
     resp = client.post(
         "/v1/purchases/verify",
@@ -189,6 +193,16 @@ def test_budget_quote_path(monkeypatch, tmp_path):
     assert payload.get("discountBps") == 500
     eth_amount = payload["totalPrice"] / 1e18
     assert pytest.approx(eth_amount, rel=1e-6) == 0.002375
+    price_health = payload.get("priceHealth")
+    if price_health is not None:
+        assert isinstance(price_health, dict)
+        assert price_health.get("symbol") == "DIEM"
+        assert isinstance(price_health.get("valid"), bool)
+    price_guard = payload.get("priceGuard")
+    if price_health is None:
+        assert price_guard is None
+    else:
+        assert price_guard is None or price_guard.get("reason") == "price_guard"
 
     too_small = client.get("/v1/quotes", params={"budget": 0.1, "asset": "ETH"})
     assert too_small.status_code == 400
@@ -236,6 +250,8 @@ def test_purchase_verify_rejects_wrong_sender(monkeypatch, tmp_path):
     assert quote.status_code == 200, quote.text
     data = quote.json()
     tx_payload["value"] = hex(int(data["totalPrice"]))
+    assert data.get("priceHealth") is None
+    assert data.get("priceGuard") is None
 
     resp = client.post(
         "/v1/purchases/verify",
@@ -298,6 +314,8 @@ def test_purchase_verify_reuses_existing_key(monkeypatch, tmp_path):
     assert quote.status_code == 200, quote.text
     data = quote.json()
     tx_payload["value"] = hex(int(data["totalPrice"]))
+    assert data.get("priceHealth") is None
+    assert data.get("priceGuard") is None
 
     first = client.post(
         "/v1/purchases/verify",

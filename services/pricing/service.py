@@ -213,6 +213,8 @@ class PricingService:
         prefetched_prices: Dict[str, float] = {}
         mdp_stats: Dict[str, Any] = {}
         discount_meta: Dict[str, Any] = {}
+        price_health: Dict[str, Any] | None = None
+        price_guard: Dict[str, Any] | None = None
         try:
             if isinstance(self.engine, MarketPricingEngine):
                 try:
@@ -225,6 +227,24 @@ class PricingService:
                     mdp_stats = mdp.last_prices_stats()
                     if hasattr(self.engine, "set_prefetched_prices"):
                         self.engine.set_prefetched_prices(mdp, prefetched_prices)
+                    price_health_candidate = None
+                    if hasattr(mdp, "price_health"):
+                        try:
+                            price_health_candidate = mdp.price_health("DIEM", max_age=180.0)
+                        except Exception:
+                            price_health_candidate = None
+                    if isinstance(price_health_candidate, dict) and price_health_candidate:
+                        price_health = dict(price_health_candidate)
+                        source_label = str(price_health.get("source") or "")
+                        clamped = bool(price_health.get("clamped"))
+                        valid_flag = price_health.get("valid")
+                        source_ok = source_label.startswith("aggregator")
+                        if clamped or valid_flag is False or not source_ok:
+                            price_guard = {
+                                "status": "unhealthy",
+                                "reason": "price_guard",
+                                "details": dict(price_health),
+                            }
                 except Exception:
                     prefetched_prices = {}
                     mdp_stats = {}
@@ -283,7 +303,7 @@ class PricingService:
                 )
                 s.add(q)
                 s.commit()
-            return {
+            response: Dict[str, object] = {
                 "quoteId": draft.quote_id,
                 "units": float(draft.units),
                 "asset": draft.asset,
@@ -296,6 +316,11 @@ class PricingService:
                 "discount": discount_meta,
                 "unitPriceBeforeDiscount": unit_price_markup,
             }
+            if price_health is not None:
+                response["priceHealth"] = price_health
+            if price_guard is not None:
+                response["priceGuard"] = price_guard
+            return response
         except Exception:
             outcome = "error"
             raise

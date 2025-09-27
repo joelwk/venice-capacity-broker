@@ -396,6 +396,9 @@ class SingleLoopOrchestrator:
         effective_mint_rate = float(mint_rate)
         mint_rate_source = "param"
         prices: Dict[str, float] = {}
+        price_health: Optional[Dict[str, Any]] = None
+        skip_due_to_price = False
+        price_guard_why: Optional[Dict[str, Any]] = None
 
         if dry_run:
             try:
@@ -423,6 +426,21 @@ class SingleLoopOrchestrator:
         else:
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
+            health_callable = getattr(self.market, "price_health", None)
+            if callable(health_callable):
+                try:
+                    price_health = health_callable("DIEM", max_age=120.0)
+                except Exception:
+                    price_health = None
+            if isinstance(price_health, dict):
+                source = str(price_health.get("source") or "")
+                clamped = bool(price_health.get("clamped"))
+                valid_flag = price_health.get("valid")
+                source_ok = source.startswith("aggregator")
+                if clamped or (valid_flag is False) or not source_ok:
+                    skip_due_to_price = True
+                    price_guard_why = {"decision": "hold", "reason": "price_guard", "details": dict(price_health)}
+                    logger.warning("Skipping ArbiDiem due to DIEM price health", extra={"price_health": price_health})
             try:
                 sig = self.market.unified_signals(ttl_s=30)
                 if isinstance(sig, dict):
@@ -525,6 +543,7 @@ class SingleLoopOrchestrator:
         executed_decision = False
         quorum_info: Optional[Dict[str, Any]] = None
         execution_summary: Dict[str, Any] = {"status": "skipped", "executed": False}
+        price_guard_triggered = False
 
         if skip_agents:
             if paused:
@@ -532,59 +551,68 @@ class SingleLoopOrchestrator:
             elif reflex_blocked:
                 execution_summary = {"status": "reflex_halt", "executed": False}
         else:
-            try:
-                sim_result = self._invoke_arbi(
-                    px,
-                    mint_rate=effective_mint_rate,
-                    current_inventory_usd=None if dry_run else current_inventory_usd,
-                    utilization_ratio=utilization_ratio,
-                    vol_bps=vol_bps,
-                    corr_id=correlation_id,
-                    simulate=True,
-                )
-            except Exception:
-                sim_result = px > 0
-            signal_decision = bool(sim_result)
+            if skip_due_to_price:
+                execution_summary = {"status": "price_guard", "executed": False}
+                signal_decision = False
+                executed_decision = False
+                price_guard_triggered = True
+            else:
+                try:
+                    sim_result = self._invoke_arbi(
+                        px,
+                        mint_rate=effective_mint_rate,
+                        current_inventory_usd=None if dry_run else current_inventory_usd,
+                        utilization_ratio=utilization_ratio,
+                        vol_bps=vol_bps,
+                        corr_id=correlation_id,
+                        simulate=True,
+                    )
+                except Exception:
+                    sim_result = px > 0
+                signal_decision = bool(sim_result)
 
-            if signal_decision and live_mode:
-                quorum_allowed = True
-                if self.quorum is not None:
-                    try:
-                        quorum_allowed = bool(self.quorum.decide())
-                        quorum_info = {"status": "approved" if quorum_allowed else "blocked"}
-                    except Exception as exc:  # noqa: BLE001
-                        quorum_allowed = False
-                        quorum_info = {"status": "error", "error": str(exc)}
-                if quorum_allowed:
-                    try:
-                        live_result = self._invoke_arbi(
-                            px,
-                            mint_rate=effective_mint_rate,
-                            current_inventory_usd=current_inventory_usd,
-                            utilization_ratio=utilization_ratio,
-                            vol_bps=vol_bps,
-                            corr_id=correlation_id,
-                            simulate=False,
-                        )
-                        executed_decision = bool(live_result)
-                        execution_summary = {
-                            "status": "executed" if executed_decision else "no_action",
-                            "executed": executed_decision,
-                        }
-                    except Exception as exc:  # noqa: BLE001
-                        execution_summary = {"status": "error", "error": str(exc), "executed": False}
+                if signal_decision and live_mode:
+                    quorum_allowed = True
+                    if self.quorum is not None:
+                        try:
+                            quorum_allowed = bool(self.quorum.decide())
+                            quorum_info = {"status": "approved" if quorum_allowed else "blocked"}
+                        except Exception as exc:  # noqa: BLE001
+                            quorum_allowed = False
+                            quorum_info = {"status": "error", "error": str(exc)}
+                    if quorum_allowed:
+                        try:
+                            live_result = self._invoke_arbi(
+                                px,
+                                mint_rate=effective_mint_rate,
+                                current_inventory_usd=current_inventory_usd,
+                                utilization_ratio=utilization_ratio,
+                                vol_bps=vol_bps,
+                                corr_id=correlation_id,
+                                simulate=False,
+                            )
+                            executed_decision = bool(live_result)
+                            execution_summary = {
+                                "status": "executed" if executed_decision else "no_action",
+                                "executed": executed_decision,
+                            }
+                        except Exception as exc:  # noqa: BLE001
+                            execution_summary = {"status": "error", "error": str(exc), "executed": False}
+                            executed_decision = False
+                            signal_decision = False
+                    else:
+                        execution_summary = {"status": quorum_info.get("status", "blocked"), "executed": False}
                         executed_decision = False
-                        signal_decision = False
-                else:
-                    execution_summary = {"status": quorum_info.get("status", "blocked"), "executed": False}
-                    executed_decision = False
-            elif signal_decision:
-                execution_summary = {"status": "dry_run", "executed": False}
+                elif signal_decision:
+                    execution_summary = {"status": "dry_run", "executed": False}
 
         if reflex_blocked:
             last_why = {"decision": "hold", "reason": "reflex_guard", "details": reflex_info}
         else:
-            last_why = getattr(self.arbi, "_last_rationale", None)
+            if price_guard_triggered and price_guard_why is not None:
+                last_why = price_guard_why
+            else:
+                last_why = getattr(self.arbi, "_last_rationale", None)
         action_label = None
         try:
             if isinstance(last_why, dict):
@@ -620,6 +648,13 @@ class SingleLoopOrchestrator:
             "execution": execution_summary,
             "signalDecision": bool(signal_decision),
         }
+        if price_health is not None:
+            arbi_record["priceHealth"] = price_health
+        if price_guard_triggered:
+            guard_info = {"status": "skipped", "reason": "price_guard"}
+            if isinstance(price_guard_why, dict) and isinstance(price_guard_why.get("details"), dict):
+                guard_info["details"] = price_guard_why["details"]
+            arbi_record["priceGuard"] = guard_info
         if quorum_info is not None:
             arbi_record["quorum"] = quorum_info
         if reflex_info is not None:

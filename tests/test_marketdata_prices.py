@@ -57,3 +57,20 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     assert math.isclose(prices["VVV"], 2.63, rel_tol=1e-6)
     assert math.isclose(prices["ETH"], 3200.0, rel_tol=1e-6)
     assert prices["USDC"] == 1.0
+
+def test_price_health_tracks_clamp(monkeypatch):
+    from services.marketdata.provider import MarketDataProvider
+
+    provider = MarketDataProvider()
+    type(provider)._last_price_sources.clear()
+    type(provider)._price_clamp_events.clear()
+
+    monkeypatch.setattr(provider, "_external_price", lambda symbol: 1.0, raising=False)
+
+    provider._apply_price_sanity("DIEM", 200.0)
+
+    health = provider.price_health("DIEM", max_age=999)
+    assert health["clamped"] is True
+    assert str(health.get("source") or "").startswith("external")
+    assert health.get("clamp_reason") == "drift"
+

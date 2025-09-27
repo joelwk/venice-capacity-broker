@@ -163,7 +163,7 @@ class ArbiDiem:
             return "lt_1000bps"
         return "ge_1000bps"
 
-    def _adjust_for_liquidity(self, units_in: int, market_price: float) -> tuple[int, float | None]:
+    def _adjust_for_liquidity(self, units_in: int, market_price: float, *, preview_price: float | None = None) -> tuple[int, float | None]:
         """Conservatively reduce units until preview slippage is within cap.
 
         Returns (adjusted_units, last_slippage_bps or None if no preview).
@@ -171,7 +171,7 @@ class ArbiDiem:
         """
         if units_in <= 0 or market_price <= 0:
             return 0, None
-        exec_px = self._preview_exec_price(units_in)
+        exec_px = float(preview_price) if (preview_price is not None and preview_price > 0) else self._preview_exec_price(units_in)
         if exec_px <= 0:
             return units_in, None
         slip = self.risk.check_slippage(exec_px, market_price)
@@ -361,9 +361,23 @@ class ArbiDiem:
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})
                 setattr(self, "_last_rationale", rationale)
                 return False
-            # Liquidity-aware sizing using aggregator preview; falls back to plain gate
-            adjusted, last_bps = self._adjust_for_liquidity(suggested, market_price)
-            rationale["exec_price_preview"] = float(self._preview_exec_price(adjusted)) if adjusted > 0 else None
+            preview_px = self._preview_exec_price(suggested)
+            guard_liquidity = (self.diem.aggregator is not None) and not simulate
+            if guard_liquidity and preview_px <= 0:
+                logger.info("Mint and sell skipped: no liquidity preview available")
+                rationale.update({"decision": "hold", "reason": "no_liquidity_preview"})
+                setattr(self, "_last_rationale", rationale)
+                return False
+            adjusted, last_bps = self._adjust_for_liquidity(
+                suggested,
+                market_price,
+                preview_price=preview_px if preview_px > 0 else None,
+            )
+            final_preview = self._preview_exec_price(adjusted) if adjusted > 0 else preview_px
+            if final_preview and final_preview > 0:
+                rationale["exec_price_preview"] = float(final_preview)
+            else:
+                rationale["exec_price_preview"] = float(preview_px) if preview_px and preview_px > 0 else None
             if last_bps is not None:
                 rationale.update({
                     "slippage_bps": float(last_bps),
