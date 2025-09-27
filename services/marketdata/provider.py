@@ -319,12 +319,18 @@ class MarketDataProvider:
             return
         for route in routes:
             try:
-                if route.is_uniswap_v3():
-                    route.ensure_v3()
+                adjusted_plan = route if isinstance(route, RoutePlan) else as_route_plan(route)
             except Exception:
-                _logger.error("trade path missing fee tiers for Uniswap V3", extra={"path": route.tokens})
+                tokens = getattr(route, "tokens", route)
+                _logger.warning("trade path invalid", extra={"path": list(tokens) if isinstance(tokens, (list, tuple)) else tokens}, exc_info=True)
+                continue
             try:
-                self._warm_route_liquidity(route.tokens)
+                if adjusted_plan.is_uniswap_v3():
+                    adjusted_plan.ensure_v3()
+            except Exception:
+                _logger.error("trade path missing fee tiers for Uniswap V3", extra={"path": list(adjusted_plan.tokens)}, exc_info=True)
+            try:
+                self._warm_route_liquidity(adjusted_plan.tokens)
             except Exception:
                 _logger.debug("trade path warm attempt failed", exc_info=True)
             try:
