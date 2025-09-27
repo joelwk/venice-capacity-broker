@@ -70,7 +70,7 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 2. Copy `.env.example` to `.env` and populate the required secrets.
 
-   The Broker API, RiskPolicy, MarketDataProvider, and DIEM service read from this file on startup. Make sure the KV store values are set whenever you deploy the Broker API in a shared environment: `KV_URL` (Replit DB URL or Redis endpoint) and `KV_API_TOKEN` when using Replit DB. Without those values broker limits fall back to the ephemeral in-memory stub.
+   The Broker API, RiskPolicy, MarketDataProvider, and DIEM service read from this file on startup. Make sure the KV store values are set whenever you deploy the Broker API in a shared environment: `KV_URL` (Replit DB URL or Redis endpoint) and `KV_API_TOKEN` when using Replit DB. Without those values broker limits fall back to the ephemeral in-memory stub. If you have multiple RPC endpoints, list them in `BASE_RPC_URLS` (or the generic `RPC_URLS`) and the node selector will probe them in order until it finds one that responds.
 
 3. Apply database migrations once the environment variables are in place.
 

@@ -293,7 +293,12 @@ try:
     def _env_snapshot_public() -> dict:
         try:
             # Web3/RPC
-            rpc = (_os.getenv("RPC_URL") or _os.getenv("BASE_RPC_URL") or "").strip()
+            try:
+                rpc_candidates = rpc_url_candidates()
+                rpc = rpc_candidates[0]
+            except Exception:
+                rpc_candidates = []
+                rpc = ""
             chain_id = (_os.getenv("BASE_CHAIN_ID") or "").strip()
 
             # DEX providers and router addresses
@@ -352,7 +357,11 @@ try:
                 abi = {"erc20": False, "uniswap_v2_router": False, "aerodrome_router": False, "diem": False}
 
             return {
-                "web3": {"rpc_configured": bool(rpc), "chain_id_set": bool(chain_id)},
+                "web3": {
+                    "rpc_configured": bool(rpc),
+                    "chain_id_set": bool(chain_id),
+                    "rpc_candidates": rpc_candidates,
+                },
                 "dex": {
                     "providers": dex_providers,
                     "uniswap_v3": {
@@ -375,7 +384,7 @@ try:
             }
         except Exception:
             return {
-                "web3": {"rpc_configured": False, "chain_id_set": False},
+                "web3": {"rpc_configured": False, "chain_id_set": False, "rpc_candidates": []},
                 "dex": {"providers": []},
                 "pricing": {},
                 "abi": {},
@@ -2302,9 +2311,10 @@ try:
             def verify_purchase(req: PurchaseVerifyRequest) -> dict:
                 if not _has_sqlmodel_p:
                     raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
-                base_rpc = (_os.getenv("BASE_RPC_URL") or "").strip()
-                if not base_rpc:
-                    raise HTTPException(status_code=400, detail="BASE_RPC_URL not set")
+                try:
+                    base_rpc = resolve_rpc_url(validate=True)
+                except Exception as exc:  # noqa: BLE001
+                    raise HTTPException(status_code=400, detail=f"No reachable Base RPC endpoint: {exc}") from exc
                 treasury = (_os.getenv("TREASURY_ADDRESS") or "").strip()
                 if not treasury:
                     raise HTTPException(status_code=400, detail="TREASURY_ADDRESS not set")

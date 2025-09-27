@@ -21,14 +21,71 @@ def load_abi(name: str) -> List[Dict[str, Any]]:
     return json.loads(fp.read_text())
 
 
+def _split_urls(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    urls: list[str] = []
+    for candidate in raw.split(','):
+        url = candidate.strip()
+        if url:
+            urls.append(url)
+    return urls
+
+
+def rpc_url_candidates() -> list[str]:
+    """Return RPC endpoints in preference order."""
+
+    urls: list[str] = []
+    urls.extend(_split_urls(os.getenv("RPC_URLS")))
+    urls.extend(_split_urls(os.getenv("BASE_RPC_URLS")))
+    for key in ("RPC_URL", "BASE_RPC_URL"):
+        val = (os.getenv(key) or "").strip()
+        if val:
+            urls.append(val)
+    if not urls:
+        raise EnvironmentError("RPC_URL or BASE_RPC_URL (or *_URLS) is required for Web3 operations")
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in urls:
+        if url not in seen:
+            ordered.append(url)
+            seen.add(url)
+    return ordered
+
+
+def resolve_rpc_url(validate: bool = False) -> str:
+    """Return the first usable RPC URL, optionally validating connectivity."""
+
+    candidates = rpc_url_candidates()
+    if not validate:
+        return candidates[0]
+    errors: list[str] = []
+    from web3 import Web3  # type: ignore
+
+    for rpc in candidates:
+        provider = Web3.HTTPProvider(rpc)
+        w3 = Web3(provider)
+        try:
+            if not w3.is_connected():
+                raise ConnectionError("not reachable")
+            # Access a cheap RPC to ensure the node responds correctly
+            _ = w3.eth.chain_id
+            return rpc
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{rpc}: {exc}")
+            continue
+    raise ConnectionError("Failed to connect to any RPC endpoint: " + "; ".join(errors))
+
+
 def get_web3() -> 'Web3':
     from web3 import Web3  # type: ignore
-    # Prefer generic RPC_URL if provided; fall back to BASE_RPC_URL
-    rpc = os.getenv("RPC_URL") or os.getenv("BASE_RPC_URL")
-    if not rpc:
-        raise EnvironmentError("RPC_URL or BASE_RPC_URL is required for Web3 operations")
-    w3 = Web3(Web3.HTTPProvider(rpc))
-    if not w3.is_connected():  # web3.py>=6 uses camelCase
+
+    rpc = resolve_rpc_url(validate=True)
+    provider = Web3.HTTPProvider(rpc)
+    w3 = Web3(provider)
+    # resolve_rpc_url already verified connectivity, but keep a safeguard
+    if not w3.is_connected():
         raise ConnectionError(f"Failed to connect to RPC: {rpc}")
     return w3
 
