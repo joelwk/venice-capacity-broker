@@ -46,6 +46,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
 def cmd_compact_counters(args: argparse.Namespace) -> None:
     """Compact KV sliding-window counters into SQL 'counter' table.
 
@@ -481,7 +491,7 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         dry_run=dry_run,
         enable_live=explicit_live,
         progressive_live=progressive,
-        mint_rate=float(os.getenv("DIEM_MINT_RATE", "1.0")),
+        mint_rate=_env_float("DIEM_MINT_RATE", 1.0),
     )
 
 
@@ -1605,5 +1615,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
-
