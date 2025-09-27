@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import weakref
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -100,6 +102,8 @@ class MarketDataProvider:
     _last_price_sources: Dict[str, Dict[str, Any]] = {}
     _price_clamp_lock: Lock = Lock()
     _price_clamp_events: Dict[str, Dict[str, Any]] = {}
+    _util_samples_lock: Lock = Lock()
+    _util_samples: Deque[Tuple[float, float]] = deque(maxlen=64)
 
 
     def _price_cache_key(self, symbol: str) -> str:
@@ -187,8 +191,24 @@ class MarketDataProvider:
 
     def _price_sanity_threshold(self) -> float:
         try:
-            raw = os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT") or os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT_PCT") or "0.10"
-            val = float(raw)
+            raw_candidates = (
+                os.getenv("MARKETDATA_SANITY_THRESHOLD"),
+                os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT"),
+                os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT_PCT"),
+            )
+            default_threshold = 0.15
+            val: Optional[float] = None
+            for raw in raw_candidates:
+                if raw is None or str(raw).strip() == "":
+                    continue
+                try:
+                    candidate = float(raw)
+                except Exception:
+                    continue
+                val = candidate
+                break
+            if val is None:
+                val = default_threshold
             if val > 1.0:
                 val = val / 100.0
             if val < 0.0:
@@ -197,7 +217,7 @@ class MarketDataProvider:
                 return 1.0
             return val
         except Exception:
-            return 0.10
+            return 0.15
 
     def _external_price(self, symbol: str) -> Optional[float]:
         ttl = self._external_price_ttl()
@@ -263,6 +283,31 @@ class MarketDataProvider:
                 continue
         return best_price
 
+    @staticmethod
+    def _format_path(path: Any) -> Optional[str]:  # noqa: ANN401
+        if isinstance(path, (list, tuple)):
+            tokens = [str(p).strip() for p in path if p]
+            if tokens:
+                return "->".join(tokens)
+        if isinstance(path, str) and path.strip():
+            return path.strip()
+        return None
+
+    def _price_breakdown(self, symbol: str) -> Optional[Dict[str, Any]]:
+        detail = type(self)._get_price_source(symbol)
+        if not detail:
+            return None
+        provider = detail.get("provider")
+        path = detail.get("path")
+        if provider is None and path is None:
+            return None
+        breakdown = {
+            "provider": provider,
+            "path": path,
+            "source": detail.get("source"),
+        }
+        return breakdown
+
     def _apply_price_sanity(self, symbol: str, price: Optional[float]) -> float:
         label = self._norm_symbol_label(symbol)
         stats = getattr(self, '_active_stats', None)
@@ -291,9 +336,30 @@ class MarketDataProvider:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "external_replace", "reason": "invalid_internal"})
             evt = _store_event("invalid_internal", None, None)
             _logger.warning("price sanity: replacing invalid internal price symbol=%s internal=%s external=%s", label, price, ext_price)
+            breakdown = self._price_breakdown(label)
+            if breakdown:
+                path_str = self._format_path(breakdown.get("path"))
+                try:
+                    _logger.info(
+                        "price sanity breakdown symbol=%s provider=%s path=%s source=%s",
+                        label,
+                        breakdown.get("provider"),
+                        path_str,
+                        breakdown.get("source"),
+                    )
+                except Exception:
+                    pass
+                evt["price_source"] = breakdown
             if _debug_sanity_enabled():
                 _logger.info("price sanity debug replace invalid symbol=%s event=%s", label, evt)
-            type(self)._record_price_clamp(label, "invalid_internal")
+            type(self)._record_price_clamp(
+                label,
+                "invalid_internal",
+                {
+                    "external_price": float(ext_price),
+                    "internal_price": float(price) if price is not None else None,
+                },
+            )
             type(self)._record_price_source(label, "external_invalid", {"valid": True})
             return float(ext_price)
         threshold = self._price_sanity_threshold()
@@ -302,9 +368,33 @@ class MarketDataProvider:
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
             evt = _store_event("drift", diff, threshold)
             _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
+            breakdown = self._price_breakdown(label)
+            if breakdown:
+                path_str = self._format_path(breakdown.get("path"))
+                try:
+                    _logger.info(
+                        "price sanity breakdown symbol=%s provider=%s path=%s source=%s diff=%.6f",
+                        label,
+                        breakdown.get("provider"),
+                        path_str,
+                        breakdown.get("source"),
+                        diff,
+                    )
+                except Exception:
+                    pass
+                evt["price_source"] = breakdown
             if _debug_sanity_enabled():
                 _logger.info("price sanity debug clamp symbol=%s event=%s", label, evt)
-            type(self)._record_price_clamp(label, "drift")
+            type(self)._record_price_clamp(
+                label,
+                "drift",
+                {
+                    "diff": float(diff),
+                    "threshold": float(threshold),
+                    "external_price": float(ext_price),
+                    "internal_price": float(price),
+                },
+            )
             type(self)._record_price_source(label, "external_clamp", {"valid": True})
             return float(ext_price)
         return float(price)
@@ -459,18 +549,100 @@ class MarketDataProvider:
         if detail:
             for k, v in detail.items():
                 if v is not None:
-                    payload[k] = v
+                    if isinstance(v, (list, tuple)):
+                        payload[k] = [str(item) for item in v]
+                    else:
+                        payload[k] = v
         with cls._price_source_lock:
             cls._last_price_sources[key] = payload
 
     @classmethod
-    def _record_price_clamp(cls, symbol: str, reason: str) -> None:
+    def _get_price_source(cls, symbol: str) -> Dict[str, Any]:
+        sym = str(symbol or "").strip()
+        if not sym:
+            return {}
+        key = sym.upper()
+        with cls._price_source_lock:
+            data = dict(cls._last_price_sources.get(key) or {})
+        return data
+
+    @classmethod
+    def _record_price_clamp(cls, symbol: str, reason: str, detail: Optional[Dict[str, Any]] = None) -> None:
         sym = str(symbol or "").strip()
         if not sym:
             return
         key = sym.upper()
         with cls._price_clamp_lock:
-            cls._price_clamp_events[key] = {"ts": time.time(), "reason": str(reason or "")}
+            payload: Dict[str, Any] = {"ts": time.time(), "reason": str(reason or "")}
+            if detail:
+                for k, v in detail.items():
+                    if v is not None:
+                        payload[k] = v
+            cls._price_clamp_events[key] = payload
+
+    def _util_sample_interval(self) -> float:
+        try:
+            raw = os.getenv("MARKETDATA_WATCHER_INTERVAL") or os.getenv("MARKETDATA_UTIL_SAMPLE_INTERVAL_SECONDS") or "180"
+            interval = float(raw)
+            if interval <= 0:
+                return 0.0
+            return interval
+        except Exception:
+            return 180.0
+
+    def _util_sample_ttl(self) -> float:
+        try:
+            raw = os.getenv("MARKETDATA_UTIL_SAMPLE_TTL")
+            if raw is None or str(raw).strip() == "":
+                return max(1800.0, self._util_sample_interval() * 6.0)
+            ttl = float(raw)
+            return ttl if ttl > 0 else max(1800.0, self._util_sample_interval() * 6.0)
+        except Exception:
+            return max(1800.0, self._util_sample_interval() * 6.0)
+
+    def _record_utilization_sample(self, value: Optional[float]) -> None:
+        try:
+            if value is None:
+                return
+            val = float(value)
+            if not math.isfinite(val) or val < 0:
+                return
+        except Exception:
+            return
+        now = time.time()
+        interval = self._util_sample_interval()
+        ttl = self._util_sample_ttl()
+        with type(self)._util_samples_lock:
+            samples = type(self)._util_samples
+            if samples and interval > 0 and (now - samples[-1][0]) < interval:
+                samples[-1] = (now, val)
+            else:
+                samples.append((now, val))
+            if ttl > 0:
+                while samples and (now - samples[0][0]) > ttl:
+                    samples.popleft()
+
+    def utilization_volatility_bps(self, window: int = 3) -> Optional[float]:
+        if window <= 1:
+            window = 2
+        with type(self)._util_samples_lock:
+            data = list(type(self)._util_samples)
+        if len(data) < window or len(data) < 2:
+            return None
+        subset = [float(v) for _, v in data[-window:]]
+        try:
+            mean = sum(subset) / float(len(subset))
+            if mean <= 0:
+                return None
+            variance = 0.0
+            if len(subset) > 1:
+                variance = sum((x - mean) ** 2 for x in subset) / float(len(subset) - 1)
+            if variance <= 0:
+                return 0.0
+            stddev = variance ** 0.5
+            return float((stddev / mean) * 10_000.0)
+        except Exception:
+            return None
 
     def price_health(self, symbol: str, max_age: float = 120.0) -> Dict[str, Any]:
         sym = str(symbol or "").strip()
@@ -489,6 +661,8 @@ class MarketDataProvider:
             source_label = "unknown"
         else:
             source_label = source_label.strip()
+        provider = source_info.get("provider")
+        path = source_info.get("path")
         valid = source_info.get("valid")
         stale = age is not None and age > max_age
         clamp_ts = clamp_info.get("ts")
@@ -508,6 +682,10 @@ class MarketDataProvider:
                 valid_flag = False
         else:
             valid_flag = False
+        diff_val = clamp_info.get("diff")
+        threshold_val = clamp_info.get("threshold")
+        external_px = clamp_info.get("external_price")
+        internal_px = clamp_info.get("internal_price")
         return {
             "symbol": key or sym,
             "source": source_label,
@@ -517,6 +695,12 @@ class MarketDataProvider:
             "clamped": clamped,
             "clamp_reason": clamp_reason,
             "clamp_age": clamp_age,
+            "provider": provider,
+            "path": path,
+            "diff": diff_val,
+            "threshold": threshold_val,
+            "external_price": external_px,
+            "internal_price": internal_px,
         }
     def _mark_last_latency(self, latency: float) -> None:
         cls = type(self)
@@ -795,12 +979,14 @@ class MarketDataProvider:
                     continue
         return paths
 
-    def _try_path_direct(self, route: RoutePlan) -> Optional[float]:
+    def _try_path_direct(self, route: RoutePlan) -> Optional[Dict[str, Any]]:
         try:
             self._stat_increment("dex_calls")
             bp = self.best_price(route, amount_in_decimal=1.0)
+            if not bp:
+                return None
             price = float(bp.get("price") or 0.0)
-            return price if self._valid_price(price) else None
+            return bp if self._valid_price(price) else None
         except Exception:
             return None
 
@@ -1250,6 +1436,7 @@ class MarketDataProvider:
             if not has_diem_path:
                 routes.insert(0, make_route([diem, quote]))
 
+        detail_payload: Optional[Dict[str, Any]] = None
         seen: set[tuple[str, ...]] = set()
         for route in routes:
             tokens = [t.strip() for t in route.tokens if t and t.strip()]
@@ -1262,15 +1449,23 @@ class MarketDataProvider:
 
             total: Optional[float] = None
             local_source = None
-            direct_price = self._try_path_direct(route)
-            if self._valid_price(direct_price):
+            source_detail: Optional[Dict[str, Any]] = None
+            direct_quote = self._try_path_direct(route)
+            if isinstance(direct_quote, dict):
                 local_source = "aggregator_direct"
-                total = float(direct_price)
+                total = float(direct_quote.get("price") or 0.0)
+                source_detail = {
+                    "provider": direct_quote.get("provider"),
+                    "path": direct_quote.get("path"),
+                }
+                if direct_quote.get("source"):
+                    source_detail["source"] = direct_quote.get("source")
             else:
                 seg_price = self._price_via_segments(route)
                 if self._valid_price(seg_price):
                     local_source = "aggregator_segments"
                     total = float(seg_price)
+                    source_detail = {"provider": "segments", "path": tokens}
             if total is None:
                 continue
 
@@ -1284,11 +1479,19 @@ class MarketDataProvider:
                     local_source = f"{local_source}_tail"
                 else:
                     local_source = "aggregator_tail"
+                if source_detail is not None:
+                    detail_path = list(source_detail.get("path") or [])
+                    if detail_path and detail_path[-1].lower() != quote.lower():
+                        detail_path = list(detail_path) + [quote]
+                        source_detail["path"] = detail_path
+                else:
+                    source_detail = {"provider": "tail_hop", "path": tokens + [quote]}
 
             if not self._valid_price(total):
                 continue
             selected = float(total)
             source = local_source or "aggregator"
+            detail_payload = source_detail
             break
 
         if not self._valid_price(selected):
@@ -1296,9 +1499,12 @@ class MarketDataProvider:
             if self._valid_price(direct):
                 selected = float(direct)
                 source = "hop"
+                detail_payload = {"provider": "hop", "path": [diem, quote]}
 
         if self._valid_price(selected):
-            type(self)._record_price_source(symbol, source, {"valid": True})
+            detail_payload = detail_payload or {}
+            detail_payload["valid"] = True
+            type(self)._record_price_source(symbol, source, detail_payload)
             return float(selected)
 
         type(self)._record_price_source(symbol, "missing", {"valid": False})
@@ -1427,7 +1633,12 @@ class MarketDataProvider:
                 bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 price_valid = self._valid_price(price)
-                type(self)._record_price_source("DIEM", "route_direct", {"valid": price_valid})
+                detail = {
+                    "valid": price_valid,
+                    "provider": bp.get("provider") if isinstance(bp, dict) else None,
+                    "path": bp.get("path") if isinstance(bp, dict) else None,
+                }
+                type(self)._record_price_source("DIEM", "route_direct", detail)
                 return self._apply_price_sanity("DIEM", price)
             except Exception:
                 type(self)._record_price_source("DIEM", "missing", {"valid": False, "reason": "route_error"})
@@ -1574,7 +1785,11 @@ class MarketDataProvider:
         """Fetch VVV metrics (circulating supply, utilization, staking_yield) with cache and retry."""
         now = time.time()
         if self._vvv_metrics_cache and (now - self._vvv_metrics_cache_t) < ttl_s:
-            return self._vvv_metrics_cache
+            cached = self._vvv_metrics_cache
+            if isinstance(cached, dict):
+                self._record_utilization_sample(cached.get("utilization"))
+                return dict(cached)
+            return cached
         from libs.venice_sdk.client import VeniceClient
 
         client = VeniceClient()
@@ -1582,6 +1797,8 @@ class MarketDataProvider:
         for i in range(retries + 1):
             try:
                 res = client.get_vvv_metrics()
+                if isinstance(res, dict):
+                    self._record_utilization_sample(res.get("utilization"))
                 self._vvv_metrics_cache, self._vvv_metrics_cache_t = res, time.time()
                 return res
             except Exception as e:  # noqa: BLE001
@@ -1723,6 +1940,10 @@ class MarketDataProvider:
                     "source": "vvv_metrics",
                 }
 
+        venice_fallback = self._fetch_venice_mint_rate(diem_decimals=diem_dec, svvv_decimals=svvv_dec)
+        if venice_fallback is not None:
+            return venice_fallback
+
         return {"tokens_per_diem": None, "svvv_units_per_diem": None, "source": "unknown"}
 
     def diem_mint_rate(self, ttl_s: int = 120) -> Dict[str, Any]:
@@ -1739,6 +1960,56 @@ class MarketDataProvider:
         except Exception:
             pass
         return info
+
+    def _fetch_venice_mint_rate(self, *, diem_decimals: int, svvv_decimals: int) -> Optional[Dict[str, Any]]:
+        try:
+            from libs.venice_sdk.client import VeniceClient
+
+            client = VeniceClient()
+            payload = client.get_vvv_staking_yield()
+        except Exception:
+            return None
+
+        if not isinstance(payload, dict):
+            return None
+
+        rate_candidate = self._deep_find(
+            payload,
+            [
+                "mintRateTokens",
+                "mint_rate_tokens",
+                "diemMintRate",
+                "diem_mint_rate",
+            ],
+        )
+        units_candidate = self._deep_find(
+            payload,
+            [
+                "mintRateSvvvPerDiem",
+                "mint_rate_svvv_per_diem",
+                "mintRateUnits",
+            ],
+        )
+
+        tokens_val: Optional[float] = None
+        units_val: Optional[int] = None
+        try:
+            if units_candidate is not None:
+                units_val = int(units_candidate)
+        except Exception:
+            units_val = None
+        if units_val is not None and units_val > 0:
+            tokens_val = self._ratio_units_to_tokens(units_val, diem_decimals, svvv_decimals)
+        else:
+            tokens_val = self._to_float(rate_candidate)
+
+        if tokens_val is None or tokens_val <= 0:
+            return None
+        return {
+            "tokens_per_diem": float(tokens_val),
+            "svvv_units_per_diem": int(units_val) if units_val is not None and units_val > 0 else None,
+            "source": "venice_api",
+        }
 
     # --- Etherscan v2 discovery helpers ---
     def discover_trade_path(self, path: List[str]) -> Dict[str, Any]:

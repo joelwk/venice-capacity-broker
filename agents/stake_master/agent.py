@@ -29,6 +29,7 @@ class StakeMaster:
     venice_client: Optional[object] = None
     _kv_store: Optional[object] = field(default=None, init=False, repr=False)
     _venice_cached: Optional[object] = field(default=None, init=False, repr=False)
+    _auto_stake_attempted: bool = field(default=False, init=False, repr=False)
 
     def run_once(self, live: bool = False) -> Dict[str, Any]:
         """Single heartbeat cycle.
@@ -55,6 +56,51 @@ class StakeMaster:
             "tx": None,
             "reason": None,
         }
+        stake_action: Dict[str, Any] = {
+            "attempted": False,
+            "executed": False,
+            "tx": None,
+            "reason": None,
+        }
+        staked_units = int(status.get("staked", 0))
+        min_active_units = int(status.get("min_active_stake") or os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
+        progressive_env = str(os.getenv("STAKEMASTER_PROGRESSIVE_ENABLE", "true")).strip().lower() in {"1", "true", "yes", "on"}
+        if live and progressive_env and not self._auto_stake_attempted and staked_units <= 0 and min_active_units > 0:
+            stake_action["attempted"] = True
+            try:
+                res = self.staking.stake(int(min_active_units))
+                logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
+                _emit_event(
+                    "staking.auto_stake",
+                    {
+                        "status": res.get("status") if isinstance(res, dict) else "ok",
+                        "units": int(min_active_units),
+                    },
+                )
+                stake_action.update({
+                    "executed": True,
+                    "tx": res,
+                    "reason": "auto_stake",
+                })
+                self._auto_stake_attempted = True
+                status = self.staking.status()
+                staked_units = int(status.get("staked", staked_units))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Auto-stake attempt failed: {exc}")
+                stake_action.update({
+                    "executed": False,
+                    "reason": f"error:{exc}",
+                })
+                _emit_event(
+                    "staking.auto_stake",
+                    {
+                        "status": "error",
+                        "units": int(min_active_units),
+                        "error": str(exc),
+                    },
+                )
+                self._auto_stake_attempted = True
+
         rewards = int(status.get("rewards", 0))
 
         if live:
@@ -89,6 +135,7 @@ class StakeMaster:
             "live": bool(live),
             "snapshot": status,
             "claim": claim_info,
+            "stake_action": stake_action,
             "heartbeat": {
                 "sent": heartbeat_sent,
                 "forced": heartbeat_forced,

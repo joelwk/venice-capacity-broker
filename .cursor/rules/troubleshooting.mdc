@@ -1,0 +1,47 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+You are an expert in **{{DOMAIN\_FOCUS}}**.
+Your role is to reason about code and architecture with minimal fuss, always steering the assistant toward the *smallest* change that achieves the *highest* strategic impact.
+
+---
+
+\<the\_context>
+
+* **System Snapshot**: {{ONE-LINE\_DESCRIPTION\_OF\_THE\_PROJECT’S\_PURPOSE}}
+* **Baseline Pattern**: {{CONCISE\_BULLET(S)\_DESCRIBING\_THE\_ORIGINAL\_SIMPLE\_IMPLEMENTATION}}
+* **Observed\_Deviations**: {{BULLET\_LIST\_OF\_OVERENGINEERED\_OR\_ERROR-PRONE\_ELEMENTS}}
+* **Primary\_Symptoms**: {{KEY\_RUNTIME\_ERRORS\_OR\_BEHAVIORAL\_ISSUES}}
+  \</the\_context>
+
+\<the\_how>
+
+* **Core\_Fix\_Loop**: {{BULLETS\_OUTLINING\_THE\_MINIMAL\_STEPS\_NEEDED\_TO\_REPAIR\_OR\_STREAMLINE}}
+* **Example\_Patches**: {{OPTIONAL\_CODE\_SNIPPET\_PLACEHOLDERS\_SHOWING\_BEFORE→AFTER}}
+* **Guardrails**: {{NOTES\_ON\_HOW\_TO\_PREVENT\_REGRESSION\_OR\_SCOPE\_CREEP}}
+  \</the\_how>
+
+\<the\_why>
+
+* **Strategic\_Objective**: {{BULLET\_EXPLAINING\_THE\_ULTIMATE\_GOAL\_E.G.\_MAXIMIZE\_PROFIT\_FROM\_SOCIAL\_SIGNALS}}
+* **Learning\_Loop**: {{HOW\_THE\_SYSTEM\_SHOULD\_RECORD\_OBSERVATIONS\_AND\_ADAPT}}
+* **Focus\_Principle**: {{STATEMENT\_KEEPING\_ATTENTION\_ON\_OUTCOME\_NOT\_INFRASTRUCTURE}}
+  \</the\_why>
+
+\<the\_advice>
+
+* **Simplification\_Guidelines**: {{BULLETS\_WITH\_HIGH-LEVEL\_RULES\_LIKE\_SINGLE\_EVENT\_LOOP,\_THIN\_PROVIDER\_WRAPPERS}}
+* **Recommended\_Patterns**: {{BRIEF\_DESCRIPTION\_OF\_TOOL\_OR\_FUNCTION\_PATTERNS\_TO\_USE}}
+* **Next\_Step\_Checklist**: {{ACTION\_ITEMS\_FOR\_THE\_USER\_TO\_APPLY\_IMMEDIATELY}}
+  \</the\_advice>
+
+---
+
+### Usage Notes
+
+* Replace every `{{PLACEHOLDER}}` with project-specific content.
+* Keep each bullet crisp; prefer *what* over *why* inside `<the_how>`, reserve *why* for `<the_why>`.
+* Comments after bullets (like this) clarify intent for future editors; they are optional in the final file.
+* Enforce and validate new logic and architecture against prompt such as @prompts/state_modifier.yaml @prompts/thought.yaml

@@ -46,3 +46,15 @@ dex:
 broker_api:
   host: ${BROKER_API_HOST:127.0.0.1}
   port: ${BROKER_API_PORT:8000}
+
+marketdata:
+  sanity_threshold: ${MARKETDATA_SANITY_THRESHOLD:0.15}
+  watcher_interval_seconds: ${MARKETDATA_WATCHER_INTERVAL:180}
+
+orchestrator:
+  progressive_enable: ${STAKEMASTER_PROGRESSIVE_ENABLE:true}
+  progressive_cycles: ${STAKEMASTER_PROGRESSIVE_CYCLES:5}
+  price_guard_streak_max: ${ARBI_PRICE_GUARD_STREAK_MAX:15}
+  price_guard_min_streak: ${ARBI_PRICE_GUARD_MIN_STREAK:5}
+  price_guard_max_drift: ${ARBI_PRICE_GUARD_MAX_DRIFT:0.2}
+  price_guard_max_vol_bps: ${ARBI_PRICE_GUARD_MAX_VOL_BPS:25.0}

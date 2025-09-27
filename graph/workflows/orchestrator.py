@@ -340,6 +340,164 @@ class SingleLoopOrchestrator:
             log_cycle["agents"] = agents_copy
         return log_cycle
 
+    def _price_guard_recent_stats(self, limit: int = 20) -> tuple[int, list[float]]:
+        streak = 0
+        diffs: list[float] = []
+        records: list[Dict[str, Any]] = []
+        if self.memory_store is not None:
+            try:
+                records = list(self.memory_store.recent(max(1, int(limit))))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"price guard history load failed: {exc}")
+                records = []
+        for entry in reversed(records):
+            cycle = entry.get("cycle") if isinstance(entry, dict) else entry
+            if not isinstance(cycle, dict):
+                continue
+            arbi = cycle.get("arbi")
+            if not isinstance(arbi, dict):
+                continue
+            guard_info = arbi.get("priceGuard")
+            if not isinstance(guard_info, dict):
+                break
+            if str(guard_info.get("reason")) != "price_guard":
+                break
+            streak += 1
+            details = guard_info.get("details") if isinstance(guard_info.get("details"), dict) else {}
+            diff_val = details.get("diff")
+            if diff_val is None:
+                price_health = arbi.get("priceHealth") if isinstance(arbi.get("priceHealth"), dict) else {}
+                diff_val = price_health.get("diff")
+            try:
+                if diff_val is not None:
+                    diffs.append(float(diff_val))
+            except Exception:
+                continue
+        runtime_streak = getattr(self, "_price_guard_runtime_streak", 0)
+        if streak == 0 and runtime_streak:
+            streak = int(runtime_streak)
+        return streak, diffs
+
+    def _evaluate_price_guard_bypass(
+        self,
+        *,
+        diff: Optional[float],
+        threshold: Optional[float],
+        streak_prev: int,
+        streak_cap: int,
+        min_streak: int,
+        drift_cap: float,
+        vol_bps: Optional[float],
+        util_vol_bps: Optional[float],
+        vol_cap: float,
+        recent_diffs: list[float],
+    ) -> Optional[Dict[str, Any]]:
+        min_required = max(1, int(min_streak))
+        if streak_prev < min_required:
+            return None
+        if streak_cap > 0 and streak_prev >= streak_cap:
+            return None
+
+        effective_diff: Optional[float] = None
+        candidates: list[float] = []
+        if diff is not None:
+            candidates.append(float(diff))
+        candidates.extend(reversed(recent_diffs))
+        for candidate in candidates:
+            try:
+                effective = float(candidate)
+            except Exception:
+                continue
+            else:
+                effective_diff = effective
+                break
+        if effective_diff is None:
+            return None
+        if drift_cap > 0 and effective_diff > drift_cap:
+            return None
+
+        def _vol_ok(value: Optional[float]) -> bool:
+            if vol_cap <= 0:
+                return True
+            if value is None:
+                return True
+            try:
+                return float(value) <= vol_cap
+            except Exception:
+                return False
+
+        if not _vol_ok(vol_bps) or not _vol_ok(util_vol_bps):
+            return None
+
+        return {
+            "streak": streak_prev,
+            "streak_cap": streak_cap,
+            "min_streak": min_required,
+            "diff": float(effective_diff),
+            "drift_cap": float(drift_cap),
+            "threshold": float(threshold) if threshold is not None else None,
+            "vol_bps": float(vol_bps) if vol_bps is not None else None,
+            "util_vol_bps": float(util_vol_bps) if util_vol_bps is not None else None,
+        }
+
+    def _progressive_threshold(self) -> int:
+        try:
+            raw = os.getenv("STAKEMASTER_PROGRESSIVE_CYCLES")
+            if raw is None or str(raw).strip() == "":
+                return 5
+            return max(1, int(raw))
+        except Exception:
+            return 5
+
+    def _prepare_progressive_state(self, enabled: bool) -> Optional[Dict[str, Any]]:
+        setattr(self, "_progressive_requested", bool(enabled))
+        if not enabled:
+            return None
+        if not _env_flag("STAKEMASTER_PROGRESSIVE_ENABLE", True):
+            return None
+        state = getattr(self, "_progressive_state", None)
+        if state is None:
+            state = {
+                "counter": 0,
+                "live": False,
+                "threshold": self._progressive_threshold(),
+                "enabled": True,
+            }
+            setattr(self, "_progressive_state", state)
+        return state
+
+    def _update_progressive_state(
+        self,
+        state: Dict[str, Any],
+        cycle_record: Dict[str, Any],
+        *,
+        live_intent: bool,
+    ) -> None:
+        if not state or not live_intent:
+            return
+        stake = cycle_record.get("stake") if isinstance(cycle_record, dict) else None
+        heartbeat_info = (stake or {}).get("heartbeat") if isinstance(stake, dict) else None
+        heartbeat_sent = bool((heartbeat_info or {}).get("sent"))
+        status_ok = (stake or {}).get("status") == "ok"
+        if heartbeat_sent and status_ok:
+            state["counter"] = int(state.get("counter", 0)) + 1
+        else:
+            state["counter"] = 0
+        threshold = max(1, int(state.get("threshold") or self._progressive_threshold()))
+        if not state.get("live") and state.get("counter", 0) >= threshold:
+            state["live"] = True
+            state["enabled_at"] = time.time()
+            try:
+                logger.info(
+                    "progressive live enabled",
+                    extra={
+                        "threshold": threshold,
+                        "counter": state.get("counter", 0),
+                    },
+                )
+            except Exception:
+                pass
+
     def _invoke_arbi(
         self,
         price: float,
@@ -379,26 +537,47 @@ class SingleLoopOrchestrator:
         dry_run: bool = True,
         enable_live: bool = False,
         mint_rate: float = 1.0,
+        progressive_live: bool = False,
     ) -> Dict[str, Any]:
         cycle_ts = time.time()
 
         # --- StakeMaster step ---
         try:
-            stake_live = bool(enable_live and not dry_run and _env_flag("ORCHESTRATOR_STAKE_LIVE", False))
+            stake_live_allowed = _env_flag("ORCHESTRATOR_STAKE_LIVE", False)
+            stake_live = bool(enable_live and not dry_run and (stake_live_allowed or progressive_live))
             stake_result = self.stake_master.run_once(live=stake_live)
         except Exception as exc:  # noqa: BLE001
             stake_result = {"status": "error", "error": str(exc)}
             logger.warning(f"StakeMaster step failed: {exc}")
 
         # --- Market signals ---
+        guard_streak_prev, guard_diffs_prev = self._price_guard_recent_stats()
+        price_guard_bypass: Optional[Dict[str, Any]] = None
         utilization_ratio: Optional[float] = None
         vol_bps: Optional[float] = None
+        util_vol_bps: Optional[float] = None
         effective_mint_rate = float(mint_rate)
         mint_rate_source = "param"
         prices: Dict[str, float] = {}
         price_health: Optional[Dict[str, Any]] = None
         skip_due_to_price = False
         price_guard_why: Optional[Dict[str, Any]] = None
+        try:
+            guard_streak_cap = int(os.getenv("ARBI_PRICE_GUARD_STREAK_MAX") or 15)
+        except Exception:
+            guard_streak_cap = 15
+        try:
+            guard_min_release = int(os.getenv("ARBI_PRICE_GUARD_MIN_STREAK") or 5)
+        except Exception:
+            guard_min_release = 5
+        try:
+            guard_drift_cap = float(os.getenv("ARBI_PRICE_GUARD_MAX_DRIFT") or 0.2)
+        except Exception:
+            guard_drift_cap = 0.2
+        try:
+            guard_vol_cap = float(os.getenv("ARBI_PRICE_GUARD_MAX_VOL_BPS") or 25.0)
+        except Exception:
+            guard_vol_cap = 25.0
 
         if dry_run:
             try:
@@ -423,6 +602,12 @@ class SingleLoopOrchestrator:
                             utilization_ratio = float(ur)
             except Exception:
                 pass
+            try:
+                util_vol_bps = self.market.utilization_volatility_bps(window=3)
+                if vol_bps in (None, 0.0) and util_vol_bps is not None:
+                    vol_bps = float(util_vol_bps)
+            except Exception:
+                pass
         else:
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
@@ -440,7 +625,47 @@ class SingleLoopOrchestrator:
                 if clamped or (valid_flag is False) or not source_ok:
                     skip_due_to_price = True
                     price_guard_why = {"decision": "hold", "reason": "price_guard", "details": dict(price_health)}
+                    if isinstance(price_guard_why.get("details"), dict):
+                        price_guard_why["details"]["streak"] = guard_streak_prev + 1
                     logger.warning("Skipping ArbiDiem due to DIEM price health", extra={"price_health": price_health})
+                    bypass = self._evaluate_price_guard_bypass(
+                        diff=price_health.get("diff"),
+                        threshold=price_health.get("threshold"),
+                        streak_prev=guard_streak_prev,
+                        streak_cap=guard_streak_cap,
+                        min_streak=guard_min_release,
+                        drift_cap=guard_drift_cap,
+                        vol_bps=vol_bps,
+                        util_vol_bps=util_vol_bps,
+                        vol_cap=guard_vol_cap,
+                        recent_diffs=guard_diffs_prev,
+                    )
+                    if bypass is not None:
+                        skip_due_to_price = False
+                        price_guard_bypass = dict(bypass)
+                        price_guard_bypass["source"] = source
+                        price_guard_bypass["streak_prev"] = guard_streak_prev
+                        price_guard_bypass["vol_cap"] = guard_vol_cap
+                        price_guard_bypass["drift_cap"] = guard_drift_cap
+                        price_guard_why = {
+                            "decision": "proceed",
+                            "reason": "price_guard_bypass",
+                            "details": dict(price_guard_bypass),
+                        }
+                        if isinstance(price_health, dict):
+                            price_health["bypassed"] = True
+                        try:
+                            logger.info(
+                                "Price guard bypassed after stable clamp",
+                                extra={
+                                    "streak": price_guard_bypass.get("streak"),
+                                    "diff": price_guard_bypass.get("diff"),
+                                    "vol_bps": price_guard_bypass.get("vol_bps"),
+                                    "util_vol_bps": price_guard_bypass.get("util_vol_bps"),
+                                },
+                            )
+                        except Exception:
+                            pass
             try:
                 sig = self.market.unified_signals(ttl_s=30)
                 if isinstance(sig, dict):
@@ -468,6 +693,12 @@ class SingleLoopOrchestrator:
                 setattr(self, "_px_hist", hist)
                 if hasattr(self.arbi, "risk"):
                     vol_bps = float(self.arbi.risk.volatility_bps(hist))
+                if (vol_bps is None or vol_bps <= 0.0) and hasattr(self.market, "utilization_volatility_bps"):
+                    util_vol_bps = self.market.utilization_volatility_bps(window=3)
+                    if util_vol_bps is not None:
+                        vol_bps = float(util_vol_bps)
+                elif hasattr(self.market, "utilization_volatility_bps"):
+                    util_vol_bps = self.market.utilization_volatility_bps(window=3)
                 if _env_flag("RISK_VOL_PERSIST", False):
                     try:
                         from db.session import create_db_and_tables, get_engine
@@ -611,6 +842,8 @@ class SingleLoopOrchestrator:
         else:
             if price_guard_triggered and price_guard_why is not None:
                 last_why = price_guard_why
+            elif price_guard_bypass is not None and price_guard_why is not None:
+                last_why = price_guard_why
             else:
                 last_why = getattr(self.arbi, "_last_rationale", None)
         action_label = None
@@ -642,7 +875,11 @@ class SingleLoopOrchestrator:
                 "max_inventory_usd": getattr(self.arbi.risk, "max_inventory_usd", None),
                 "max_trade_units": getattr(self.arbi.risk, "max_trade_units", None),
             },
-            "signals": {"utilization_ratio": utilization_ratio, "vol_bps": vol_bps},
+            "signals": {
+                "utilization_ratio": utilization_ratio,
+                "vol_bps": vol_bps,
+                "utilization_vol_bps": util_vol_bps,
+            },
             "outcome": bool(signal_decision if (dry_run or not live_mode) else executed_decision),
             "why": last_why,
             "execution": execution_summary,
@@ -655,6 +892,10 @@ class SingleLoopOrchestrator:
             if isinstance(price_guard_why, dict) and isinstance(price_guard_why.get("details"), dict):
                 guard_info["details"] = price_guard_why["details"]
             arbi_record["priceGuard"] = guard_info
+        elif price_guard_bypass is not None:
+            guard_info = {"status": "bypassed", "reason": "price_guard", "details": price_guard_bypass}
+            arbi_record["priceGuard"] = guard_info
+            arbi_record["priceGuardBypass"] = price_guard_bypass
         if quorum_info is not None:
             arbi_record["quorum"] = quorum_info
         if reflex_info is not None:
@@ -686,6 +927,22 @@ class SingleLoopOrchestrator:
             "capacity_broker": cap_summary,
         }
         cycle_record["reflex"] = reflex_info
+        prog_state = getattr(self, "_progressive_state", None)
+        if isinstance(prog_state, dict):
+            prog_snapshot = dict(prog_state)
+        else:
+            prog_snapshot = None
+        cycle_record["progressive"] = {
+            "requested": bool(getattr(self, "_progressive_requested", False)),
+            "override": bool(progressive_live),
+            "live": bool(enable_live and not dry_run),
+            "state": prog_snapshot,
+        }
+
+        if price_guard_triggered:
+            setattr(self, "_price_guard_runtime_streak", guard_streak_prev + 1)
+        else:
+            setattr(self, "_price_guard_runtime_streak", 0)
 
         if self.reflection is not None:
             try:
@@ -721,14 +978,39 @@ class SingleLoopOrchestrator:
         dry_run: bool = True,
         enable_live: bool = False,
         mint_rate: float = 1.0,
+        progressive_live: bool = False,
     ) -> None:
         cycle = 0
+        base_dry = bool(dry_run)
+        base_live = bool(enable_live)
+        progressive_state = self._prepare_progressive_state(progressive_live or enable_live)
+        live_intent = bool(base_live or (progressive_state is not None and progressive_live))
+
         while True:
             cycle += 1
+            if progressive_state is not None:
+                current_live = bool(progressive_state.get("live"))
+                enable_flag = current_live
+                dry_flag = not current_live
+                progressive_override = current_live
+            else:
+                enable_flag = live_intent
+                dry_flag = base_dry
+                progressive_override = False
+
+            cycle_record: Optional[Dict[str, Any]] = None
             try:
-                self.run_cycle(dry_run=dry_run, enable_live=enable_live, mint_rate=mint_rate)
+                cycle_record = self.run_cycle(
+                    dry_run=dry_flag,
+                    enable_live=enable_flag,
+                    mint_rate=mint_rate,
+                    progressive_live=progressive_override,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"single-loop error: {exc}")
+            else:
+                if progressive_state is not None and cycle_record is not None:
+                    self._update_progressive_state(progressive_state, cycle_record, live_intent=live_intent)
             if max_cycles and cycle >= max_cycles:
                 break
             time.sleep(max(0.0, float(interval_s)))

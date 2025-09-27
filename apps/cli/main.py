@@ -442,11 +442,15 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     from agents.reflex.guardian import ReflexGuardian
     from graph.workflows.orchestrator import SingleLoopOrchestrator
 
-    live = bool(getattr(args, "enable_live", False))
-    dry_run = not live
+    env_progressive = _env_flag("STAKEMASTER_PROGRESSIVE_ENABLE", True)
+    arg_progressive = getattr(args, "progressive_live", None)
+    progressive = env_progressive if arg_progressive is None else bool(arg_progressive)
+    explicit_live = bool(getattr(args, "enable_live", False))
+    live_target = explicit_live or progressive
+    dry_run = not explicit_live
 
     stake_agent = StakeMaster(StakingService(VVVActions()))
-    aggregator = build_aggregator_from_env() if live else None
+    aggregator = build_aggregator_from_env() if live_target else None
     market = MarketDataProvider()
     diem_service = DIEMService(aggregator, market_data=market)
     arbi_agent = ArbiDiem(diem_service, market=market)
@@ -475,7 +479,9 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         interval_s=float(args.sleep),
         max_cycles=int(args.max_cycles),
         dry_run=dry_run,
-        enable_live=live,
+        enable_live=explicit_live,
+        progressive_live=progressive,
+        mint_rate=float(os.getenv("DIEM_MINT_RATE", "1.0")),
     )
 
 
@@ -1084,6 +1090,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-cycles", default=3, type=int, help="Maximum cycles to run")
     sp.add_argument("--enable-live", action="store_true", default=False, help="Allow live actions (claim)")
     sp.add_argument("--allow-inactive-stake", action="store_true", default=False, help="Skip reflex active-stake requirement (testing)")
+    sp.add_argument("--progressive-live", dest="progressive_live", action="store_true", help="Enable progressive live escalation after healthy heartbeats")
+    sp.add_argument("--no-progressive-live", dest="progressive_live", action="store_false", help="Disable progressive live escalation explicitly")
+    sp.set_defaults(progressive_live=None)
     sp.set_defaults(func=cmd_run_loop)
 
     sp = sub.add_parser("test:challenge-offline", help="Offline test: sign a dummy challenge and echo payloads")
@@ -1354,6 +1363,42 @@ def build_parser() -> argparse.ArgumentParser:
                 pass
         except Exception as e:  # noqa: BLE001
             logger.warning(f"startup probe failed: {e}")
+
+        try:
+            from services.marketdata.provider import MarketDataProvider
+
+            market = MarketDataProvider()
+            health = market.price_health("DIEM", max_age=300.0)
+            diff = health.get("diff")
+            clamped = bool(health.get("clamped"))
+            threshold = health.get("threshold")
+            try:
+                warn_threshold = float(os.getenv("MARKETDATA_SANITY_THRESHOLD") or 0.15)
+            except Exception:
+                warn_threshold = 0.15
+            if isinstance(diff, (int, float)) and clamped:
+                cmp_threshold = float(threshold) if isinstance(threshold, (int, float)) else warn_threshold
+                if diff >= cmp_threshold:
+                    provider = health.get("provider")
+                    path = health.get("path")
+                    path_detail = None
+                    if isinstance(path, (list, tuple)):
+                        path_tokens = [str(p).strip() for p in path if p]
+                        if path_tokens:
+                            path_detail = "->".join(path_tokens)
+                    elif isinstance(path, str) and path.strip():
+                        path_detail = path.strip()
+                    logger.warning(
+                        "startup probe: DIEM price drift exceeds clamp threshold",
+                        extra={
+                            "diff": float(diff),
+                            "threshold": float(cmp_threshold),
+                            "provider": provider,
+                            "path": path_detail,
+                        },
+                    )
+        except Exception:
+            logger.debug("startup probe sanity check skipped", exc_info=True)
 
     sp = sub.add_parser("startup:probe", help="Validate DEX pairs via Etherscan for current TRADE_PATH and print a compact report")
     sp.set_defaults(func=cmd_startup_probe)
