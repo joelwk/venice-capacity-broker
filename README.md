@@ -103,6 +103,14 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
    `curl http://127.0.0.1:8000/health`, `make env-status`, and the `/v1/env` endpoint should reflect ready status, live Venice signals, and any enabled features.
 
+### Live mode guardrails
+
+- Progressive live is on by default. The orchestrator runs five clean dry-run cycles (`STAKEMASTER_PROGRESSIVE_CYCLES`, default 5) before automatically switching to live when `STAKEMASTER_PROGRESSIVE_ENABLE=true`. Lower the threshold or disable the feature entirely if you need an immediate live flip for testing.
+- ArbiDiem stays in hold while the DIEM price is clamped. Tune the bypass window with `ARBI_PRICE_GUARD_STREAK_MAX`, `ARBI_PRICE_GUARD_MIN_STREAK`, `ARBI_PRICE_GUARD_MAX_DRIFT`, and `ARBI_PRICE_GUARD_MAX_VOL_BPS` when you want to trade through persistent but stable drifts.
+- The reflex guard requires an active stake by default. Set `REFLEX_ALLOW_INACTIVE_STAKE=true` only when you intentionally want to test ArbiDiem with zero staked VVV; otherwise make sure `VVV_ACTIVE_MIN_STAKE_UNITS` is funded before enabling live mode.
+- Leave `DIEM_FAKE_PRICE` / `DIEM_FAKE_MINT_RATE` blank for live quotes. Any non-empty value triggers the dry-run code path and the orchestration logs it explicitly so you can tell the difference.
+- Market-data watcher cadence can be tuned with `MARKETDATA_WATCHER_INTERVAL`, `MARKETDATA_UTIL_SAMPLE_INTERVAL_SECONDS`, and `MARKETDATA_UTIL_SAMPLE_TTL`; bumping the interval down is recommended when you want utilization-driven volatility to unblock ArbiDiem.
+
 ### Restart Checklist
 
 1. Confirm secrets and environment variables are still loaded.
@@ -796,4 +804,3 @@ Buyer UI
 Notes
 - CLI compaction (`make db-compact`) may find no keys if KV is in-memory; use `make server-db-compact` in that case.
 - Some Venice deployments do not expose `/openapi.json`; if `venice:probe-openapi` fails, set paths directly if needed (e.g., `VENICE_CREATE_SUBKEY_PATH=/api_keys`).
-

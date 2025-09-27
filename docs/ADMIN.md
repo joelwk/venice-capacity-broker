@@ -71,8 +71,9 @@ Security
 - In production set `BROKER_REQUIRE_ADMIN_TOKEN=true` and a strong `BROKER_ADMIN_TOKEN`
 - UI stores token only in the browser; click Clear to remove it
 - Admin actions use the same backend auth as the `/v1/*` endpoints
- - Set `AGENTS_PAUSED=true` to pause orchestrator decisions without redeploying
- - Tuning memory/reflex thresholds is runtime-driven: adjust `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK`, and `REFLEX_*` env values before restarting the stack.
+- Set `AGENTS_PAUSED=true` to pause orchestrator decisions without redeploying
+- Tuning memory/reflex thresholds is runtime-driven: adjust `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK`, and `REFLEX_*` env values before restarting the stack.
+- Progressive live defaults to on. Update `STAKEMASTER_PROGRESSIVE_ENABLE`, `STAKEMASTER_PROGRESSIVE_CYCLES`, and the ArbiDiem price guard knobs (`ARBI_PRICE_GUARD_*`) from the `.env` when you need a different warm-up horizon. If you intentionally want to trade without an active stake, set `REFLEX_ALLOW_INACTIVE_STAKE=true`; otherwise leave it `false` so the reflex guard halts live cycles until VVV is staked.
 
 Environment & Backends
 - Store backend: SQL is default (configure `SQL_DATABASE_URL` or `POSTGRES_*`). Set `BROKER_STORE_BACKEND=json` only for local file-based development.

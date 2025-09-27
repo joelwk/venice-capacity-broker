@@ -44,6 +44,14 @@ Overview
 
    Always run one dry-run cycle first, then monitor `vvv_agent_decisions_total` and `staking.heartbeat` events.
 
+### Live guardrails and tuning knobs
+
+- `STAKEMASTER_PROGRESSIVE_ENABLE` (default `true`) keeps the orchestrator in dry-run until it observes `STAKEMASTER_PROGRESSIVE_CYCLES` healthy passes (default `5`). Lower the cycle count when you want faster live cutovers during testing, or disable progressive mode entirely for manual control.
+- ArbiDiem’s price health bypass is governed by `ARBI_PRICE_GUARD_STREAK_MAX`, `ARBI_PRICE_GUARD_MIN_STREAK`, `ARBI_PRICE_GUARD_MAX_DRIFT`, and `ARBI_PRICE_GUARD_MAX_VOL_BPS`. Increase the drift cap or streak thresholds when you consistently see clamps but still want to trade through mild deviations.
+- Reflex will halt the loop if no stake is active. Either stake the minimum (`VVV_ACTIVE_MIN_STAKE_UNITS`) before going live or set `REFLEX_ALLOW_INACTIVE_STAKE=true` **only** when you deliberately want to trade without an on-chain stake (e.g., CEX-managed collateral).
+- Leave `DIEM_FAKE_PRICE` and `DIEM_FAKE_MINT_RATE` empty for production. Any populated values switch the agents back into dry-run mode.
+- Use `MARKETDATA_WATCHER_INTERVAL`, `MARKETDATA_UTIL_SAMPLE_INTERVAL_SECONDS`, and `MARKETDATA_UTIL_SAMPLE_TTL` to control how quickly utilization updates feed volatility calculations for ArbiDiem’s risk gates.
+
 ## Restart Checklist (Existing Deployment)
 
 1. Load secrets from your host or secret manager, then run `make env-status` to verify the Broker sees the expected config.
