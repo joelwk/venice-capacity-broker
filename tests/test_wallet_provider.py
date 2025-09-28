@@ -28,8 +28,8 @@ class _StubProvider:
 def test_adapter_normalizes_address_and_send(monkeypatch):
     stub = _StubProvider()
     adapter = AgentKitWalletAdapter(inner=stub, kind="eth")
-    from web3 import Web3  # type: ignore
-
+    web3_mod = pytest.importorskip("web3")
+    Web3 = web3_mod.Web3
     assert adapter.address == Web3.to_checksum_address(stub.get_address())
     tx_hash = adapter.send_transaction(to="0x4c4b1f1e1d1c1b1a191817161514131211100000", value=123)
     assert tx_hash == "0xtxhash"
@@ -40,8 +40,8 @@ def test_adapter_normalizes_address_and_send(monkeypatch):
 def test_adapter_sign_message_smart_wallet(monkeypatch):
     stub = _StubProvider()
     adapter = AgentKitWalletAdapter(inner=stub, kind="smart")
-    from eth_account import Account
-
+    acct_module = pytest.importorskip("eth_account")
+    Account = acct_module.Account
     acct = Account.create()
     key_hex = acct.key.hex()
     if not key_hex.startswith("0x"):
@@ -78,7 +78,8 @@ def test_transfer_from_cold_to_hot(monkeypatch):
     monkeypatch.setattr("services.wallet.provider.build_eip1559_tx", fake_build)
     monkeypatch.setattr("services.wallet.provider.get_web3", lambda: DummyWeb3())
 
-    from web3 import Web3  # type: ignore
+    web3_mod = pytest.importorskip("web3")
+    Web3 = web3_mod.Web3
 
     class DummySigner:
         address = "0xCc0d000000000000000000000000000000000000"
@@ -112,6 +113,7 @@ def test_sweep_profits_to_cold(monkeypatch):
 
     monkeypatch.setattr("services.wallet.provider.get_web3", lambda: DummyWeb3())
 
+    pytest.importorskip("web3")
     tx_hash = sweep_profits_to_cold(
         100_000,
         cold_address="0xCc0d000000000000000000000000000000000001",
@@ -138,5 +140,6 @@ def test_sweep_requires_balance(monkeypatch):
 
     monkeypatch.setattr("services.wallet.provider.get_web3", lambda: DummyWeb3())
 
+    pytest.importorskip("web3")
     with pytest.raises(WalletError):
         sweep_profits_to_cold(100, cold_address="0xCc0d000000000000000000000000000000000001")
