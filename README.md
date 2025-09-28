@@ -105,7 +105,10 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 ### Live mode guardrails
 
-- Progressive live is on by default. The orchestrator runs five clean dry-run cycles (`STAKEMASTER_PROGRESSIVE_CYCLES`, default 5) before automatically switching to live when `STAKEMASTER_PROGRESSIVE_ENABLE=true`. Lower the threshold or disable the feature entirely if you need an immediate live flip for testing.
+- **Dry-run baseline** – running `uv run python apps/cli/main.py run:loop` without extra flags keeps every agent in simulation mode. Wallet calls, DIEM mints, and Venice key issuance are read-only. Use this path for smoke tests or CI.
+- **Progressive escalation (`--progressive-live`)** – add `--progressive-live` when you want the orchestrator to unlock live mode only after a healthy warm-up. Each cycle stays dry-run until StakeMaster reports the configured number of successive heartbeats (`STAKEMASTER_PROGRESSIVE_CYCLES`, default 5). Override with `STAKEMASTER_PROGRESSIVE_ENABLE=false` or adjust the cycle threshold when you need faster cutovers.
+- **Immediate live (`--enable-live`)** – add `--enable-live` to bypass the progressive guard and execute on-chain actions from the first cycle. You can combine both flags when you want the orchestrator to start progressive but also accept an explicit live override for manual cutovers.
+- Use `uv run python apps/cli/main.py run:stakemaster --enable-live` when you only need the heartbeat in live mode; add `--progressive-live` there as well if you prefer staged escalation.
 - ArbiDiem stays in hold while the DIEM price is clamped. Tune the bypass window with `ARBI_PRICE_GUARD_STREAK_MAX`, `ARBI_PRICE_GUARD_MIN_STREAK`, `ARBI_PRICE_GUARD_MAX_DRIFT`, and `ARBI_PRICE_GUARD_MAX_VOL_BPS` when you want to trade through persistent but stable drifts.
 - The reflex guard requires an active stake by default. Set `REFLEX_ALLOW_INACTIVE_STAKE=true` only when you intentionally want to test ArbiDiem with zero staked VVV; otherwise make sure `VVV_ACTIVE_MIN_STAKE_UNITS` is funded before enabling live mode.
 - Leave `DIEM_FAKE_PRICE` / `DIEM_FAKE_MINT_RATE` blank for live quotes. Any non-empty value triggers the dry-run code path and the orchestration logs it explicitly so you can tell the difference.

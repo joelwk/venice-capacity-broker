@@ -239,6 +239,14 @@ Design the loop so a quorum coordinator can drop in later with minimal changes.
 
 `agents/reflex/guardian.py` evaluates each cycle before ArbiDiem runs in live mode and halts execution when price drawdowns, volatility spikes, or inactive staking heartbeats show up.
 
+Run modes:
+
+* No flag – dry-run only. Useful for smoke tests, CI, or config validation.
+
+* `--progressive-live` – starts dry, flips to live after `STAKEMASTER_PROGRESSIVE_CYCLES` healthy heartbeats (default 5). Controlled by `STAKEMASTER_PROGRESSIVE_ENABLE`.
+
+* `--enable-live` – live from the first cycle. Can be combined with `--progressive-live` when you need an explicit override after the warm-up.
+
 > Reference patterns: OpenAI Agents SDK treats agents as models with instructions, tools, guardrails, and **handoffs**.
 > Start simple with one agent and tools, then introduce handoffs or multi-agent graphs only when specialization is required. ([OpenAI GitHub][3])
 

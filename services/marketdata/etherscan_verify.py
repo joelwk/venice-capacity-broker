@@ -28,6 +28,13 @@ def _abi_bool32(v: bool) -> str:
     return ("0" * 63) + ("1" if v else "0")
 
 
+def _abi_uint24(value: int) -> str:
+    iv = int(value)
+    if iv < 0 or iv >= (1 << 24):
+        raise ValueError("uint24 value must be between 0 and 2**24-1")
+    return f'{iv:064x}'
+
+
 def _selector(sig: str) -> str:
     """Compute 4-byte function selector for a signature like 'getPair(address,address)'."""
     try:
@@ -42,6 +49,12 @@ def _selector(sig: str) -> str:
         if sig == "getPair(address,address,bool)":
             # Precomputed with keccak('getPair(address,address,bool)')[:4]
             return "0x8a6f75c0"
+        if sig == "getPool(address,address,uint24)":
+            return "0x1698ee82"
+        if sig == "slot0()":
+            return "0x3850c7bd"
+        if sig == "liquidity()":
+            return "0x1a686502"
         return "0x00000000"
 
 
@@ -133,6 +146,68 @@ def get_pair_aerodrome(factory_addr: str, token_a: str, token_b: str, stable: bo
     return "0x" + addr
 
 
+def get_pool_uniswap_v3(factory_addr: str, token_a: str, token_b: str, fee: int) -> Optional[str]:
+    """Return Uniswap v3 pool address for tokenA/tokenB/fee via factory getPool."""
+    if not factory_addr:
+        return None
+    try:
+        fee_int = int(fee)
+    except Exception:
+        return None
+    if fee_int < 0 or fee_int >= (1 << 24):
+        return None
+    sel = _selector('getPool(address,address,uint24)')
+    if sel == '0x00000000':
+        return None
+    a = token_a.strip() if token_a else ''
+    b = token_b.strip() if token_b else ''
+    if not a or not b:
+        return None
+    if a.lower().startswith('0x'):
+        a_norm = a.lower()
+    else:
+        a_norm = '0x' + a.lower()
+    if b.lower().startswith('0x'):
+        b_norm = b.lower()
+    else:
+        b_norm = '0x' + b.lower()
+    token0, token1 = (a_norm, b_norm) if int(a_norm, 16) < int(b_norm, 16) else (b_norm, a_norm)
+    data = sel + _pad_addr(token0) + _pad_addr(token1) + _abi_uint24(fee_int)
+    out = eth_call(factory_addr, data)
+    if not out or not isinstance(out, str) or len(out) < 42 or not out.startswith('0x'):
+        return None
+    addr = out[-40:]
+    if set(addr) == {'0'}:
+        return None
+    return '0x' + addr
+
+
+def get_uniswap_v3_liquidity(pool_addr: str) -> Optional[int]:
+    sel = _selector('liquidity()')
+    if sel == '0x00000000':
+        return None
+    out = eth_call(pool_addr, sel)
+    if not out or not isinstance(out, str) or len(out) < 66 or not out.startswith('0x'):
+        return None
+    try:
+        return int(out, 16)
+    except Exception:
+        return None
+
+
+def get_uniswap_v3_sqrt_price_x96(pool_addr: str) -> Optional[int]:
+    sel = _selector('slot0()')
+    if sel == '0x00000000':
+        return None
+    out = eth_call(pool_addr, sel)
+    if not out or not isinstance(out, str) or len(out) < 66 or not out.startswith('0x'):
+        return None
+    try:
+        return int(out[2:66], 16)
+    except Exception:
+        return None
+
+
 def get_reserves(pair_addr: str) -> Optional[Tuple[int, int, int]]:
     # getReserves() => (reserve0, reserve1, blockTimestampLast)
     out = eth_call(pair_addr, "0x0902f1ac")
@@ -175,6 +250,7 @@ def get_token1(pair_addr: str) -> Optional[str]:
 def _factories() -> Dict[str, str]:
     return {
         "uniswap_v2": _env("UNISWAP_V2_FACTORY_ADDRESS", "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6") or "",
+        "uniswap_v3": _env("UNISWAP_V3_FACTORY_ADDRESS", "0x33128a8fC17869897dce68Ed026d694621f6FDfD") or "",
         "aerodrome_vol": _env("AERODROME_FACTORY_VOLATILE", "0x420DD381b31aEf6683db6B902084cB0FFECe40Da") or "",
         "aerodrome_stable": _env("AERODROME_FACTORY_STABLE", "0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A") or "",
     }
@@ -188,13 +264,32 @@ def _name(addr: str, sym: Dict[str, str]) -> str:
     return addr
 
 
-def verify_trade_path(path: List[str]) -> Dict[str, Any]:
+def verify_trade_path(path: List[str], fees: Optional[List[Optional[int]]] = None) -> Dict[str, Any]:
     """Verify adjacent hops in TRADE_PATH via Etherscan proxy calls.
 
     Returns a structured dict suitable for pretty printing.
     """
     if len(path) < 2:
         raise ValueError("TRADE_PATH must include at least two addresses")
+
+    hop_count = len(path) - 1
+    if fees is None:
+        fee_list: List[Optional[int]] = [None] * hop_count
+    else:
+        fee_list = []
+        for item in list(fees):
+            if item is None:
+                fee_list.append(None)
+                continue
+            try:
+                fee_list.append(int(item))
+            except Exception:
+                fee_list.append(None)
+        if len(fee_list) < hop_count:
+            fee_list.extend([None] * (hop_count - len(fee_list)))
+        elif len(fee_list) > hop_count:
+            fee_list = fee_list[:hop_count]
+
     # Symbol map for nicer labels when possible
     sym = {
         "DIEM": _env("DIEM_TOKEN_ADDRESS", "") or "",
@@ -204,8 +299,9 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
     }
     fac = _factories()
     hops: List[Dict[str, Any]] = []
-    for i in range(len(path) - 1):
+    for i in range(hop_count):
         a, b = path[i], path[i + 1]
+        fee_val = fee_list[i] if i < len(fee_list) else None
         rec: Dict[str, Any] = {
             "from": _name(a, sym),
             "to": _name(b, sym),
@@ -213,13 +309,19 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
             "aerodrome_vol": {"pair": None, "reserves": None},
             "aerodrome_stable": {"pair": None, "reserves": None},
         }
+        if fee_val is not None:
+            rec["uniswap_v3"] = {
+                "pool": None,
+                "fee": fee_val,
+                "liquidity": None,
+                "sqrt_price_x96": None,
+            }
         # Uniswap V2
         try:
-            p = get_pair(fac["uniswap_v2"], a, b)
+            p = get_pair(fac.get("uniswap_v2", ""), a, b)
             if p:
                 rec["uniswap_v2"]["pair"] = p
                 rec["uniswap_v2"]["reserves"] = get_reserves(p)
-                # Include token addresses when available
                 try:
                     t0 = get_token0(p)
                     t1 = get_token1(p)
@@ -227,7 +329,6 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
                         rec["uniswap_v2"]["token0"] = t0
                     if t1:
                         rec["uniswap_v2"]["token1"] = t1
-                    # Update local liquidity cache (best-effort)
                     try:
                         _cache_update_tokens(a, b, p, rec["uniswap_v2"].get("reserves"), t0, t1)
                     except Exception:
@@ -238,10 +339,9 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
             pass
         # Aerodrome volatile
         try:
-            p = get_pair_aerodrome(fac["aerodrome_vol"], a, b, stable=False)
+            p = get_pair_aerodrome(fac.get("aerodrome_vol", ""), a, b, stable=False)
             if not p:
-                # Aerodrome allows reversed token order as well
-                p = get_pair_aerodrome(fac["aerodrome_vol"], b, a, stable=False)
+                p = get_pair_aerodrome(fac.get("aerodrome_vol", ""), b, a, stable=False)
             if p:
                 rec["aerodrome_vol"]["pair"] = p
                 rec["aerodrome_vol"]["reserves"] = get_reserves(p)
@@ -249,18 +349,46 @@ def verify_trade_path(path: List[str]) -> Dict[str, Any]:
             pass
         # Aerodrome stable
         try:
-            p = get_pair_aerodrome(fac["aerodrome_stable"], a, b, stable=True)
+            p = get_pair_aerodrome(fac.get("aerodrome_stable", ""), a, b, stable=True)
             if not p:
-                p = get_pair_aerodrome(fac["aerodrome_stable"], b, a, stable=True)
+                p = get_pair_aerodrome(fac.get("aerodrome_stable", ""), b, a, stable=True)
             if p:
                 rec["aerodrome_stable"]["pair"] = p
                 rec["aerodrome_stable"]["reserves"] = get_reserves(p)
         except Exception:
             pass
+        # Uniswap V3 pool lookup when fee tier provided
+        if fee_val is not None:
+            try:
+                pool = get_pool_uniswap_v3(fac.get("uniswap_v3", ""), a, b, fee_val)
+            except Exception:
+                pool = None
+            if pool:
+                info = rec.setdefault("uniswap_v3", {"fee": fee_val})
+                info["pool"] = pool
+                info["liquidity"] = get_uniswap_v3_liquidity(pool)
+                info["sqrt_price_x96"] = get_uniswap_v3_sqrt_price_x96(pool)
+                try:
+                    t0 = get_token0(pool)
+                    t1 = get_token1(pool)
+                    if t0:
+                        info["token0"] = t0
+                    if t1:
+                        info["token1"] = t1
+                    try:
+                        _cache_update_tokens(a, b, pool, None, t0, t1)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            else:
+                # ensure structure exists for reporting when no pool is found
+                rec.setdefault("uniswap_v3", {"fee": fee_val, "pool": None})
         hops.append(rec)
     return {
         "chainid": _etherscan_chain_id(),
         "path": path,
+        "fees": fee_list,
         "hops": hops,
     }
 
@@ -303,12 +431,12 @@ def _cache_update_tokens(a: str, b: str, pair: Optional[str], reserves: Optional
     except Exception:
         return
 
-def warm_cache_for_path(path: List[str]) -> Dict[str, Any]:
+def warm_cache_for_path(path: List[str], fees: Optional[List[Optional[int]]] = None) -> Dict[str, Any]:
     """Populate cache entries for the given path via verify_trade_path.
 
     Returns the same structure as verify_trade_path and updates cache.
     """
-    res = verify_trade_path(path)
+    res = verify_trade_path(path, fees)
     # verify_trade_path already updates cache for UniswapV2 entries; ensure Aerodrome too
     try:
         for hop in res.get("hops", []) or []:
@@ -363,29 +491,61 @@ def get_liquidity_cache_summary() -> Dict[str, Any]:
 def format_report(result: Dict[str, Any]) -> str:
     lines: List[str] = []
     cid = result.get("chainid")
-    path = result.get("path") or []
+    path_tokens = result.get("path") or []
     lines.append(f"DEX verify (chain {cid})")
-    lines.append("Path: " + " -> ".join(path))
+    lines.append("Path: " + " -> ".join(path_tokens))
+    fees = result.get("fees")
+    if isinstance(fees, list) and fees:
+        fee_render = ["-" if f in (None, "") else str(f) for f in fees]
+        lines.append("Fees: " + ", ".join(fee_render))
     lines.append("")
     for idx, hop in enumerate(result.get("hops", []), start=1):
         lines.append(f"Hop {idx}: {hop.get('from')} -> {hop.get('to')}")
-        for key, label in (
+        v3_info = hop.get("uniswap_v3") if isinstance(hop, dict) else None
+        if isinstance(v3_info, dict):
+            fee = v3_info.get("fee")
+            label = "UniswapV3"
+            if fee is not None:
+                label = f"{label}(fee={fee})"
+            pool = v3_info.get("pool")
+            if pool:
+                extras: List[str] = []
+                liq = v3_info.get("liquidity")
+                if isinstance(liq, int):
+                    extras.append(f"liq={liq}")
+                sqrt_px = v3_info.get("sqrt_price_x96")
+                if isinstance(sqrt_px, int):
+                    extras.append(f"sqrtPxX96={sqrt_px}")
+                t0 = v3_info.get("token0")
+                t1 = v3_info.get("token1")
+                if t0 and t1:
+                    extras.append(f"tokens={t0}/{t1}")
+                suffix = f" {', '.join(extras)}" if extras else ""
+                lines.append(f" - {label}: pool={pool}{suffix}")
+            else:
+                lines.append(f" - {label}: (no pool)")
+        for key, pretty in (
             ("uniswap_v2", "UniswapV2"),
             ("aerodrome_vol", "Aerodrome Volatile"),
             ("aerodrome_stable", "Aerodrome Stable"),
         ):
-            ent = hop.get(key) or {}
-            p = ent.get("pair")
-            rez = ent.get("reserves")
-            if p:
-                if isinstance(rez, tuple):
-                    lines.append(f" - {label}: pair={p} reserves={rez[0]},{rez[1]} ts={rez[2]}")
+            ent = hop.get(key) if isinstance(hop, dict) else None
+            pair = ent.get("pair") if isinstance(ent, dict) else None
+            reserves = ent.get("reserves") if isinstance(ent, dict) else None
+            if pair:
+                if isinstance(reserves, tuple):
+                    lines.append(f" - {pretty}: pair={pair} reserves={reserves[0]},{reserves[1]} ts={reserves[2]}")
                 else:
-                    lines.append(f" - {label}: pair={p} reserves=(n/a)")
+                    lines.append(f" - {pretty}: pair={pair} reserves=(n/a)")
             else:
-                lines.append(f" - {label}: (no pair)")
+                if isinstance(v3_info, dict) and v3_info.get("fee") is not None:
+                    lines.append(f" - {pretty}: (no pair; v3 route)")
+                else:
+                    lines.append(f" - {pretty}: (no pair)")
         lines.append("")
     return textwrap.dedent("\n".join(lines)).strip() + "\n"
+
+
 
 
 if __name__ == "__main__":

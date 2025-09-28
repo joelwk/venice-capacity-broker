@@ -15,6 +15,7 @@ The correct Aerodrome router address on Base is `0xcF77a3Ba9A5CA399B7c97c74d54e5
 ### Uniswap V3 Router + Quoter
 - **SwapRouter (exactIn/exactOut)**: `0xE592427A0AEce92De3Edee1F18E0157C05861564`
 - **QuoterV2 (read-only quotes)**: `0x61fFE014bA17989E743c5F6cB21bF9697530B21e`
+- **Factory**: `0x33128a8fC17869897dce68Ed026d694621f6FDfD`
 - **Common fee tiers**: 500 (stable), 1000, 3000, 10000 bps
 
 ### Important Token Addresses on Base

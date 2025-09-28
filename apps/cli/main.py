@@ -38,7 +38,7 @@ from scripts.wallet_cli import (
     cmd_sweep as wallet_cmd_sweep,
     cmd_transfer_cold as wallet_cmd_transfer_cold,
 )
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 import requests
 import re
 from datetime import datetime
@@ -1401,7 +1401,20 @@ def build_parser() -> argparse.ArgumentParser:
         if not tp:
             logger.warning("TRADE_PATH is not set; skipping DEX startup probe.")
             return
-        path = [p.strip() for p in tp.split(",") if p.strip()]
+        fee_tiers: Optional[List[Optional[int]]] = None
+        route_tokens: List[str]
+        try:
+            from services.marketdata.provider import MarketDataProvider
+
+            plan = MarketDataProvider._parse_route_spec(tp)
+            route_tokens = [str(tok) for tok in plan.tokens]
+            fee_tiers = [hop.fee for hop in plan.hops]
+        except Exception as parse_exc:  # noqa: BLE001
+            logger.debug("startup probe: falling back to comma-split TRADE_PATH (%s)", parse_exc)
+            route_tokens = [p.strip() for p in tp.split(",") if p.strip()]
+        if len(route_tokens) < 2:
+            logger.warning("Parsed TRADE_PATH contains fewer than two tokens; skipping DEX startup probe.")
+            return
         try:
             from services.marketdata.etherscan_verify import (
                 warm_cache_for_path,
@@ -1409,7 +1422,7 @@ def build_parser() -> argparse.ArgumentParser:
                 get_liquidity_cache_summary,
             )
 
-            res = warm_cache_for_path(path)
+            res = warm_cache_for_path(route_tokens, fee_tiers)
             report = format_report(res)
             print(report)
             # Print a compact cache summary with common labels when possible

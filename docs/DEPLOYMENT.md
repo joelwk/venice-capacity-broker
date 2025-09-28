@@ -47,7 +47,10 @@ Overview
 
 ### Live guardrails and tuning knobs
 
-- `STAKEMASTER_PROGRESSIVE_ENABLE` (default `true`) keeps the orchestrator in dry-run until it observes `STAKEMASTER_PROGRESSIVE_CYCLES` healthy passes (default `5`). Lower the cycle count when you want faster live cutovers during testing, or disable progressive mode entirely for manual control.
+- Dry-run baseline: run `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` with **no** live flags when you want a full simulation. Wallet calls remain read-only and DIEM transactions do not broadcast.
+- Progressive escalation: add `--progressive-live` (default controlled by `STAKEMASTER_PROGRESSIVE_ENABLE`, default `true`). The orchestrator stays dry-run until StakeMaster records `STAKEMASTER_PROGRESSIVE_CYCLES` consecutive healthy heartbeats (default `5`) and then flips to live automatically. Adjust the cycle count or disable the feature if you need faster cutovers.
+- Immediate live: add `--enable-live` when you want on-chain execution from the first cycle. You can combine it with `--progressive-live` to keep the warm-up logic while still allowing an explicit manual override.
+- Staking-only runs: `uv run python apps/cli/main.py run:stakemaster --enable-live [--progressive-live]` applies the same semantics but limited to StakeMaster.
 - ArbiDiem’s price health bypass is governed by `ARBI_PRICE_GUARD_STREAK_MAX`, `ARBI_PRICE_GUARD_MIN_STREAK`, `ARBI_PRICE_GUARD_MAX_DRIFT`, and `ARBI_PRICE_GUARD_MAX_VOL_BPS`. Increase the drift cap or streak thresholds when you consistently see clamps but still want to trade through mild deviations.
 - Reflex will halt the loop if no stake is active. Either stake the minimum (`VVV_ACTIVE_MIN_STAKE_UNITS`) before going live or set `REFLEX_ALLOW_INACTIVE_STAKE=true` **only** when you deliberately want to trade without an on-chain stake (e.g., CEX-managed collateral).
 - Leave `DIEM_FAKE_PRICE` and `DIEM_FAKE_MINT_RATE` empty for production. Any populated values switch the agents back into dry-run mode.
