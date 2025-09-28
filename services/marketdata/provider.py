@@ -1216,6 +1216,24 @@ class MarketDataProvider:
                     "path": plan.tokens,
                 }
 
+        # As a final fallback, try composable hop pricing for multi-hop routes
+        seg_price = self._price_via_segments(plan)
+        if self._valid_price(seg_price):
+            price = float(seg_price)
+            if dec_out >= dec_in:
+                amount_out_units = int(price * amount_in_units * (10 ** (dec_out - dec_in)))
+            else:
+                amount_out_units = int(price * amount_in_units / (10 ** (dec_in - dec_out)))
+            _record("segments", 0.0, "ok")
+            return {
+                "provider": "segments",
+                "amount_in": amount_in_units,
+                "amount_out": amount_out_units,
+                "decimals": {"in": dec_in, "out": dec_out},
+                "price": price,
+                "path": plan.tokens,
+            }
+
         _record("dex_final", 0.0, "error")
         raise RuntimeError("No quotes available for provided route")
 
@@ -2106,4 +2124,3 @@ class MarketDataProvider:
             return int(cap)
         except Exception:
             return None
-
