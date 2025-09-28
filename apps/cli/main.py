@@ -30,6 +30,14 @@ except Exception:
 from libs.telemetry.logger import get_logger
 from libs.venice_sdk.client import VeniceClient
 from services.venice_keys.manager import KeyManager
+from services.wallet.provider import WalletError
+from scripts.wallet_cli import (
+    cmd_address as wallet_cmd_address,
+    cmd_sign as wallet_cmd_sign,
+    cmd_send as wallet_cmd_send,
+    cmd_sweep as wallet_cmd_sweep,
+    cmd_transfer_cold as wallet_cmd_transfer_cold,
+)
 from typing import Any, Dict
 import requests
 import re
@@ -54,6 +62,17 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except Exception:
         return float(default)
+
+
+def _wrap_wallet_cmd(func):
+    def _runner(args: argparse.Namespace) -> None:
+        try:
+            func(args)
+        except WalletError as exc:
+            logger.error(f"wallet: {exc}")
+            raise SystemExit(2) from exc
+
+    return _runner
 
 
 def cmd_compact_counters(args: argparse.Namespace) -> None:
@@ -1018,6 +1037,51 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("venice:signals", help="Fetch Venice VVV metrics and DIEM balance/quota")
     sp.set_defaults(func=cmd_venice_signals)
+
+    sp = sub.add_parser("venice:wallet:address", help="Print the active hot wallet address")
+    sp.set_defaults(func=_wrap_wallet_cmd(wallet_cmd_address))
+
+    sp = sub.add_parser("venice:wallet:sign", help="Sign a plaintext message with the hot wallet")
+    sp.add_argument("message", help="Plaintext message to sign")
+    sp.set_defaults(func=_wrap_wallet_cmd(wallet_cmd_sign))
+
+    sp = sub.add_parser("venice:wallet:send", help="Send a value transfer or contract call via the hot wallet")
+    sp.add_argument("--to", required=True, help="Destination address")
+    sp.add_argument("--value", required=True, help="Value in wei (decimal or 0x hex)")
+    sp.add_argument("--data", default=None, help="Optional hex data payload")
+    sp.set_defaults(func=_wrap_wallet_cmd(wallet_cmd_send))
+
+    sp = sub.add_parser(
+        "venice:wallet:transfer-cold",
+        help="Bridge funds from the cold wallet into the hot wallet",
+    )
+    sp.add_argument("amount", help="Amount in wei to bridge into the hot wallet")
+    sp.add_argument(
+        "--cold-key",
+        dest="cold_key",
+        default=None,
+        help="Cold wallet private key override (uses COLD_WALLET_PRIVATE_KEY when omitted)",
+    )
+    sp.set_defaults(func=_wrap_wallet_cmd(wallet_cmd_transfer_cold))
+
+    sp = sub.add_parser(
+        "venice:wallet:sweep",
+        help="Sweep excess hot wallet balance back to the cold wallet",
+    )
+    sp.add_argument("min_balance", help="Minimum wei balance to retain in the hot wallet")
+    sp.add_argument(
+        "--cold-address",
+        dest="cold_address",
+        default=None,
+        help="Cold wallet address override (uses COLD_WALLET_ADDRESS when omitted)",
+    )
+    sp.add_argument(
+        "--gas-buffer",
+        dest="gas_buffer",
+        default=None,
+        help="Gas buffer in wei (defaults to WALLET_SWEEP_GAS_BUFFER_WEI or auto)",
+    )
+    sp.set_defaults(func=_wrap_wallet_cmd(wallet_cmd_sweep))
 
     # Friendly alias for the OpenAPI probe
     def cmd_venice_probe(args: argparse.Namespace) -> None:
