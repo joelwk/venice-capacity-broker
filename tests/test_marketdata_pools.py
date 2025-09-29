@@ -4,6 +4,13 @@ from datetime import datetime, timezone
 
 import pytest
 
+try:  # pragma: no cover - optional dependency in CI
+    import sqlmodel  # type: ignore  # noqa: F401
+except Exception:  # noqa: BLE001
+    sqlmodel = None  # type: ignore
+
+pytestmark = pytest.mark.skipif(sqlmodel is None, reason="sqlmodel not installed")
+
 from db.models import DexPool
 from db.session import create_db_and_tables, get_session
 from services.marketdata import pools
