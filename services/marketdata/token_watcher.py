@@ -330,6 +330,11 @@ def _price_via_dex(address: str) -> Optional[float]:
 
         md = MarketDataProvider()
 
+        tried: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+        def _route_key(route: RoutePlan) -> Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]:
+            return (tuple(route.tokens), tuple(h.fee for h in route.hops))
+
         def _route_from_tokens(tokens: List[str], fees: Optional[List[Optional[int]]] = None) -> Optional[RoutePlan]:
             try:
                 return make_route(tokens, fees)
@@ -338,6 +343,10 @@ def _price_via_dex(address: str) -> Optional[float]:
                 return None
 
         def _try_route(route: RoutePlan, label: str) -> Optional[Tuple[float, str]]:
+            key = _route_key(route)
+            if key in tried:
+                return None
+            tried.add(key)
             try:
                 best = md.best_price(route, amount_in_decimal=1.0)
                 price_val = float(best.get("price") or 0.0)
@@ -361,18 +370,27 @@ def _price_via_dex(address: str) -> Optional[float]:
 
         price: Optional[float] = None
 
-        # Prefer explicitly configured trade paths (TRADE_PATH, TRADE_PATH_2, ...)
         try:
             configured_routes = md._collect_trade_paths()
         except Exception:
             configured_routes = []
+        manual_keys = {_route_key(route) for route in configured_routes}
 
-        for route in configured_routes:
-            tokens = getattr(route, "tokens", [])
-            if tokens and tokens[0].lower() == address.lower():
-                cfg = _try_route(route, "configured")
-                if cfg is not None:
-                    price, _ = cfg
+        try:
+            candidate_routes = md.route_candidates(address, quote)
+        except Exception as exc:
+            _debug(f"route_candidates error: {type(exc).__name__}: {exc}")
+            candidate_routes = []
+
+        if price is None:
+            for route in candidate_routes:
+                tokens = getattr(route, "tokens", [])
+                if tokens and tokens[0].lower() != address.lower():
+                    continue
+                label = "configured" if _route_key(route) in manual_keys else "candidate"
+                cand = _try_route(route, label)
+                if cand is not None:
+                    price, _ = cand
                     break
 
         # Try direct pair using common fee tiers

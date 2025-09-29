@@ -931,6 +931,128 @@ def cmd_market_validate_trade_paths(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_market_pools_watch(args: argparse.Namespace) -> None:
+    from services.marketdata import pools
+
+    if args.interval is not None:
+        os.environ["POOL_WATCH_INTERVAL_SECONDS"] = str(int(args.interval))
+    if args.backfill is not None:
+        os.environ["POOL_WATCH_BACKFILL_BLOCKS"] = str(int(args.backfill))
+    if args.span is not None:
+        os.environ["POOL_WATCH_BLOCK_SPAN"] = str(int(args.span))
+    if args.once:
+        os.environ["POOL_WATCH_ONCE"] = "true"
+    try:
+        pools.run_pool_watch_loop()
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"pool watcher failed: {exc}")
+        raise SystemExit(1) from exc
+
+
+def cmd_market_pools_list(args: argparse.Namespace) -> None:
+    from services.marketdata import pools
+
+    try:
+        rows = pools.list_pools(factory=args.factory, token=args.token, limit=args.limit)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"list pools failed: {exc}")
+        raise SystemExit(1) from exc
+
+    if args.json:
+        import json as _json
+
+        data = []
+        for row in rows:
+            data.append(
+                {
+                    "pool": row.pool_address,
+                    "factory": row.factory_type,
+                    "factory_address": row.factory_address,
+                    "token0": row.token0,
+                    "token1": row.token1,
+                    "fee": row.fee,
+                    "stable": row.stable,
+                    "block": row.block_number,
+                    "tx": row.tx_hash,
+                    "discovered_at": row.discovered_at.isoformat() if row.discovered_at else None,
+                }
+            )
+        print(_json.dumps(data, separators=(",", ":")))
+        return
+
+    if not rows:
+        logger.info("no pools discovered yet")
+        return
+
+    for row in rows:
+        extras: List[str] = []
+        if row.fee is not None:
+            extras.append(f"fee={row.fee}")
+        if row.stable is not None:
+            extras.append(f"stable={row.stable}")
+        if row.tick_spacing is not None:
+            extras.append(f"tick_spacing={row.tick_spacing}")
+        if row.block_number is not None:
+            extras.append(f"block={row.block_number}")
+        if row.tx_hash:
+            extras.append(f"tx={row.tx_hash}")
+        label = " ".join(extras) if extras else ""
+        logger.info(
+            "%s %s->%s factory=%s %s",
+            row.pool_address,
+            row.token0,
+            row.token1,
+            row.factory_type,
+            label,
+        )
+
+
+def cmd_market_routes_suggest(args: argparse.Namespace) -> None:
+    from services.marketdata import pools
+    from services.marketdata.provider import MarketDataProvider
+
+    md = MarketDataProvider()
+
+    def _coerce(value: str) -> str:
+        raw = value.strip()
+        if raw.lower().startswith("0x"):
+            return raw
+        addr = md._address_for_symbol(raw.upper())  # type: ignore[attr-defined]
+        if not addr:
+            raise SystemExit(f"Unknown token or address: {raw}")
+        return addr
+
+    base_addr = _coerce(args.base)
+    quote_addr = _coerce(args.quote)
+    limit = int(args.limit) if args.limit else 8
+
+    try:
+        routes = md.route_candidates(base_addr, quote_addr)[:limit]
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"route suggestion failed: {exc}")
+        raise SystemExit(1) from exc
+
+    if args.json:
+        import json as _json
+
+        print(_json.dumps(pools.routes_as_dict(routes), separators=(",", ":")))
+        return
+
+    if not routes:
+        logger.info("no discovered routes between %s and %s", base_addr, quote_addr)
+        return
+
+    for idx, route in enumerate(routes[:limit], start=1):
+        tokens = []
+        for tok in route.tokens:
+            tokens.append(md._norm_symbol_label(tok))
+        fee_info = [hop.fee for hop in route.hops if hop.fee is not None]
+        if fee_info:
+            logger.info("route[%s]: %s (fees=%s)", idx, " -> ".join(tokens), fee_info)
+        else:
+            logger.info("route[%s]: %s", idx, " -> ".join(tokens))
+
+
 def cmd_diem_mint(args: argparse.Namespace) -> None:
     """Mint DIEM via DIEMService with optional dry-run and idempotency."""
     from services.diem.client import DIEMService
@@ -1181,6 +1303,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--amount", required=True, type=int, help="Input amount (smallest units) to sell")
     sp.set_defaults(func=cmd_quotes_compare)
+
+    sp = sub.add_parser("market:pools:watch", help="Watch configured factories for new pools and persist catalog")
+    sp.add_argument("--interval", type=int, default=None, help="Override POOL_WATCH_INTERVAL_SECONDS")
+    sp.add_argument("--backfill", type=int, default=None, help="Override POOL_WATCH_BACKFILL_BLOCKS")
+    sp.add_argument("--span", type=int, default=None, help="Override POOL_WATCH_BLOCK_SPAN")
+    sp.add_argument("--once", action="store_true", default=False, help="Run a single synchronization pass")
+    sp.set_defaults(func=cmd_market_pools_watch)
+
+    sp = sub.add_parser("market:pools:list", help="List pools discovered via factory watcher")
+    sp.add_argument("--factory", required=False, help="Filter by factory type or address")
+    sp.add_argument("--token", required=False, help="Filter by token address")
+    sp.add_argument("--limit", type=int, default=50, help="Max pools to show")
+    sp.add_argument("--json", action="store_true", default=False, help="Emit JSON output")
+    sp.set_defaults(func=cmd_market_pools_list)
+
+    sp = sub.add_parser("market:routes:suggest", help="Suggest routes between two tokens using pool catalog")
+    sp.add_argument("--base", required=True, help="Base token symbol or address")
+    sp.add_argument("--quote", required=True, help="Quote token symbol or address")
+    sp.add_argument("--limit", type=int, default=8, help="Max routes to display")
+    sp.add_argument("--json", action="store_true", default=False, help="Emit JSON output")
+    sp.set_defaults(func=cmd_market_routes_suggest)
 
     sp = sub.add_parser("market:best-price", help="Compute best normalized price for TRADE_PATH with decimal input amount")
     sp.add_argument("--amount", required=False, default=1.0, help="Decimal amount of input token")

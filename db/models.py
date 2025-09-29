@@ -206,6 +206,43 @@ class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
     price_usd: float
 
 
+class DexFactoryCursor(SQLModel, table=True):  # type: ignore[call-arg]
+    """Track last processed block for each factory when monitoring PairCreated events."""
+
+    factory_address: str = Field(primary_key=True)
+    factory_type: str = Field(default="uniswap_v2")
+    chain_id: Optional[int] = None
+    last_block: Optional[int] = None
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+
+class DexPool(SQLModel, table=True):  # type: ignore[call-arg]
+    """Light catalog of discovered pools/pairs for automatic route synthesis."""
+
+    pool_address: str = Field(primary_key=True)
+    factory_address: str = Field(index=True)
+    factory_type: str = Field(default="uniswap_v2", index=True)
+    chain_id: Optional[int] = Field(default=None, index=True)
+    token0: str = Field(index=True)
+    token1: str = Field(index=True)
+    fee: Optional[int] = Field(default=None)
+    stable: Optional[bool] = Field(default=None)
+    tick_spacing: Optional[int] = Field(default=None)
+    block_number: Optional[int] = None
+    tx_hash: Optional[str] = Field(default=None, index=True)
+    discovered_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    if _HAS_SA:
+        reserve0: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+        reserve1: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+        liquidity: Optional[int] = Field(sa_column=sa.Column(sa.Numeric(78, 0), nullable=True))  # type: ignore[call-arg]
+    else:
+        reserve0: Optional[int] = None
+        reserve1: Optional[int] = None
+        liquidity: Optional[int] = None
+
+
 # --- Bids (EIP-712 purchase intents) ---
 class Bid(SQLModel, table=True):  # type: ignore[call-arg]
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -979,6 +979,79 @@ class MarketDataProvider:
                     continue
         return paths
 
+    def route_candidates(self, token_in: str, token_out: str) -> List[RoutePlan]:
+        src = (token_in or "").strip()
+        dst = (token_out or "").strip()
+        if not src or not dst:
+            return []
+        src_l = src.lower()
+        dst_l = dst.lower()
+        routes: List[RoutePlan] = []
+        seen: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+        def _key(route: RoutePlan) -> Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]:
+            return (tuple(route.tokens), tuple(hop.fee for hop in route.hops))
+
+        def _add(route: RoutePlan) -> None:
+            key = _key(route)
+            if key in seen:
+                return
+            seen.add(key)
+            routes.append(route)
+
+        try:
+            manual = self._collect_trade_paths()
+        except Exception:
+            manual = []
+
+        for plan in manual:
+            tokens = list(getattr(plan, "tokens", []))
+            if not tokens:
+                continue
+            if tokens[0].lower() == src_l and tokens[-1].lower() == dst_l:
+                _add(plan)
+
+        try:
+            from services.marketdata import pools as _pools  # lazy import
+
+            for plan in _pools.suggest_routes_for_tokens(src, dst):
+                _add(plan)
+        except Exception as exc:  # noqa: BLE001
+            if _debug_sanity_enabled():
+                _logger.debug("pool route suggestion failed: %s", exc)
+
+        try:
+            _add(make_route([src, dst]))
+        except Exception:
+            pass
+
+        bridge = None
+        try:
+            bridge = self._bridge_token_address()
+        except Exception:
+            bridge = None
+        if bridge:
+            bridge_l = bridge.lower()
+            if bridge_l not in {src_l, dst_l}:
+                try:
+                    _add(make_route([src, bridge, dst]))
+                except Exception:
+                    pass
+
+        try:
+            vvv_addr = self._address_for_symbol("VVV")
+        except Exception:
+            vvv_addr = None
+        if vvv_addr:
+            vvv_l = vvv_addr.lower()
+            if vvv_l not in {src_l, dst_l}:
+                try:
+                    _add(make_route([src, vvv_addr, dst]))
+                except Exception:
+                    pass
+
+        return routes
+
     def _try_path_direct(self, route: RoutePlan) -> Optional[Dict[str, Any]]:
         try:
             self._stat_increment("dex_calls")
@@ -998,39 +1071,74 @@ class MarketDataProvider:
         if token_in.lower() == token_out.lower():
             return 1.0
 
-        attempts: List[Optional[float]] = []
-        # Direct aggregator quote (best effort)
-        try:
-            self._stat_increment("dex_calls")
-            bp = self.best_price(make_route([token_in, token_out]), amount_in_decimal=1.0)
-            attempts.append(float(bp.get("price") or 0.0))
-        except Exception:
-            attempts.append(None)
+        attempted: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
 
-        # Scan smaller sizes when pools are thin
-        try:
-            attempts.append(self._best_price_scan(make_route([token_in, token_out]), start=1.0, min_amount=1e-12, factor=10.0))
-        except Exception:
-            attempts.append(None)
+        def _route_key(route: RoutePlan) -> Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]:
+            return (tuple(route.tokens), tuple(hop.fee for hop in route.hops))
 
-        # Mid-price from reserves
-        attempts.append(self._mid_price_from_reserves(token_in, token_out))
-
-        for price in attempts:
-            if self._valid_price(price):
-                return float(price)
-
-        # Bridge via WETH when direct liquidity is missing
-        bridge = self._weth_address()
-        if bridge and bridge.lower() not in {token_in.lower(), token_out.lower()}:
+        # Try discovered/manual routes first
+        for route in self.route_candidates(token_in, token_out):
+            key = _route_key(route)
+            if key in attempted:
+                continue
+            attempted.add(key)
             try:
                 self._stat_increment("dex_calls")
-                bp_bridge = self.best_price(make_route([token_in, bridge, token_out]), amount_in_decimal=1.0)
-                price_bridge = float(bp_bridge.get("price") or 0.0)
-                if self._valid_price(price_bridge):
-                    return price_bridge
+                quote = self.best_price(route, amount_in_decimal=1.0)
+                price_val = float(quote.get("price") or 0.0) if quote else 0.0
+                if self._valid_price(price_val):
+                    return price_val
+            except Exception:
+                continue
+
+        direct_route: Optional[RoutePlan] = None
+        try:
+            direct_route = make_route([token_in, token_out])
+        except Exception:
+            direct_route = None
+
+        if direct_route is not None:
+            direct_key = _route_key(direct_route)
+            if direct_key not in attempted:
+                attempted.add(direct_key)
+                try:
+                    self._stat_increment("dex_calls")
+                    quote = self.best_price(direct_route, amount_in_decimal=1.0)
+                    price_val = float(quote.get("price") or 0.0) if quote else 0.0
+                    if self._valid_price(price_val):
+                        return price_val
+                except Exception:
+                    pass
+            try:
+                scan_price = self._best_price_scan(direct_route, start=1.0, min_amount=1e-12, factor=10.0)
+                if self._valid_price(scan_price):
+                    return float(scan_price)
             except Exception:
                 pass
+
+        mid_price = self._mid_price_from_reserves(token_in, token_out)
+        if self._valid_price(mid_price):
+            return float(mid_price)
+
+        bridge = self._weth_address()
+        if bridge and bridge.lower() not in {token_in.lower(), token_out.lower()}:
+            bridge_route: Optional[RoutePlan] = None
+            try:
+                bridge_route = make_route([token_in, bridge, token_out])
+            except Exception:
+                bridge_route = None
+            if bridge_route is not None:
+                bridge_key = _route_key(bridge_route)
+                if bridge_key not in attempted:
+                    attempted.add(bridge_key)
+                    try:
+                        self._stat_increment("dex_calls")
+                        quote = self.best_price(bridge_route, amount_in_decimal=1.0)
+                        price_val = float(quote.get("price") or 0.0) if quote else 0.0
+                        if self._valid_price(price_val):
+                            return price_val
+                    except Exception:
+                        pass
             first = self._hop_price(token_in, bridge, allow_inverse=False)
             second = self._hop_price(bridge, token_out, allow_inverse=False) if self._valid_price(first) else None
             if self._valid_price(first) and self._valid_price(second):
