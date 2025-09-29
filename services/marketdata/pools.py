@@ -7,7 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from hexbytes import HexBytes  # type: ignore
+try:  # pragma: no cover - optional dependency
+    from hexbytes import HexBytes  # type: ignore
+except Exception:  # noqa: BLE001
+    HexBytes = bytes  # type: ignore[misc,assignment]
 
 from db.models import DexFactoryCursor, DexPool
 from db.session import create_db_and_tables, get_session
@@ -585,4 +588,3 @@ def routes_as_dict(routes: Sequence[RoutePlan]) -> List[Dict[str, object]]:
             }
         )
     return out
-
