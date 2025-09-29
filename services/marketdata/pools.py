@@ -368,22 +368,48 @@ def _sync_factory(w3, spec: FactorySpec, chain_id: Optional[int], *, backfill: i
             return new_pools, scanned_blocks
 
         current = start_block
-        chunk = max(1, block_span)
+        chunk_limit_env = os.getenv("POOL_WATCH_BLOCK_CHUNK_MAX")
+        try:
+            chunk_limit = int(str(chunk_limit_env)) if chunk_limit_env not in (None, "") else 900
+        except Exception:
+            chunk_limit = 900
+        chunk_limit = max(1, min(chunk_limit, 1000))
+
+        chunk = max(1, min(block_span, chunk_limit))
         while current <= latest:
             end = min(current + chunk - 1, latest)
             try:
                 logs = _fetch_logs(w3, spec, current, end)
             except ValueError as exc:  # noqa: PERF203
-                if "block range" in str(exc).lower() or "more than" in str(exc).lower():
-                    if chunk <= 50:
-                        logger.warning("get_logs range too large for %s: %s", spec.name, exc)
-                        break
-                    chunk = max(50, chunk // 2)
-                    logger.debug("reducing block span for %s to %s", spec.name, chunk)
-                    continue
+                err_text = str(exc).lower()
+                if any(token in err_text for token in ["1000", "limit the query", "block range", "too large", "-32005"]):
+                    if chunk > 1:
+                        new_chunk = max(1, min(chunk // 2 if chunk > 2 else chunk - 1, chunk_limit))
+                        if new_chunk < 1:
+                            new_chunk = 1
+                        if new_chunk == chunk:
+                            new_chunk = max(1, min(chunk_limit, 100))
+                        if new_chunk < chunk:
+                            chunk = new_chunk
+                            logger.debug("reducing block span for %s to %s due to RPC limit", spec.name, chunk)
+                            continue
+                    logger.warning("get_logs range still too large for %s: %s", spec.name, exc)
+                    break
                 logger.warning("get_logs failed for %s: %s", spec.name, exc)
                 break
             except Exception as exc:  # noqa: BLE001
+                err_text = str(exc).lower()
+                if any(token in err_text for token in ["1000", "limit the query", "-32005"]):
+                    if chunk > 1:
+                        new_chunk = max(1, min(chunk // 2 if chunk > 2 else chunk - 1, chunk_limit))
+                        if new_chunk < 1:
+                            new_chunk = 1
+                        if new_chunk == chunk:
+                            new_chunk = max(1, min(chunk_limit, 100))
+                        if new_chunk < chunk:
+                            chunk = new_chunk
+                            logger.debug("reducing block span for %s to %s due to RPC throttling", spec.name, chunk)
+                            continue
                 logger.warning("get_logs error for %s: %s", spec.name, exc)
                 break
 
@@ -403,6 +429,8 @@ def _sync_factory(w3, spec: FactorySpec, chain_id: Optional[int], *, backfill: i
             session.add(cursor)
             session.commit()
             current = end + 1
+            if chunk > chunk_limit:
+                chunk = chunk_limit
     return new_pools, scanned_blocks
 
 
