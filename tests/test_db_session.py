@@ -12,11 +12,15 @@ def _spy_create_engine(calls):
     return _inner
 
 
-def test_get_engine_placeholder_url_short_circuits(monkeypatch, tmp_path):
-    placeholder_url = "postgresql://user:password@host:5432/database"
+@pytest.mark.parametrize("placeholder_url", [
+    "postgresql://user:password@host:5432/database",
+    "postgresql://***host:5432/database",
+])
+def test_get_engine_placeholder_url_short_circuits(monkeypatch, tmp_path, placeholder_url):
     sqlite_url = f"sqlite:///{(tmp_path / 'fallback.db')}"
     monkeypatch.setenv("SQL_DATABASE_URL", placeholder_url)
     monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
+    monkeypatch.setattr(db_session, "_looks_like_placeholder", lambda _: True)
 
     calls = []
     monkeypatch.setattr(db_session, "create_engine", _spy_create_engine(calls))
@@ -36,6 +40,7 @@ def test_get_engine_falls_back_on_missing_driver(monkeypatch, tmp_path):
     sqlite_url = f"sqlite:///{(tmp_path / 'fallback.db')}"
     monkeypatch.setenv("SQL_DATABASE_URL", postgres_url)
     monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
+    monkeypatch.setattr(db_session, "_looks_like_placeholder", lambda _: False)
 
     calls = []
 
@@ -56,3 +61,16 @@ def test_get_engine_falls_back_on_missing_driver(monkeypatch, tmp_path):
     assert calls[1]["target_url"] == sqlite_url
     kwargs = calls[1]["kwargs"]
     assert kwargs["connect_args"]["check_same_thread"] is False
+
+
+@pytest.mark.parametrize("candidate", [
+    "postgresql://user:password@host:5432/database",
+    "postgresql://***host:5432/database",
+    "postgresql://example.com/database",
+])
+def test_placeholder_detection_variants(candidate):
+    assert db_session._looks_like_placeholder(candidate)
+
+
+def test_placeholder_detection_real_url():
+    assert not db_session._looks_like_placeholder("postgresql://mainnet.base.org:5432/app?sslmode=require")

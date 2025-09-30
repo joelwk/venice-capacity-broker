@@ -65,7 +65,16 @@ def _fallback_sqlite_url() -> str:
 
 def _looks_like_placeholder(url: str) -> bool:
     sample = url.lower()
-    return ("user:password@host" in sample and "/database" in sample) or "@host:" in sample
+    tokens = ("user:password@host", "user:pass@host", "user:pass@", "example.com", "placeholder", "changeme")
+    if any(tok in sample for tok in tokens):
+        return True
+    if '***' in sample:
+        return True
+    if '@host:' in sample or '://host:' in sample:
+        return True
+    if sample.endswith('/database') and ('host' in sample or 'placeholder' in sample or 'example' in sample):
+        return True
+    return False
 
 
 
