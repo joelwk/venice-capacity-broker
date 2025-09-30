@@ -128,7 +128,15 @@ class StakeMaster:
             claim_info["reason"] = "dry_run"
 
         heartbeat_forced = not bool(status.get("active_staker"))
-        heartbeat_sent = self._ensure_heartbeat(force=heartbeat_forced)
+        heartbeat_sent, heartbeat_error = self._ensure_heartbeat(force=heartbeat_forced)
+        if heartbeat_forced and not heartbeat_sent and heartbeat_error:
+            try:
+                logger.warning(
+                    "Heartbeat forced but not sent",
+                    extra={"reason": heartbeat_error},
+                )
+            except Exception:
+                pass
 
         return {
             "status": "ok",
@@ -139,6 +147,7 @@ class StakeMaster:
             "heartbeat": {
                 "sent": heartbeat_sent,
                 "forced": heartbeat_forced,
+                "error": heartbeat_error,
             },
         }
 
@@ -190,13 +199,13 @@ class StakeMaster:
             last = 0.0
         return (now - last) >= interval_hours * 3600.0
 
-    def _ensure_heartbeat(self, *, force: bool = False) -> bool:
+    def _ensure_heartbeat(self, *, force: bool = False) -> tuple[bool, Optional[str]]:
         now = time.time()
         if not self._should_send_heartbeat(now, force=force):
-            return False
+            return False, None
         client = self._venice()
         if client is None:
-            return False
+            return False, "venice_client_unavailable"
         model = os.getenv("VENICE_HEARTBEAT_MODEL", os.getenv("VENICE_DEFAULT_MODEL", "venice-pro"))
         prompt = os.getenv(
             "STAKEMASTER_HEARTBEAT_PROMPT",
@@ -211,7 +220,7 @@ class StakeMaster:
         except Exception as exc:  # noqa: BLE001
             logger.debug(f"Heartbeat request failed: {exc}")
             _emit_event("staking.heartbeat", {"status": "error", "error": str(exc)})
-            return False
+            return False, f"request_failed:{type(exc).__name__}"
 
         store = self._kv()
         if store is not None:
@@ -227,4 +236,4 @@ class StakeMaster:
                 "response_id": response.get("id") if isinstance(response, dict) else None,
             },
         )
-        return True
+        return True, None

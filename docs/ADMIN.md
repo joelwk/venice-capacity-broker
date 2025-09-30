@@ -21,7 +21,7 @@ Overview
 
   - `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` exercises the combined StakeMaster → ArbiDiem → CapacityBroker loop (add `--enable-live` for on-chain mode).
   - `uv run python apps/cli/main.py run:stakemaster --enable-live` focuses solely on the heartbeat described in `agents/stake_master/agent.py:26`.
-  - `make watch-tokens` runs `services/marketdata/token_watcher.py:654` so the Buyer page can show up-to-date supply metrics.
+  - `make watch-tokens` runs `services/marketdata/token_watcher.py:654` so the Buyer page can show up-to-date supply metrics. Pair it with `uv run python apps/cli/main.py market:pools:watch --once` when you need to refresh the DEX pool catalog powering automatic route selection.
 
 - When Venice connectivity becomes unstable, open the Venice card and run the inline probe or call `uv run python apps/cli/main.py venice:signals`.
 

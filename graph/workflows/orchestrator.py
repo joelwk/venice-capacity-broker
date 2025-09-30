@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
@@ -17,6 +18,16 @@ except Exception:  # noqa: BLE001
         return
 
 logger = get_logger("workflow.orchestrator")
+
+
+def _is_invalid_price(value: object) -> bool:
+    try:
+        if value is None:
+            return True
+        val = float(value)
+    except (TypeError, ValueError):
+        return True
+    return not math.isfinite(val) or val <= 0.0
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -478,11 +489,29 @@ class SingleLoopOrchestrator:
         stake = cycle_record.get("stake") if isinstance(cycle_record, dict) else None
         heartbeat_info = (stake or {}).get("heartbeat") if isinstance(stake, dict) else None
         heartbeat_sent = bool((heartbeat_info or {}).get("sent"))
+        heartbeat_error = (heartbeat_info or {}).get("error") if isinstance(heartbeat_info, dict) else None
+        forced_heartbeat = bool((heartbeat_info or {}).get("forced"))
         status_ok = (stake or {}).get("status") == "ok"
-        if heartbeat_sent and status_ok:
+        allow_missing = _env_flag("STAKEMASTER_PROGRESSIVE_ALLOW_NO_HEARTBEAT", False)
+        tolerate_error = heartbeat_error in {"venice_client_unavailable"}
+        treat_as_success = heartbeat_sent and status_ok
+        if not treat_as_success and status_ok and forced_heartbeat and allow_missing and tolerate_error:
+            treat_as_success = True
+            try:
+                logger.info(
+                    "progressive heartbeat bypass",
+                    extra={"reason": heartbeat_error, "counter": int(state.get("counter", 0)) + 1},
+                )
+            except Exception:
+                pass
+        if treat_as_success:
             state["counter"] = int(state.get("counter", 0)) + 1
         else:
             state["counter"] = 0
+        if heartbeat_error:
+            state["last_heartbeat_error"] = heartbeat_error
+        elif "last_heartbeat_error" in state:
+            state.pop("last_heartbeat_error", None)
         threshold = max(1, int(state.get("threshold") or self._progressive_threshold()))
         if not state.get("live") and state.get("counter", 0) >= threshold:
             state["live"] = True
@@ -584,6 +613,12 @@ class SingleLoopOrchestrator:
                 px = float(os.getenv("DIEM_FAKE_PRICE") or os.getenv("TEST_DIEM_PRICE") or 1.0)
             except Exception:
                 px = 1.0
+            if _is_invalid_price(px):
+                try:
+                    logger.warning("Dry-run DIEM price invalid; falling back to 1.0", extra={"value": px})
+                except Exception:
+                    pass
+                px = 1.0
             prices = {"DIEM": px, "VVV": 0.0, "USDC": 1.0}
             try:
                 fake_rate = os.getenv("DIEM_FAKE_MINT_RATE") or os.getenv("DIEM_MINT_RATE")
@@ -611,6 +646,15 @@ class SingleLoopOrchestrator:
         else:
             prices = self.market.prices(["DIEM", "VVV", "USDC"]) or {}
             px = float(prices.get("DIEM", 1.0))
+            if _is_invalid_price(px) and not skip_due_to_price:
+                skip_due_to_price = True
+                price_guard_why = {"decision": "hold", "reason": "price_missing", "details": {"price": px}}
+                price_health = {"valid": False, "reason": "missing_price", "source": "missing", "price": px}
+                try:
+                    logger.warning("Skipping ArbiDiem: DIEM price missing or invalid", extra={"price": px, "prices": prices})
+                except Exception:
+                    pass
+                px = 0.0
             health_callable = getattr(self.market, "price_health", None)
             if callable(health_callable):
                 try:

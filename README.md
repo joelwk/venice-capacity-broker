@@ -56,7 +56,7 @@ Every decision stores rationale so you can inspect `self._last_rationale` in tel
 
 CapacityBroker reuses `services/venice_keys/manager.py` to mint scoped Venice sub-keys for tenants through the Broker API.
 
-Running `make watch-tokens` starts `services/marketdata/token_watcher.py` to persist Base token metrics and route discovery data.
+Running `make watch-tokens` starts `services/marketdata/token_watcher.py` to persist Base token metrics. Use `uv run python apps/cli/main.py market:pools:watch --once` to backfill the DEX pool catalog that powers automatic route discovery.
 
 LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallback remains the default path when LangGraph is not installed.
 
@@ -82,24 +82,28 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
    `make run-broker` wraps the same command.
 
-5. Warm market data and confirm router wiring.
+5. Backfill the DEX pool catalog once per deployment.
 
-   Execute `uv run python apps/cli/main.py startup:probe` and review the printed reserves and cached paths.
+   Execute `uv run python apps/cli/main.py market:pools:watch --once`. Set `POOL_WATCH_BACKFILL_BLOCKS` when you want to limit the historical window (default `5000`). The command creates the `dexfactorycursor` / `dexpool` tables automatically after the migration and stops once it reaches the chain tip.
 
-6. Seed an operator tenant and confirm limiter wiring.
+6. Warm market data and confirm router wiring.
+
+   Execute `uv run python apps/cli/main.py startup:probe` and review the printed reserves and cached paths. Follow up with `uv run python apps/cli/main.py market:routes:suggest --base DIEM --quote USDC` (or any other pair) to confirm the newly discovered pools produce routes without manual `TRADE_PATH` overrides.
+
+7. Seed an operator tenant and confirm limiter wiring.
 
    Use `make rotate-probe TENANT=t1` to rotate or seed a tenant, send the admin chat probe, and compact counters.
 
-7. Start the automation supervisor so the helpers boot with the API.
+8. Start the automation supervisor so the helpers boot with the API.
 
    Run `make run-stack` to launch the Broker API, the single-loop agent orchestrator (dry-run by default), and the token watcher in one terminal.
 
-   Set `AUTOSTART_ORCHESTRATOR_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`. The legacy standalone StakeMaster loop is still available behind `AUTOSTART_STAKEMASTER=1` for targeted debugging.
+   Set `AUTOSTART_ORCHESTRATOR_LIVE=1` before the command when you are ready for on-chain staking or DIEM trades, and flip individual helpers off by exporting `AUTOSTART_<NAME>=0`. The token watcher starts only when `ETHERSCAN_API_KEY` or `BASESCAN_API_KEY` is present unless you set `AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1`. The pool watcher is a separate CLI (`uv run python apps/cli/main.py market:pools:watch --once`) that you can run on demand or schedule with cron; set `POOL_WATCH_ONCE=1` or pass `--once` when you only need a single sweep. The legacy standalone StakeMaster loop is still available behind `AUTOSTART_STAKEMASTER=1` for targeted debugging.
 
    Keep `make run-broker` around when you only want the API without the helpers.
    On Replit, the default **Stack (dry-run)** runnable in `.replit` invokes `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`; switch to **Stack (live)** (or export `RUN_STACK_MODE=live`) when you are ready for on-chain activity, or trigger the **Run Venice Stack (dry)** / **Run Venice Stack (live)** workflows from the Workflows panel.
 
-8. Verify health before moving to live execution.
+9. Verify health before moving to live execution.
 
    `curl http://127.0.0.1:8000/health`, `make env-status`, and the `/v1/env` endpoint should reflect ready status, live Venice signals, and any enabled features.
 

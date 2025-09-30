@@ -25,15 +25,19 @@ Overview
 
    Keep an eye on `/health`, `/metrics`, and `/v1/env` while the service warms up.
 
-5. Warm the DEX discovery cache and verify the configured trade path.
+5. Backfill the DEX pool catalog once so auto-discovery has historical coverage.
 
-   Invoke `uv run python apps/cli/main.py startup:probe` and review the printed hops, reserves, and cached entries.
+   Run `uv run python apps/cli/main.py market:pools:watch --once`. Override `POOL_WATCH_BACKFILL_BLOCKS` or `POOL_WATCH_BLOCK_SPAN` when you need to tune the range per environment. The command exits after reaching the latest block and stores the last processed height in `dexfactorycursor`.
 
-6. Seed an operator tenant and confirm limiter buckets.
+6. Warm the DEX discovery cache and verify the configured trade path.
+
+   Invoke `uv run python apps/cli/main.py startup:probe` and review the printed hops, reserves, and cached entries. Then run `uv run python apps/cli/main.py market:routes:suggest --base DIEM --quote USDC` (or any other pair) to make sure the catalog produces viable routes before handing control to ArbiDiem.
+
+7. Seed an operator tenant and confirm limiter buckets.
 
    `make rotate-probe TENANT=t1` rotates or creates the tenant, sends the admin chat probe, compacts counters, and prints the latest window.
 
-7. Start the automation supervisor so helpers stay up with the API.
+8. Start the automation supervisor so helpers stay up with the API.
 
    Run `make run-stack` to boot the Broker API, the single-loop agent orchestrator (dry-run by default), and the token watcher in one command.
 
@@ -41,7 +45,7 @@ Overview
 
    Keep `make run-broker` around for API-only sessions.
 
-8. When you are ready for on-chain transactions, switch the orchestrator to live mode and remove the dry-run guard on DIEM CLI verbs.
+9. When you are ready for on-chain transactions, switch the orchestrator to live mode and remove the dry-run guard on DIEM CLI verbs.
 
    Always run one dry-run cycle first, then monitor `vvv_agent_decisions_total` and `staking.heartbeat` events.
 
@@ -71,6 +75,7 @@ Overview
    - Agent loop via `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` (append `--enable-live` for on-chain).
    - StakeMaster heartbeat only via `uv run python apps/cli/main.py run:stakemaster --enable-live`.
    - Token watcher via `make watch-tokens` or `make watch-tokens-once` for a single refresh.
+   - Pool watcher via `uv run python apps/cli/main.py market:pools:watch --once` (set `POOL_WATCH_BACKFILL_BLOCKS` as needed) so route discovery stays current.
 
 5. Exercise Venice connectivity and pricing once the services are up.
 
@@ -88,7 +93,7 @@ Overview
 
 - StakeMaster lives in `agents/stake_master/agent.py` and still has a dedicated CLI entry (`run:stakemaster`) for focused heartbeat checks.
 
-- The token watcher service in `services/marketdata/token_watcher.py` stores price and supply snapshots when you use the `make watch-tokens` target defined near line 158 of the Makefile.
+- The token watcher service in `services/marketdata/token_watcher.py` stores price and supply snapshots when you use the `make watch-tokens` target defined near line 158 of the Makefile. Complement it with the pool watcher CLI (`market:pools:watch --once`) whenever you need to backfill or refresh DEX discovery data.
 
 - Brokers that rely on Venice metrics should also keep `uv run python apps/cli/main.py venice:signals` in a periodic cron or task runner to surface transient network failures quickly.
 
@@ -128,9 +133,10 @@ Overview
   - Dry-run helpers: `DIEM_FAKE_PRICE`, `DIEM_FAKE_MINT_RATE` for offline orchestration.
 3. Click **Run**. The default runnable (**Stack (dry-run)**) calls `scripts/run_stack_entry.sh` with `RUN_STACK_MODE=dry`, which installs deps with `uv sync`, starts the Broker API, orchestrator, StakeMaster, and token watcher, and keeps the orchestrator in dry-run mode.
 4. When you are ready for real trades or staking heartbeats, pick the **Stack (live)** runnable (or export `RUN_STACK_MODE=live`) so the same script enables `AUTOSTART_ORCHESTRATOR_LIVE` and `AUTOSTART_STAKEMASTER_LIVE`.
-5. Deployments panel -> Create Web Service (auto-detects the run command from `.replit`).
-6. Verify health: open the webview -> `/health` returns `{ "status": "ok" }`.
-7. Use the Replit Workflows panel when you need to rerun the stack: **Run Venice Stack (dry)** drives the dry-run mode and **Run Venice Stack (live)** enables the live flags.
+5. After the stack reaches a steady state, open the shell and run `uv run python apps/cli/main.py market:pools:watch --once` to backfill the DEX pool catalog. Set `POOL_WATCH_BACKFILL_BLOCKS` when you want to shorten the historical window for Replit’s free tier.
+6. Deployments panel -> Create Web Service (auto-detects the run command from `.replit`).
+7. Verify health: open the webview -> `/health` returns `{ "status": "ok" }`.
+8. Use the Replit Workflows panel when you need to rerun the stack: **Run Venice Stack (dry)** drives the dry-run mode and **Run Venice Stack (live)** enables the live flags.
 
 Validation (Limiter + Idempotency)
 - Create a tenant (admin only): `POST /v1/tenants` with `{ tenant_id, label, quota }` and `Authorization: Bearer $BROKER_ADMIN_TOKEN`.
