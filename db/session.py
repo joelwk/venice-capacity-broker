@@ -78,58 +78,45 @@ def _looks_like_placeholder(url: str) -> bool:
 
 
 
+def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
+    fallback_url = _fallback_sqlite_url()
+    logger.warning(warning_fmt, source_url, fallback_url)
+    fallback_kwargs: Dict[str, Any] = {"echo": echo}
+    fallback_kwargs.update(_sqlite_connect_kwargs())
+    engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+    try:
+        if SQLModel is not None:
+            SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
+    except Exception:
+        logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
+    return engine
+
+
+
 def get_engine():
     _ensure_sqlmodel()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
+    is_sqlite = _is_sqlite(url)
+    placeholder = _looks_like_placeholder(url)
     kwargs: Dict[str, Any] = {"echo": echo}
-    if _is_sqlite(url):
+    if is_sqlite:
         kwargs.update(_sqlite_connect_kwargs())
     else:
         kwargs["pool_size"] = pool_size
-    if url.startswith("postgresql") and _looks_like_placeholder(url):
-        fallback_url = _fallback_sqlite_url()
-        logger.warning("postgres placeholder detected (%s); using SQLite %s", url, fallback_url)
-        fallback_kwargs: Dict[str, Any] = {"echo": echo}
-        fallback_kwargs.update(_sqlite_connect_kwargs())
-        engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
-        try:
-            if SQLModel is not None:
-                SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
-        except Exception:
-            logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
-        return engine
+    if placeholder and not is_sqlite:
+        return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
     try:
         return create_engine(url, **kwargs)  # type: ignore[misc]
     except ModuleNotFoundError as exc:
         message = str(exc).lower()
-        if "psycopg2" in message and url.startswith("postgresql"):
-            fallback_url = _fallback_sqlite_url()
-            logger.warning("psycopg2 missing for %s; falling back to SQLite %s", url, fallback_url)
-            fallback_kwargs: Dict[str, Any] = {"echo": echo}
-            fallback_kwargs.update(_sqlite_connect_kwargs())
-            engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
-            try:
-                if SQLModel is not None:
-                    SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
-            except Exception:
-                logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
-            return engine
+        if "psycopg2" in message and not is_sqlite:
+            return _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
         raise
-    except Exception as exc:
-        if url.startswith("postgresql") and _looks_like_placeholder(url):
-            fallback_url = _fallback_sqlite_url()
-            logger.warning("postgres placeholder detected (%s); using SQLite %s", url, fallback_url)
-            fallback_kwargs: Dict[str, Any] = {"echo": echo}
-            fallback_kwargs.update(_sqlite_connect_kwargs())
-            engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
-            try:
-                if SQLModel is not None:
-                    SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
-            except Exception:
-                logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
-            return engine
+    except Exception:
+        if placeholder and not is_sqlite:
+            return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
         raise
 
 

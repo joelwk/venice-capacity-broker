@@ -12,64 +12,86 @@ def _spy_create_engine(calls):
     return _inner
 
 
-@pytest.mark.parametrize("placeholder_url", [
-    "postgresql://user:password@host:5432/database",
-    "postgresql://***host:5432/database",
-])
-def test_get_engine_placeholder_url_short_circuits(monkeypatch, tmp_path, placeholder_url):
+def test_get_engine_placeholder_url_short_circuits(monkeypatch, tmp_path):
     sqlite_url = f"sqlite:///{(tmp_path / 'fallback.db')}"
-    monkeypatch.setenv("SQL_DATABASE_URL", placeholder_url)
-    monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
-    monkeypatch.setattr(db_session, "_looks_like_placeholder", lambda _: True)
+    placeholder_hits = []
+    engine_calls = []
 
-    calls = []
-    monkeypatch.setattr(db_session, "create_engine", _spy_create_engine(calls))
+    def fake_placeholder(value: str) -> bool:
+        placeholder_hits.append(value)
+        return True
 
-    engine = db_session.get_engine()
+    monkeypatch.setattr(db_session, "_looks_like_placeholder", fake_placeholder)
+    monkeypatch.setattr(db_session, "create_engine", _spy_create_engine(engine_calls))
 
-    assert engine is calls[0]
-    assert len(calls) == 1
-    assert calls[0]["target_url"] == sqlite_url
-    kwargs = calls[0]["kwargs"]
-    assert kwargs["echo"] is False
-    assert kwargs["connect_args"]["check_same_thread"] is False
+    for placeholder_url in (
+        "postgresql://user:password@host:5432/database",
+        "postgresql://***host:5432/database",
+        "***host:5432/database",
+    ):
+        monkeypatch.setenv("SQL_DATABASE_URL", placeholder_url)
+        monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
+        engine_calls.clear()
+        placeholder_hits.clear()
+
+        engine = db_session.get_engine()
+
+        assert placeholder_hits == [placeholder_url]
+        assert len(engine_calls) == 1
+        assert engine is engine_calls[0]
+        assert engine_calls[0]["target_url"] == sqlite_url
+        kwargs = engine_calls[0]["kwargs"]
+        assert kwargs["echo"] is False
+        assert kwargs["connect_args"]["check_same_thread"] is False
 
 
 def test_get_engine_falls_back_on_missing_driver(monkeypatch, tmp_path):
-    postgres_url = "postgresql://real.example:5432/app"
     sqlite_url = f"sqlite:///{(tmp_path / 'fallback.db')}"
-    monkeypatch.setenv("SQL_DATABASE_URL", postgres_url)
-    monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
-    monkeypatch.setattr(db_session, "_looks_like_placeholder", lambda _: False)
+    engine_calls = []
+    placeholder_hits = []
 
-    calls = []
+    def fake_placeholder(_: str) -> bool:
+        placeholder_hits.append(_)
+        return False
 
     def fake_create_engine(target_url, **kwargs):
         result = {"target_url": target_url, "kwargs": kwargs}
-        calls.append(result)
+        engine_calls.append(result)
         if target_url.startswith("postgresql"):
             raise ModuleNotFoundError("No module named 'psycopg2'")
         return result
 
+    monkeypatch.setattr(db_session, "_looks_like_placeholder", fake_placeholder)
     monkeypatch.setattr(db_session, "create_engine", fake_create_engine)
 
-    engine = db_session.get_engine()
+    for real_url in (
+        "postgresql://real.example:5432/app",
+        "postgresql://mainnet.base.org:5432/app?sslmode=require",
+    ):
+        monkeypatch.setenv("SQL_DATABASE_URL", real_url)
+        monkeypatch.setenv("SQLITE_FALLBACK_URL", sqlite_url)
+        engine_calls.clear()
+        placeholder_hits.clear()
 
-    assert engine is calls[-1]
-    assert len(calls) == 2
-    assert calls[0]["target_url"] == postgres_url
-    assert calls[1]["target_url"] == sqlite_url
-    kwargs = calls[1]["kwargs"]
-    assert kwargs["connect_args"]["check_same_thread"] is False
+        engine = db_session.get_engine()
+
+        assert placeholder_hits == [real_url]
+        assert len(engine_calls) == 2
+        assert engine is engine_calls[-1]
+        assert engine_calls[0]["target_url"] == real_url
+        assert engine_calls[1]["target_url"] == sqlite_url
+        kwargs = engine_calls[1]["kwargs"]
+        assert kwargs["connect_args"]["check_same_thread"] is False
 
 
-@pytest.mark.parametrize("candidate", [
-    "postgresql://user:password@host:5432/database",
-    "postgresql://***host:5432/database",
-    "postgresql://example.com/database",
-])
-def test_placeholder_detection_variants(candidate):
-    assert db_session._looks_like_placeholder(candidate)
+def test_placeholder_detection_variants():
+    for candidate in (
+        "postgresql://user:password@host:5432/database",
+        "postgresql://***host:5432/database",
+        "postgresql://example.com/database",
+        "***host:5432/database",
+    ):
+        assert db_session._looks_like_placeholder(candidate)
 
 
 def test_placeholder_detection_real_url():
