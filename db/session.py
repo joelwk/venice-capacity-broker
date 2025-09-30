@@ -81,13 +81,33 @@ def _looks_like_placeholder(url: str) -> bool:
 
 
 
+def _resolve_engine_factory():
+    """Return a usable create_engine callable, importing sqlalchemy if needed."""
+
+    global create_engine
+    if create_engine is not None:
+        return create_engine
+    try:
+        from sqlalchemy import create_engine as _sa_create_engine  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("sqlalchemy create_engine not available") from exc
+    create_engine = _sa_create_engine  # type: ignore[assignment]
+    return create_engine
+
+
 def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
     fallback_url = _fallback_sqlite_url()
     logger.warning(warning_fmt, source_url, fallback_url)
     fallback_kwargs: Dict[str, Any] = {"echo": echo}
     fallback_kwargs.update(_sqlite_connect_kwargs())
-    engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+    engine_factory = _resolve_engine_factory()
+    engine = engine_factory(fallback_url, **fallback_kwargs)  # type: ignore[misc]
     try:
+        if SQLModel is None:
+            try:
+                _ensure_sqlmodel()
+            except RuntimeError:
+                logger.debug("sqlmodel unavailable when creating SQLite fallback", exc_info=True)
         if SQLModel is not None:
             SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
     except Exception:
@@ -97,19 +117,20 @@ def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
 
 
 def get_engine():
-    _ensure_sqlmodel()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
     is_sqlite = _is_sqlite(url)
     placeholder = _looks_like_placeholder(url)
+    if placeholder and not is_sqlite:
+        return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
+
+    _ensure_sqlmodel()
     kwargs: Dict[str, Any] = {"echo": echo}
     if is_sqlite:
         kwargs.update(_sqlite_connect_kwargs())
     else:
         kwargs["pool_size"] = pool_size
-    if placeholder and not is_sqlite:
-        return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
     try:
         return create_engine(url, **kwargs)  # type: ignore[misc]
     except ModuleNotFoundError as exc:
