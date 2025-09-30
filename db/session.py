@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
-from typing import Iterator
+from pathlib import Path
+from typing import Any, Dict, Iterator
+
+logger = logging.getLogger("db.session")
 
 try:
     from sqlmodel import SQLModel, Session, create_engine
@@ -40,12 +44,84 @@ def _db_url() -> str:
     port = int(os.getenv("POSTGRES_PORT", "5432"))
     return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}"
 
+def _is_sqlite(url: str) -> bool:
+    return url.strip().lower().startswith("sqlite")
+
+
+def _sqlite_connect_kwargs() -> Dict[str, Any]:
+    return {"connect_args": {"check_same_thread": False}}
+
+
+def _fallback_sqlite_url() -> str:
+    override = os.getenv("SQLITE_FALLBACK_URL")
+    if override:
+        return override
+    path_override = os.getenv("SQLITE_FALLBACK_PATH")
+    if path_override:
+        return f"sqlite:///{Path(path_override).expanduser()}"
+    return "sqlite:///./broker.db"
+
+
+
+def _looks_like_placeholder(url: str) -> bool:
+    sample = url.lower()
+    return ("user:password@host" in sample and "/database" in sample) or "@host:" in sample
+
+
 
 def get_engine():
     _ensure_sqlmodel()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
-    return create_engine(_db_url(), echo=echo, pool_size=pool_size)  # type: ignore[misc]
+    url = _db_url()
+    kwargs: Dict[str, Any] = {"echo": echo}
+    if _is_sqlite(url):
+        kwargs.update(_sqlite_connect_kwargs())
+    else:
+        kwargs["pool_size"] = pool_size
+    if url.startswith("postgresql") and _looks_like_placeholder(url):
+        fallback_url = _fallback_sqlite_url()
+        logger.warning("postgres placeholder detected (%s); using SQLite %s", url, fallback_url)
+        fallback_kwargs: Dict[str, Any] = {"echo": echo}
+        fallback_kwargs.update(_sqlite_connect_kwargs())
+        engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+        try:
+            if SQLModel is not None:
+                SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
+        except Exception:
+            logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
+        return engine
+    try:
+        return create_engine(url, **kwargs)  # type: ignore[misc]
+    except ModuleNotFoundError as exc:
+        message = str(exc).lower()
+        if "psycopg2" in message and url.startswith("postgresql"):
+            fallback_url = _fallback_sqlite_url()
+            logger.warning("psycopg2 missing for %s; falling back to SQLite %s", url, fallback_url)
+            fallback_kwargs: Dict[str, Any] = {"echo": echo}
+            fallback_kwargs.update(_sqlite_connect_kwargs())
+            engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+            try:
+                if SQLModel is not None:
+                    SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
+            except Exception:
+                logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
+            return engine
+        raise
+    except Exception as exc:
+        if url.startswith("postgresql") and _looks_like_placeholder(url):
+            fallback_url = _fallback_sqlite_url()
+            logger.warning("postgres placeholder detected (%s); using SQLite %s", url, fallback_url)
+            fallback_kwargs: Dict[str, Any] = {"echo": echo}
+            fallback_kwargs.update(_sqlite_connect_kwargs())
+            engine = create_engine(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+            try:
+                if SQLModel is not None:
+                    SQLModel.metadata.create_all(engine)  # type: ignore[union-attr]
+            except Exception:
+                logger.debug("failed to auto-create tables for SQLite fallback", exc_info=True)
+            return engine
+        raise
 
 
 def create_db_and_tables() -> None:
