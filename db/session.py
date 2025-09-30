@@ -26,7 +26,10 @@ def _ensure_sqlmodel() -> None:
         raise RuntimeError("sqlmodel/sqlalchemy not installed") from exc
     SQLModel = _SQLModel  # type: ignore[assignment]
     Session = _Session  # type: ignore[assignment]
-    create_engine = _create_engine  # type: ignore[assignment]
+    current_module = getattr(create_engine, "__module__", None)
+    target_module = getattr(_create_engine, "__module__", None)
+    if create_engine is None or current_module == target_module:
+        create_engine = _create_engine  # type: ignore[assignment]
 
 
 def _db_url() -> str:
