@@ -9,8 +9,13 @@ def reload_db_session(monkeypatch):
     """Force reload db.session before each test to avoid caching issues."""
     if 'db.session' in sys.modules:
         del sys.modules['db.session']
-    import db.session  # Re-import fresh
-    monkeypatch.setattr('sys.modules', sys.modules, raising=False)  # Ensure consistent state
+    import db.session as fresh  # Re-import fresh
+    import db
+
+    monkeypatch.setitem(sys.modules, 'db.session', fresh)
+    monkeypatch.setattr(db, 'session', fresh, raising=False)
+    globals()['db_session'] = fresh
+    yield fresh
 
 
 def _spy_create_engine(calls):
