@@ -27,6 +27,12 @@ except Exception:  # noqa: BLE001
     def Field(*args, **kwargs):  # type: ignore
         # Placeholder that allows annotations to parse without sqlmodel.
         return None
+else:
+    # On reloads during tests we may already have tables bound to the shared
+    # SQLModel metadata. Clearing avoids duplicate table definitions when this
+    # module is re-imported after sys.modules entries are purged.
+    if hasattr(SQLModel, "metadata") and getattr(SQLModel.metadata, "tables", None):
+        SQLModel.metadata.clear()
 
 
 def _utcnow() -> datetime:

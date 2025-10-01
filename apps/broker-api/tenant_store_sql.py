@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from datetime import datetime, timezone
+import threading
 
 from db.models import Tenant as DbTenant, Key as DbKey
 from db.session import get_session, create_db_and_tables
@@ -36,6 +37,44 @@ class SQLTenantStore:
     def __init__(self) -> None:
         # Ensure tables exist
         create_db_and_tables()
+        self._cache: Dict[str, Tenant] = {}
+        self._cache_lock = threading.Lock()
+        self._refresh_cache()
+
+    def _refresh_cache(self) -> None:
+        try:
+            from sqlmodel import select  # lazy import within method
+        except Exception:
+            with self._cache_lock:
+                self._cache = {}
+            return
+
+        records: Dict[str, Tenant] = {}
+        with next(get_session()) as session:  # type: ignore[call-arg]
+            tenants = session.exec(select(DbTenant)).all()
+            for db_t in tenants:
+                stmt = (
+                    select(DbKey)
+                    .where(DbKey.tenant_id == db_t.id)
+                    .order_by(DbKey.created_at.desc())
+                    .limit(1)
+                )
+                key = session.exec(stmt).first()
+                subkey = key.subkey if key is not None else ""
+                quota = int(key.quota) if key is not None else 0
+                exp = key.expires_at.isoformat().replace('+00:00', 'Z') if (key and key.expires_at) else None
+                records[db_t.id] = Tenant(
+                    id=db_t.id,
+                    label=db_t.label,
+                    subkey=subkey,
+                    quota=quota,
+                    expires_at=exp,
+                    status=db_t.status,
+                    owner_address=db_t.owner_address,
+                    key_id=getattr(key, "key_id", None),
+                )
+        with self._cache_lock:
+            self._cache = records
 
     def _parse_expires(self, expires_at: Optional[str]) -> Optional[datetime]:
         if not expires_at:
@@ -72,15 +111,20 @@ class SQLTenantStore:
             key = DbKey(tenant_id=t.id, label=t.label, subkey=t.subkey, quota=int(t.quota), expires_at=expires_dt, key_id=t.key_id)
             session.add(key)
             session.commit()
+        self._refresh_cache()
 
     def get(self, tenant_id: str) -> Optional[Tenant]:
+        with self._cache_lock:
+            cached = self._cache.get(tenant_id)
+        if cached is not None:
+            return cached
+
         from sqlmodel import select  # lazy import within method
 
         with next(get_session()) as session:  # type: ignore[call-arg]
             db_t = session.get(DbTenant, tenant_id)
             if db_t is None:
                 return None
-            # Get most recent key
             stmt = (
                 select(DbKey)
                 .where(DbKey.tenant_id == tenant_id)
@@ -91,7 +135,10 @@ class SQLTenantStore:
             subkey = key.subkey if key is not None else ""
             quota = int(key.quota) if key is not None else 0
             exp = key.expires_at.isoformat().replace("+00:00", "Z") if (key and key.expires_at) else None
-            return Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status, owner_address=db_t.owner_address, key_id=getattr(key, "key_id", None))
+            result = Tenant(id=db_t.id, label=db_t.label, subkey=subkey, quota=quota, expires_at=exp, status=db_t.status, owner_address=db_t.owner_address, key_id=getattr(key, "key_id", None))
+        with self._cache_lock:
+            self._cache[tenant_id] = result
+        return result
 
     def delete(self, tenant_id: str) -> None:
         # Soft-delete by marking revoked to avoid FK issues; mirror JSON store semantics where possible.
@@ -103,33 +150,13 @@ class SQLTenantStore:
             db_t.updated_at = datetime.now(timezone.utc)
             session.add(db_t)
             session.commit()
+        with self._cache_lock:
+            self._cache.pop(tenant_id, None)
 
     def all(self) -> Dict[str, Tenant]:
-        from sqlmodel import select
-
-        out: Dict[str, Tenant] = {}
-        with next(get_session()) as session:  # type: ignore[call-arg]
-            tenants = session.exec(select(DbTenant)).all()
-            # Preload latest key per tenant
-            for db_t in tenants:
-                stmt = (
-                    select(DbKey)
-                    .where(DbKey.tenant_id == db_t.id)
-                    .order_by(DbKey.created_at.desc())
-                    .limit(1)
-                )
-                key = session.exec(stmt).first()
-                subkey = key.subkey if key is not None else ""
-                quota = int(key.quota) if key is not None else 0
-                exp = key.expires_at.isoformat().replace("+00:00", "Z") if (key and key.expires_at) else None
-                out[db_t.id] = Tenant(
-                    id=db_t.id,
-                    label=db_t.label,
-                    subkey=subkey,
-                    quota=quota,
-                    expires_at=exp,
-                    status=db_t.status,
-                    owner_address=db_t.owner_address,
-                    key_id=getattr(key, "key_id", None),
-                )
-        return out
+        with self._cache_lock:
+            if self._cache:
+                return dict(self._cache)
+        self._refresh_cache()
+        with self._cache_lock:
+            return dict(self._cache)

@@ -18,6 +18,7 @@ from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
 from libs.venice_sdk.client import VeniceClient
 from services.venice_keys.manager import KeyManager
+from libs.agentkit_ext.web3_utils import resolve_rpc_url
 try:
     from .tenant_store import TenantStore, Tenant
 except Exception:
@@ -2313,6 +2314,8 @@ try:
                     raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
                 try:
                     base_rpc = resolve_rpc_url(validate=True)
+                except ModuleNotFoundError:
+                    base_rpc = resolve_rpc_url(validate=False)
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(status_code=400, detail=f"No reachable Base RPC endpoint: {exc}") from exc
                 treasury = (_os.getenv("TREASURY_ADDRESS") or "").strip()

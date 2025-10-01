@@ -1,0 +1,12 @@
+{
+  "t2": {
+    "id": "t2",
+    "label": "T2",
+    "subkey": "sub-2",
+    "quota": 0,
+    "expires_at": null,
+    "status": "active",
+    "key_id": null,
+    "owner_address": null
+  }
+}

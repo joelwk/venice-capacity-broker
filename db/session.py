@@ -123,8 +123,11 @@ def get_engine():
     url = _db_url()
     is_sqlite = _is_sqlite(url)
     # Resolve the placeholder checker at call time so monkeypatching works reliably.
-    placeholder_checker = getattr(sys.modules[__name__], "_looks_like_placeholder", None)
-    placeholder = bool(placeholder_checker(url)) if placeholder_checker else False
+    placeholder_fn = globals().get("_looks_like_placeholder")
+    if callable(placeholder_fn):
+        placeholder = bool(placeholder_fn(url))
+    else:
+        placeholder = False
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
 
