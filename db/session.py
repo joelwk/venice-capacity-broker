@@ -100,17 +100,6 @@ def _looks_like_placeholder(url: str) -> bool:
     return False
 
 
-def _safe_placeholder_check(url: str) -> bool:
-    try:
-        detector = globals().get("_looks_like_placeholder")
-        if not callable(detector):
-            raise TypeError("placeholder detector is not callable")
-        return bool(detector(url))
-    except Exception:
-        logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
-        return True
-
-
 def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
@@ -158,7 +147,7 @@ def get_engine():
     url = _db_url()
     is_sqlite = _is_sqlite(url)
 
-    placeholder = _safe_placeholder_check(url)
+    placeholder = _looks_like_placeholder(url)
 
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
