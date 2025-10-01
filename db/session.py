@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List
 
 logger = logging.getLogger("db.session")
 
