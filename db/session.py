@@ -101,8 +101,9 @@ def _looks_like_placeholder(url: str) -> bool:
 
 
 def _safe_placeholder_check(url: str) -> bool:
-    detector: Optional[Callable[[str], Any]] = globals().get("_looks_like_placeholder")  # type: ignore[assignment]
     try:
+        module = sys.modules.get(__name__)
+        detector = getattr(module, "_looks_like_placeholder", None)
         if not callable(detector):
             raise TypeError("placeholder detector is not callable")
         return bool(detector(url))
