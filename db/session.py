@@ -68,16 +68,35 @@ def _fallback_sqlite_url() -> str:
 
 
 def _looks_like_placeholder(url: str) -> bool:
-    sample = url.lower()
-    tokens = ("user:password@host", "user:pass@host", "user:pass@", "example.com", "placeholder", "changeme")
-    if any(tok in sample for tok in tokens):
+    """Heuristically detect obvious placeholder DB URLs.
+
+    Goal: catch values used in examples or templates while avoiding real hosts.
+    """
+
+    import re
+
+    raw = url.strip()
+    sample = raw.lower()
+
+    # Any obvious redaction marker.
+    if "***" in raw:
         return True
-    if "***" in sample:
+
+    # Common placeholder tokens/domains.
+    if any(tok in sample for tok in ("placeholder", "changeme", "example.com")):
         return True
-    if "@host:" in sample or "://host:" in sample:
+
+    # Literal "host" in authority portion (with or without userinfo).
+    # Examples:
+    #   postgresql://user:password@host:5432/database
+    #   postgresql://host:5432/database
+    if re.search(r"://[^@]*host(?=[:/])", sample) or re.search(r"@host(?=[:/])", sample):
         return True
-    if sample.endswith("/database") and ("host" in sample or "placeholder" in sample or "example" in sample):
+
+    # Very common tutorial tail combined with placeholder-y host cues.
+    if sample.endswith("/database") and ("host" in sample or "example" in sample or "placeholder" in sample):
         return True
+
     return False
 
 
