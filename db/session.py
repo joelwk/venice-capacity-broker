@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional
 
@@ -80,29 +79,6 @@ def _looks_like_placeholder(url: str) -> bool:
     if sample.endswith('/database') and ('host' in sample or 'placeholder' in sample or 'example' in sample):
         return True
     return False
-
-
-
-def _resolve_placeholder_checker() -> Optional[Callable[[str], bool]]:
-    """Return a callable checker so monkeypatches remain effective."""
-
-    module = sys.modules.get(__name__)
-    if module is None:
-        try:
-            module = import_module(__name__)
-        except Exception:
-            module = None
-    if module is not None:
-        candidate = getattr(module, "_looks_like_placeholder", None)
-        if callable(candidate):
-            return candidate
-    candidate = globals().get("_looks_like_placeholder")
-    if callable(candidate):
-        return candidate
-    return None
-
-
-
 def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
@@ -143,15 +119,11 @@ def get_engine():
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
     is_sqlite = _is_sqlite(url)
-    checker = _resolve_placeholder_checker()
-    if checker is not None:
-        try:
-            placeholder = bool(checker(url))
-        except Exception:
-            logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
-            placeholder = True
-    else:
-        placeholder = False
+    try:
+        placeholder = bool(_looks_like_placeholder(url))
+    except Exception:
+        logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
+        placeholder = True
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
 
