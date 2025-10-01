@@ -79,6 +79,8 @@ def _looks_like_placeholder(url: str) -> bool:
     if sample.endswith('/database') and ('host' in sample or 'placeholder' in sample or 'example' in sample):
         return True
     return False
+
+
 def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
@@ -93,13 +95,19 @@ def _resolve_engine_factory():
     return create_engine
 
 
+def _call_engine_factory(target_url: str, **kwargs: Any):
+    """Invoke the currently configured engine factory."""
+
+    engine_factory = _resolve_engine_factory()
+    return engine_factory(target_url, **kwargs)  # type: ignore[misc]
+
+
 def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
     fallback_url = _fallback_sqlite_url()
     logger.warning(warning_fmt, source_url, fallback_url)
     fallback_kwargs: Dict[str, Any] = {"echo": echo}
     fallback_kwargs.update(_sqlite_connect_kwargs())
-    engine_factory = _resolve_engine_factory()
-    engine = engine_factory(fallback_url, **fallback_kwargs)  # type: ignore[misc]
+    engine = _call_engine_factory(fallback_url, **fallback_kwargs)
     try:
         if SQLModel is None:
             try:
@@ -138,7 +146,7 @@ def get_engine():
         kwargs["pool_size"] = pool_size
 
     try:
-        return create_engine(url, **kwargs)  # type: ignore[misc]
+        return _call_engine_factory(url, **kwargs)
     except ModuleNotFoundError as exc:
         message = str(exc).lower()
         if "psycopg2" in message and not is_sqlite:
