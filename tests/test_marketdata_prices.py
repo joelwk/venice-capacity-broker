@@ -22,6 +22,7 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     monkeypatch.setattr(MarketDataProvider, "_fetch_external_price", lambda self, symbol: None, raising=False)
     monkeypatch.setattr(MarketDataProvider, "_external_price_ttl", lambda self: 0.0, raising=False)
 
+    MarketDataProvider._price_cache.clear()
     md = MarketDataProvider()
 
     def fake_decimals(address: str) -> int:

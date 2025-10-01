@@ -261,13 +261,37 @@ class PricingService:
                             _, price_map = self.engine._resolve_prices()  # type: ignore[attr-defined]
                         except Exception:  # noqa: BLE001
                             price_map = {}
+                    def _resolve_positive_price(symbols: list[str]) -> float:
+                        for sym in symbols:
+                            try:
+                                value = float(price_map.get(sym) or 0.0)
+                            except Exception:
+                                value = 0.0
+                            if value > 0:
+                                return value
+                        try:
+                            _, fallback_map = self.engine._resolve_prices()  # type: ignore[attr-defined]
+                        except Exception:  # noqa: BLE001
+                            fallback_map = None
+                        if isinstance(fallback_map, dict):
+                            for key, value in fallback_map.items():
+                                if key not in price_map or price_map.get(key) in (None, 0, 0.0):
+                                    price_map[key] = value
+                        for sym in symbols:
+                            try:
+                                value = float(price_map.get(sym) or 0.0)
+                            except Exception:
+                                value = 0.0
+                            if value > 0:
+                                return value
+                        return 0.0
                     if asset_u in {"ETH", "WETH"}:
-                        eth_usd = float(price_map.get("ETH") or price_map.get("WETH") or 0.0)
+                        eth_usd = _resolve_positive_price(["ETH", "WETH"])
                         if not (eth_usd and eth_usd > 0):
                             raise ValueError("ETH pricing unavailable for budget sizing")
                         budget_value = budget_value / float(eth_usd)
                     elif asset_u == "WBTC":
-                        wbtc_usd = float(price_map.get("WBTC") or 0.0)
+                        wbtc_usd = _resolve_positive_price(["WBTC"])
                         if not (wbtc_usd and wbtc_usd > 0):
                             raise ValueError("WBTC pricing unavailable for budget sizing")
                         budget_value = budget_value / float(wbtc_usd)

@@ -167,6 +167,9 @@ def test_budget_quote_path(monkeypatch, tmp_path):
     monkeypatch.setenv("PURCHASE_UNITS_KIND", "diem")
     monkeypatch.setenv("BASE_RPC_URL", "http://localhost:8545")
     monkeypatch.setenv("TREASURY_ADDRESS", "0xabc0000000000000000000000000000000000001")
+    monkeypatch.setenv("PRICE_DISCOUNT_DEFAULT_BPS", "500")
+    monkeypatch.setenv("PRICE_DISCOUNT_BPS", "500")
+    monkeypatch.delenv("PRICE_DISCOUNT_DEFAULT", raising=False)
     db_path = tmp_path / "budget.db"
     monkeypatch.setenv("SQL_DATABASE_URL", f"sqlite:///{db_path}")
     db_path.unlink(missing_ok=True)
@@ -175,6 +178,8 @@ def test_budget_quote_path(monkeypatch, tmp_path):
 
     # Force deterministic pricing without on-chain calls.
     engine = mod._pricing.engine
+
+    assert mod._pricing._base_discount_fraction('ETH') == pytest.approx(0.05, rel=1e-9)
 
     def _fake_prices():
         # base_unit_usd, market prices

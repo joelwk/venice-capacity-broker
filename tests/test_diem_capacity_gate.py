@@ -22,6 +22,7 @@ def test_diem_capacity_gate_denies_and_skips_actions(monkeypatch):
     # Enable gate and set simple 1:1 rate (tokens)
     monkeypatch.setenv("DIEM_ENABLE_SVVV_GATE", "1")
     monkeypatch.setenv("DIEM_MINT_RATE", "1.0")
+    monkeypatch.setenv("DIEM_MINT_RATE_SVVV_PER_DIEM", "1")
     monkeypatch.setenv("DIEM_DECIMALS", "18")
     monkeypatch.setenv("SVVV_DECIMALS", "18")
     # Available < required => deny

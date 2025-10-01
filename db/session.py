@@ -85,14 +85,14 @@ def _looks_like_placeholder(url: str) -> bool:
 def _resolve_placeholder_checker() -> Optional[Callable[[str], bool]]:
     """Return a callable checker so monkeypatches remain effective."""
 
+    candidate = globals().get("_looks_like_placeholder")
+    if callable(candidate):
+        return candidate
     module = sys.modules.get(__name__)
     if module is not None:
         candidate = getattr(module, "_looks_like_placeholder", None)
         if callable(candidate):
             return candidate
-    candidate = globals().get("_looks_like_placeholder")
-    if callable(candidate):
-        return candidate
     return None
 
 
