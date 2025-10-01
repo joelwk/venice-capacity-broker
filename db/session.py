@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
@@ -121,7 +122,9 @@ def get_engine():
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
     is_sqlite = _is_sqlite(url)
-    placeholder = _looks_like_placeholder(url)
+    # Resolve the placeholder checker at call time so monkeypatching works reliably.
+    placeholder_checker = getattr(sys.modules[__name__], "_looks_like_placeholder", None)
+    placeholder = bool(placeholder_checker(url)) if placeholder_checker else False
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
 
