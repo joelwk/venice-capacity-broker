@@ -14,6 +14,7 @@ def reload_db_session(monkeypatch):
 
     monkeypatch.setitem(sys.modules, 'db.session', fresh)
     monkeypatch.setattr(db, 'session', fresh, raising=False)
+    monkeypatch.setattr(fresh, '_ensure_sqlmodel', lambda: None, raising=False)
     globals()['db_session'] = fresh
     yield fresh
 
