@@ -102,8 +102,7 @@ def _looks_like_placeholder(url: str) -> bool:
 
 def _safe_placeholder_check(url: str) -> bool:
     try:
-        module = sys.modules.get(__name__)
-        detector = getattr(module, "_looks_like_placeholder", None)
+        detector = globals().get("_looks_like_placeholder")
         if not callable(detector):
             raise TypeError("placeholder detector is not callable")
         return bool(detector(url))
