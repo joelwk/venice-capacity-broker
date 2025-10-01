@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Optional
 
@@ -85,14 +86,19 @@ def _looks_like_placeholder(url: str) -> bool:
 def _resolve_placeholder_checker() -> Optional[Callable[[str], bool]]:
     """Return a callable checker so monkeypatches remain effective."""
 
-    candidate = globals().get("_looks_like_placeholder")
-    if callable(candidate):
-        return candidate
     module = sys.modules.get(__name__)
+    if module is None:
+        try:
+            module = import_module(__name__)
+        except Exception:
+            module = None
     if module is not None:
         candidate = getattr(module, "_looks_like_placeholder", None)
         if callable(candidate):
             return candidate
+    candidate = globals().get("_looks_like_placeholder")
+    if callable(candidate):
+        return candidate
     return None
 
 
