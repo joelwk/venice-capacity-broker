@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator, Optional
 
 logger = logging.getLogger("db.session")
 
@@ -82,6 +82,21 @@ def _looks_like_placeholder(url: str) -> bool:
 
 
 
+def _resolve_placeholder_checker() -> Optional[Callable[[str], bool]]:
+    """Return a callable checker so monkeypatches remain effective."""
+
+    module = sys.modules.get(__name__)
+    if module is not None:
+        candidate = getattr(module, "_looks_like_placeholder", None)
+        if callable(candidate):
+            return candidate
+    candidate = globals().get("_looks_like_placeholder")
+    if callable(candidate):
+        return candidate
+    return None
+
+
+
 def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
@@ -122,12 +137,8 @@ def get_engine():
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
     is_sqlite = _is_sqlite(url)
-    # Resolve the placeholder checker at call time so monkeypatching works reliably.
-    module = sys.modules.get(__name__)
-    checker = getattr(module, "_looks_like_placeholder", None) if module else None
-    if not callable(checker):
-        checker = globals().get("_looks_like_placeholder")
-    if callable(checker):
+    checker = _resolve_placeholder_checker()
+    if checker is not None:
         try:
             placeholder = bool(checker(url))
         except Exception:
