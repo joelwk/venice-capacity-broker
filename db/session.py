@@ -72,13 +72,24 @@ def _looks_like_placeholder(url: str) -> bool:
     tokens = ("user:password@host", "user:pass@host", "user:pass@", "example.com", "placeholder", "changeme")
     if any(tok in sample for tok in tokens):
         return True
-    if '***' in sample:
+    if "***" in sample:
         return True
-    if '@host:' in sample or '://host:' in sample:
+    if "@host:" in sample or "://host:" in sample:
         return True
-    if sample.endswith('/database') and ('host' in sample or 'placeholder' in sample or 'example' in sample):
+    if sample.endswith("/database") and ("host" in sample or "placeholder" in sample or "example" in sample):
         return True
     return False
+
+
+def _safe_placeholder_check(url: str) -> bool:
+    detector: Optional[Callable[[str], Any]] = globals().get("_looks_like_placeholder")  # type: ignore[assignment]
+    try:
+        if not callable(detector):
+            raise TypeError("placeholder detector is not callable")
+        return bool(detector(url))
+    except Exception:
+        logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
+        return True
 
 
 def _resolve_engine_factory():
@@ -128,11 +139,7 @@ def get_engine():
     url = _db_url()
     is_sqlite = _is_sqlite(url)
 
-    try:
-        placeholder = bool(_looks_like_placeholder(url))
-    except Exception:
-        logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
-        placeholder = True
+    placeholder = _safe_placeholder_check(url)
 
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
