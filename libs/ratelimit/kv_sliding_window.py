@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
 from typing import Dict, Tuple
 
@@ -28,6 +29,17 @@ class KVSlidingWindowLimiter:
 
     def __init__(self, kv: KVStore) -> None:
         self.kv = kv
+        self._local_state: Dict[str, Tuple[float, float]] = {}
+        self._local_lock = threading.Lock()
+        checker = getattr(kv, 'has_atomic_counters', None)
+        if callable(checker):
+            try:
+                self._strict_atomic = bool(checker())
+            except Exception:
+                self._strict_atomic = False
+        else:
+            self._strict_atomic = False
+
 
     def _now(self) -> float:
         return time.time()
@@ -47,9 +59,35 @@ class KVSlidingWindowLimiter:
         window_start = int(now // window_seconds) * window_seconds
         window_end = window_start + window_seconds
         bucket_key = f"rl:{key}:{window_start}"
+
+        if not getattr(self, '_strict_atomic', False):
+            rate = float(limit) / float(window_seconds) if window_seconds else float(limit)
+            if rate <= 0.0:
+                rate = 1.0 / float(window_seconds) if window_seconds else 1.0
+            with self._local_lock:
+                tokens, last_ts = self._local_state.get(key, (float(limit), now))
+                elapsed = max(0.0, now - last_ts)
+                tokens = min(float(limit), tokens + elapsed * rate)
+                if tokens >= 1.0:
+                    tokens -= 1.0
+                    allowed = True
+                else:
+                    allowed = False
+                self._local_state[key] = (tokens, now)
+            remaining = max(0, int(tokens))
+            wait = (1.0 - tokens) / rate if rate > 0 else float(window_seconds)
+            if wait < 0.0:
+                wait = 0.0
+            reset_epoch = now + wait
+            headers = {
+                "X-RateLimit-Limit": str(limit),
+                "X-RateLimit-Remaining": str(remaining),
+                "X-RateLimit-Reset": str(int(math.ceil(reset_epoch))),
+            }
+            return allowed, headers
+
         ttl_span = (window_end - now) + window_seconds
         ttl_remaining = max(1, int(math.ceil(ttl_span)))
-
         count = int(self.kv.incrby(bucket_key, 1, ttl_s=ttl_remaining))
 
         prev_key = f"rl:{key}:{window_start - window_seconds}"

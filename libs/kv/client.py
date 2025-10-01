@@ -41,6 +41,10 @@ class KVStore:
                 self._redis = None
         return self._redis
 
+    def has_atomic_counters(self) -> bool:
+        """Return True when atomic counter semantics are available (Redis)."""
+        return self._get_redis() is not None
+
     def _k(self, key: str) -> str:
         if self.namespace:
             key = f"{self.namespace}:{key}"

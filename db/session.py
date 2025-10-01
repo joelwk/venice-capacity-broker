@@ -123,9 +123,16 @@ def get_engine():
     url = _db_url()
     is_sqlite = _is_sqlite(url)
     # Resolve the placeholder checker at call time so monkeypatching works reliably.
-    placeholder_fn = globals().get("_looks_like_placeholder")
-    if callable(placeholder_fn):
-        placeholder = bool(placeholder_fn(url))
+    module = sys.modules.get(__name__)
+    checker = getattr(module, "_looks_like_placeholder", None) if module else None
+    if not callable(checker):
+        checker = globals().get("_looks_like_placeholder")
+    if callable(checker):
+        try:
+            placeholder = bool(checker(url))
+        except Exception:
+            logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
+            placeholder = True
     else:
         placeholder = False
     if placeholder and not is_sqlite:
