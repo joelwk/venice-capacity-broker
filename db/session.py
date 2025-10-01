@@ -119,20 +119,24 @@ def get_engine():
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
     is_sqlite = _is_sqlite(url)
+
     try:
         placeholder = bool(_looks_like_placeholder(url))
     except Exception:
         logger.debug("placeholder detection failed; treating as placeholder", exc_info=True)
         placeholder = True
+
     if placeholder and not is_sqlite:
         return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
 
     _ensure_sqlmodel()
+
     kwargs: Dict[str, Any] = {"echo": echo}
     if is_sqlite:
         kwargs.update(_sqlite_connect_kwargs())
     else:
         kwargs["pool_size"] = pool_size
+
     try:
         return create_engine(url, **kwargs)  # type: ignore[misc]
     except ModuleNotFoundError as exc:
@@ -141,8 +145,8 @@ def get_engine():
             return _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
         raise
     except Exception:
-        if placeholder and not is_sqlite:
-            return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
+        if not is_sqlite:
+            return _sqlite_fallback_engine(echo, url, "database connection failed for %s; using SQLite %s")
         raise
 
 
