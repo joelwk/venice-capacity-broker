@@ -2,6 +2,16 @@ import pytest
 
 from db import session as db_session
 
+import sys
+
+@pytest.fixture(autouse=True)
+def reload_db_session(monkeypatch):
+    """Force reload db.session before each test to avoid caching issues."""
+    if 'db.session' in sys.modules:
+        del sys.modules['db.session']
+    import db.session  # Re-import fresh
+    monkeypatch.setattr('sys.modules', sys.modules, raising=False)  # Ensure consistent state
+
 
 def _spy_create_engine(calls):
     def _inner(target_url, **kwargs):
