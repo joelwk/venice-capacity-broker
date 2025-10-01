@@ -4,9 +4,22 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Optional
+from typing import Any, Callable, Dict, Iterator, List
 
 logger = logging.getLogger("db.session")
+
+
+_ENGINE_ATTEMPTS: List[Dict[str, Any]] = []
+
+
+def get_engine_attempts() -> List[Dict[str, Any]]:
+    """Return a copy of the most recent engine creation attempts."""
+
+    return list(_ENGINE_ATTEMPTS)
+
+
+def _reset_engine_attempts() -> None:
+    _ENGINE_ATTEMPTS.clear()
 
 try:
     from sqlmodel import SQLModel, Session, create_engine
@@ -118,7 +131,22 @@ def _call_engine_factory(target_url: str, **kwargs: Any):
     """Invoke the currently configured engine factory."""
 
     engine_factory = _resolve_engine_factory()
-    return engine_factory(target_url, **kwargs)  # type: ignore[misc]
+    attempt: Dict[str, Any] = {
+        "target_url": target_url,
+        "kwargs": dict(kwargs),
+        "succeeded": False,
+        "error": None,
+    }
+    _ENGINE_ATTEMPTS.append(attempt)
+    try:
+        engine = engine_factory(target_url, **kwargs)  # type: ignore[misc]
+    except Exception as exc:  # noqa: BLE001
+        attempt["error"] = exc
+        raise
+    else:
+        attempt["succeeded"] = True
+        attempt["engine"] = engine
+        return engine
 
 
 def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
@@ -142,6 +170,7 @@ def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
 
 
 def get_engine():
+    _reset_engine_attempts()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
     url = _db_url()
