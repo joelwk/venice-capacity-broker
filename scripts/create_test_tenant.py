@@ -67,7 +67,14 @@ def main(argv: list[str] | None = None) -> None:
     if getattr(args, "probe_chat", False):
         chat_url = f"{base}/v1/chat"
         c_headers = {"Authorization": f"Bearer {admin}", "X-Tenant-Id": args.tenant_id, "Content-Type": "application/json"}
-        c_body = {"messages": [{"role": "user", "content": "Hello from probe"}], "model": None}
+        max_tokens = int(os.getenv("BROKER_CHAT_PROBE_MAX_TOKENS", "128"))
+        default_model = os.getenv("BROKER_DEFAULT_MODEL") or os.getenv("VENICE_DEFAULT_MODEL")
+        c_body = {
+            "messages": [{"role": "user", "content": "Hello from probe"}],
+            "max_tokens": max_tokens,
+        }
+        if default_model:
+            c_body["model"] = default_model
         cr = requests.post(chat_url, headers=c_headers, json=c_body, timeout=20)
         ok = cr.ok
         detail = None

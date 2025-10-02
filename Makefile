@@ -53,7 +53,7 @@ create-tenant:
 chat-admin:
 	@if [ -z "$(TENANT)" ]; then echo "Usage: make chat-admin TENANT=t1 [MESSAGE=Hello]"; exit 1; fi
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
-	@PAY='{"messages":[{"role":"user","content":"$(MESSAGE)"}]'; \
+	@PAY='{"messages":[{"role":"user","content":"$(MESSAGE)"}],"max_tokens":$(if $(MAX_TOKENS),$(MAX_TOKENS),128)'; \
   if [ -n "$(EFFECTIVE_MODEL)" ]; then PAY="$${PAY},\"model\":\"$(EFFECTIVE_MODEL)\""; fi; \
 	  PAY="$${PAY}}"; \
 	  curl -sSL -H "Accept: application/json" -X POST "$(BASE_URL)/v1/chat" \

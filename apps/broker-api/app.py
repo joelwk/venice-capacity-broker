@@ -172,6 +172,7 @@ try:
     class ChatRequest(BaseModel):
         messages: list[dict]
         model: str | None = None
+        max_tokens: int | None = None
 
     class UsageResponse(BaseModel):
         usage: dict
@@ -1331,11 +1332,14 @@ try:
         _model = payload.model or (_def_model if _def_model else None)
 
         sub_client = VeniceClient(api_key=t.subkey, base_url=client.config.base_url)
+        extra_args = {}
+        if payload.max_tokens is not None:
+            extra_args["max_tokens"] = int(payload.max_tokens)
         try:
             if _model:
-                res = sub_client.chat_completions(messages=payload.messages, model=_model)
+                res = sub_client.chat_completions(messages=payload.messages, model=_model, **extra_args)
             else:
-                res = sub_client.chat_completions(messages=payload.messages)
+                res = sub_client.chat_completions(messages=payload.messages, **extra_args)
             return res
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"venice error: {e}")

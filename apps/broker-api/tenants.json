@@ -18,5 +18,15 @@
     "status": "active",
     "key_id": null,
     "owner_address": null
+  },
+  "t1": {
+    "id": "t1",
+    "label": "Team A",
+    "subkey": "MWSWlJ9S1a3oX58J2QVYmO6JDLVBsS-6KjiRzTUJdF",
+    "quota": 0,
+    "expires_at": null,
+    "status": "active",
+    "key_id": "e575020b-3cb6-4398-a251-02faa36150a5",
+    "owner_address": null
   }
 }
