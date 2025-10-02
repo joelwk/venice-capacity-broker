@@ -72,9 +72,28 @@ def main() -> None:
             "RISK_MAX_SLIPPAGE_BPS": os.getenv("RISK_MAX_SLIPPAGE_BPS"),
             "RISK_MAX_POOL_TAKE_BPS": os.getenv("RISK_MAX_POOL_TAKE_BPS") or os.getenv("RISK_MAX_POOL_TAKE_BP"),
         },
+        "wallet": {
+            "WALLET_PROVIDER": os.getenv("WALLET_PROVIDER"),
+            "NETWORK_ID": os.getenv("NETWORK_ID"),
+            "PAYMASTER_URL": os.getenv("PAYMASTER_URL"),
+            "ETH_PRIVATE_KEY": _mask(os.getenv("ETH_PRIVATE_KEY")),
+            "OWNER": _mask(os.getenv("OWNER")),
+        },
+        "cdp": {
+            "CDP_API_KEY_ID": _mask(os.getenv("CDP_API_KEY_ID")),
+            "CDP_API_KEY_SECRET": _mask(os.getenv("CDP_API_KEY_SECRET")),
+            "CDP_WALLET_SECRET": _mask(os.getenv("CDP_WALLET_SECRET")),
+        },
         "venice": {
             "VENICE_API_BASE_URL": os.getenv("VENICE_API_BASE_URL"),
             "VENICE_API_KEY": _mask(os.getenv("VENICE_API_KEY")),
+        },
+        "secrets": {
+            "CDP_API_KEY_ID": _mask(os.getenv("CDP_API_KEY_ID")),
+            "CDP_API_KEY_SECRET": _mask(os.getenv("CDP_API_KEY_SECRET")),
+            "CDP_WALLET_SECRET": _mask(os.getenv("CDP_WALLET_SECRET")),
+            "ETH_PRIVATE_KEY": _mask(os.getenv("ETH_PRIVATE_KEY")),
+            "OWNER": _mask(os.getenv("OWNER")),
         },
         "abi": {
             "erc20.json": has_abi("erc20.json"),
