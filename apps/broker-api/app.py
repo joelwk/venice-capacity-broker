@@ -18,7 +18,7 @@ from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
 from libs.venice_sdk.client import VeniceClient
 from services.venice_keys.manager import KeyManager
-from libs.agentkit_ext.web3_utils import resolve_rpc_url
+from libs.agentkit_ext.web3_utils import resolve_rpc_url, rpc_url_candidates
 try:
     from .tenant_store import TenantStore, Tenant
 except Exception:
