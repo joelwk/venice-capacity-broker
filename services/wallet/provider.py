@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
 from libs.agentkit_ext.agentkit_wallet import get_agentkit_wallet
-from libs.agentkit_ext.web3_utils import build_eip1559_tx, get_web3
+from libs.agentkit_ext.web3_utils import build_eip1559_tx, get_contract, get_web3
 
 
 class WalletError(Exception):
@@ -222,6 +222,103 @@ def sweep_profits_to_cold(
     if transferable <= 0:
         raise WalletError("No funds available after reserving gas and minimum balance")
     return provider.send_transaction(to=checksum_dest, value=int(transferable))
+
+
+def describe_treasury_portfolio(
+    *,
+    wallet_address: Optional[str] = None,
+    token_addresses: Optional[dict[str, str]] = None,
+    include_eth: bool = True,
+) -> dict[str, Any]:
+    """Return a snapshot of treasury balances for quick operator visibility."""
+
+    snapshot: dict[str, Any] = {"address": None, "balances": {}, "errors": []}
+    errors: list[str] = snapshot["errors"]
+    balances: dict[str, Any] = snapshot["balances"]
+
+    # Resolve target wallet address (env overrides, then provider fallback)
+    address_candidates = [
+        wallet_address,
+        os.getenv("TREASURY_ADDRESS"),
+        os.getenv("COLD_WALLET_ADDRESS"),
+    ]
+    resolved_address: Optional[str] = None
+    for candidate in address_candidates:
+        if candidate and str(candidate).strip():
+            resolved_address = str(candidate).strip()
+            break
+    if not resolved_address:
+        try:
+            resolved_address = get_default_provider().address
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"resolve address: {exc}")
+            resolved_address = None
+    if not resolved_address:
+        errors.append("treasury address unavailable")
+        return snapshot
+
+    try:
+        checksum_address = _to_checksum(resolved_address)
+    except WalletError as exc:
+        errors.append(str(exc))
+        return snapshot
+
+    snapshot["address"] = checksum_address
+
+    try:
+        w3 = get_web3()
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"web3: {exc}")
+        return snapshot
+
+    # ETH balance (optional)
+    if include_eth:
+        try:
+            wei_balance = int(w3.eth.get_balance(checksum_address))
+            balances["ETH"] = {"wei": wei_balance}
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ETH balance: {exc}")
+
+    # Merge explicit token addresses with defaults from env
+    merged_tokens: dict[str, str] = {}
+    if token_addresses:
+        for symbol, addr in token_addresses.items():
+            if addr and str(addr).strip():
+                merged_tokens[symbol] = str(addr).strip()
+
+    defaults = {
+        "DIEM": os.getenv("DIEM_TOKEN_ADDRESS"),
+        "VVV": os.getenv("VVV_TOKEN_ADDRESS"),
+        "USDC": os.getenv("QUOTE_TOKEN_ADDRESS") or os.getenv("USDC_TOKEN_ADDRESS"),
+    }
+    for symbol, addr in defaults.items():
+        if symbol not in merged_tokens and addr and str(addr).strip():
+            merged_tokens[symbol] = str(addr).strip()
+
+    for symbol, addr in merged_tokens.items():
+        try:
+            checksum_token = _to_checksum(addr)
+        except WalletError as exc:
+            errors.append(f"{symbol} address: {exc}")
+            continue
+        try:
+            contract = get_contract(w3, checksum_token, "erc20.json")
+            decimals = int(contract.functions.decimals().call())
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{symbol} decimals: {exc}")
+            continue
+        try:
+            raw_units = int(contract.functions.balanceOf(checksum_address).call())
+            balances[symbol] = {
+                "units": raw_units,
+                "decimals": decimals,
+                "token_address": checksum_token,
+            }
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{symbol} balance: {exc}")
+            continue
+
+    return snapshot
 
 
 def get_default_provider() -> AgentKitWalletAdapter:

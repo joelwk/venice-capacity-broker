@@ -4,12 +4,71 @@ import types
 
 import pytest
 
+from decimal import Decimal
+
 from services.wallet.provider import (
     AgentKitWalletAdapter,
     WalletError,
+    describe_treasury_portfolio,
     sweep_profits_to_cold,
     transfer_from_cold_to_hot,
 )
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _log_treasury_portfolio(request: pytest.FixtureRequest) -> None:
+    """Emit a snapshot of the treasury wallet to aid config updates."""
+
+    snapshot = describe_treasury_portfolio()
+    address = snapshot.get("address")
+    balances = snapshot.get("balances", {})
+    errors = snapshot.get("errors", [])
+
+    lines = ["Treasury wallet portfolio snapshot:"]
+    lines.append(f"  address: {address or '<unavailable>'}")
+
+    if balances:
+        for symbol in sorted(balances.keys()):
+            entry = balances[symbol] or {}
+            if symbol == "ETH" and "wei" in entry:
+                try:
+                    human = Decimal(entry["wei"]) / Decimal(10**18)
+                    lines.append(
+                        f"  {symbol}: {human:.6f} ETH ({entry['wei']} wei)"
+                    )
+                except Exception:
+                    lines.append(f"  {symbol}: {entry.get('wei', '<unknown>')} wei")
+                continue
+
+            units = entry.get("units")
+            decimals = entry.get("decimals")
+            token_addr = entry.get("token_address")
+            if units is None or decimals is None:
+                lines.append(f"  {symbol}: <unavailable>")
+                continue
+            try:
+                human = Decimal(units) / Decimal(10**int(decimals))
+                lines.append(
+                    f"  {symbol}: {human:.6f} ({units} base units, decimals={decimals}, token={token_addr})"
+                )
+            except Exception:
+                lines.append(
+                    f"  {symbol}: {units} base units (decimals={decimals}, token={token_addr})"
+                )
+    else:
+        lines.append("  balances: <unavailable>")
+
+    if errors:
+        lines.append("  notes:")
+        for err in errors:
+            lines.append(f"    - {err}")
+
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter and hasattr(reporter, "write_line"):
+        for line in lines:
+            reporter.write_line(line)
+    else:
+        print("\n".join(lines))
 
 
 class _StubProvider:
