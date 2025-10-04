@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - import-time optional
     from web3 import Web3  # type: ignore
@@ -122,6 +122,37 @@ def get_contract(w3: 'Web3', address: str, abi_name: str) -> 'Contract':
     from web3 import Web3  # type: ignore
     abi = load_abi(abi_name)
     return w3.eth.contract(address=Web3.to_checksum_address(address), abi=abi)
+
+
+def encode_contract_call(contract: Any, fn_name: str, args: Optional[Sequence[Any]] = None) -> str:
+    """Encode a contract function call across Web3 versions.
+
+    Web3 v7 renamed the parameters for ``encode_abi`` so older keyword
+    invocations (`fn_name=...`) now raise ``TypeError``.  This helper first
+    tries the new positional signature, then falls back to the legacy keyword
+    form, and finally to the camelCase ``encodeABI`` used by Web3 v5/v6.
+    """
+
+    params: Sequence[Any] = [] if args is None else list(args)
+    encoder = getattr(contract, "encode_abi", None)
+    if callable(encoder):
+        try:
+            return encoder(fn_name, params)
+        except TypeError:
+            try:
+                return encoder(fn_name, args=params)
+            except TypeError:
+                try:
+                    return encoder(fn_name=fn_name, args=params)
+                except TypeError:
+                    pass
+    legacy = getattr(contract, "encodeABI", None)
+    if callable(legacy):
+        try:
+            return legacy(fn_name, params)
+        except TypeError:
+            return legacy(fn_name=fn_name, args=params)
+    raise TypeError("Contract does not expose encode_abi/encodeABI compatible signature")
 
 
 def build_eip1559_tx(w3: 'Web3', from_addr: str, to: Optional[str] = None, value: int = 0, data: Optional[bytes] = None) -> Dict[str, Any]:

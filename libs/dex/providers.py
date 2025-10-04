@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import inspect
 
 from libs.agentkit_ext.agentkit_wallet import get_address, send_tx
-from libs.agentkit_ext.web3_utils import get_contract, get_web3
+from libs.agentkit_ext.web3_utils import encode_contract_call, get_contract, get_web3
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
 
 try:
@@ -159,7 +159,7 @@ class UniswapV2DexProvider(DexProvider):
             current = 0
         if current >= required:
             return None
-        approve_data = erc20.encode_abi(fn_name="approve", args=[spender, required])
+        approve_data = encode_contract_call(erc20, "approve", [spender, required])
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def quote(self, amount_in: int, route: RoutePlan) -> Optional[Quote]:
@@ -289,7 +289,7 @@ class AerodromeDexProvider(DexProvider):
             current = 0
         if current >= required:
             return None
-        approve_data = erc20.encode_abi(fn_name="approve", args=[spender, required])
+        approve_data = encode_contract_call(erc20, "approve", [spender, required])
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def _routes(self, route: RoutePlan, stable: Optional[bool] = None) -> List[tuple[Address, Address, bool]]:
@@ -446,7 +446,7 @@ class UniswapV3DexProvider(DexProvider):
             current = 0
         if current >= required:
             return None
-        approve_data = erc20.encode_abi(fn_name="approve", args=[spender, required])
+        approve_data = encode_contract_call(erc20, "approve", [spender, required])
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def _normalize_quote_result(self, value: Any) -> int:

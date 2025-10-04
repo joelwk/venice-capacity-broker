@@ -13,7 +13,7 @@ except Exception:  # noqa: BLE001
         def to_checksum_address(addr: str) -> str:
             return addr
 
-from .web3_utils import get_contract, get_web3
+from .web3_utils import encode_contract_call, get_contract, get_web3
 from .agentkit_wallet import send_tx, get_address
 
 
@@ -39,30 +39,35 @@ class VVVActions:
         self.staking = get_contract(self.w3, self.staking_addr, "staking.json")
 
     def approve(self, amount: int) -> Dict[str, Any]:
-        data = self.erc20.encode_abi(
-            fn_name="approve",
-            args=[Web3.to_checksum_address(self.staking_addr), amount],
+        data = encode_contract_call(
+            self.erc20,
+            "approve",
+            [Web3.to_checksum_address(self.staking_addr), amount],
         )
         tx_hash = send_tx(self.token_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "approve", "tx_hash": tx_hash}
 
     def stake(self, amount: int) -> Dict[str, Any]:
-        data = self.staking.encode_abi(
-            fn_name=os.getenv("VVV_STAKE_FN", "stake"), args=[amount]
+        data = encode_contract_call(
+            self.staking,
+            os.getenv("VVV_STAKE_FN", "stake"),
+            [amount],
         )
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "stake", "tx_hash": tx_hash}
 
     def claim(self) -> Dict[str, Any]:
-        data = self.staking.encode_abi(
-            fn_name=os.getenv("VVV_CLAIM_FN", "claim"), args=[]
+        data = encode_contract_call(
+            self.staking,
+            os.getenv("VVV_CLAIM_FN", "claim"),
+            [],
         )
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "claim", "tx_hash": tx_hash}
 
     def unstake(self, amount: int) -> Dict[str, Any]:
         fn = os.getenv("VVV_UNSTAKE_FN", "unstake")
-        data = self.staking.encode_abi(fn_name=fn, args=[amount])
+        data = encode_contract_call(self.staking, fn, [amount])
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "unstake", "tx_hash": tx_hash}
 
@@ -116,7 +121,7 @@ class DIEMACTIONS:
         if not self.diem:
             raise FileNotFoundError("abi/diem.json is required to call mint()")
         fn = os.getenv("DIEM_MINT_FN", "mint")
-        data = self.diem.encode_abi(fn_name=fn, args=[amount])
+        data = encode_contract_call(self.diem, fn, [amount])
         tx_hash = send_tx(self.diem_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "mint", "tx_hash": tx_hash}
 
@@ -124,7 +129,7 @@ class DIEMACTIONS:
         if not self.diem:
             raise FileNotFoundError("abi/diem.json is required to call burn()")
         fn = os.getenv("DIEM_BURN_FN", "burn")
-        data = self.diem.encode_abi(fn_name=fn, args=[amount])
+        data = encode_contract_call(self.diem, fn, [amount])
         tx_hash = send_tx(self.diem_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "burn", "tx_hash": tx_hash}
 
@@ -153,7 +158,7 @@ class DIEMACTIONS:
                 pass
         if not target:
             raise FileNotFoundError("No contract available for lock_svvv (diem or staking)")
-        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        data = encode_contract_call(target, fn, [int(amount)])
         tx_hash = send_tx(target_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "lock_svvv", "tx_hash": tx_hash}
 
@@ -181,7 +186,7 @@ class DIEMACTIONS:
                 pass
         if not target:
             raise FileNotFoundError("No contract available for unlock_svvv (diem or staking)")
-        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        data = encode_contract_call(target, fn, [int(amount)])
         tx_hash = send_tx(target_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "unlock_svvv", "tx_hash": tx_hash}
 
@@ -197,7 +202,7 @@ class DIEMACTIONS:
     def stake_for_api(self, amount: int) -> Dict[str, Any]:
         target, addr = self._resolve_stake_target()
         fn = os.getenv("DIEM_STAKE_FN", "stake")
-        data = target.encode_abi(fn_name=fn, args=[int(amount)])
+        data = encode_contract_call(target, fn, [int(amount)])
         tx_hash = send_tx(addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "stake_diem", "tx_hash": tx_hash}
 
@@ -222,8 +227,10 @@ class DIEMACTIONS:
             required_in = int(amounts_in[0])
             slippage_bps = int(os.getenv("SLIPPAGE_BPS", "100"))
             max_in = required_in * (10_000 + slippage_bps) // 10_000
-            approve_data = erc20_in.encode_abi(
-                fn_name="approve", args=[self.router.address, max_in]
+            approve_data = encode_contract_call(
+                erc20_in,
+                "approve",
+                [self.router.address, max_in],
             )
             approve_hash = send_tx(path[0], bytes.fromhex(approve_data[2:]))
             deadline = int(time.time()) + 20 * 60
@@ -244,8 +251,10 @@ class DIEMACTIONS:
         # Approve router to spend the input token
         path = raw_path
         erc20_in = get_contract(self.w3, path[0], "erc20.json")
-        approve_data = erc20_in.encode_abi(
-            fn_name="approve", args=[self.router.address, amount]
+        approve_data = encode_contract_call(
+            erc20_in,
+            "approve",
+            [self.router.address, amount],
         )
         approve_hash = send_tx(path[0], bytes.fromhex(approve_data[2:]))
 
