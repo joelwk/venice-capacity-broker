@@ -68,6 +68,27 @@ class StakeMaster:
         if live and progressive_env and not self._auto_stake_attempted and staked_units <= 0 and min_active_units > 0:
             stake_action["attempted"] = True
             try:
+                approve_tx = None
+                try:
+                    approve_tx = self.staking.approve(int(min_active_units))
+                    stake_action["approve"] = approve_tx
+                except Exception as approve_exc:  # noqa: BLE001
+                    logger.warning(f"Auto-stake approve failed: {approve_exc}")
+                    stake_action.update({
+                        "executed": False,
+                        "reason": f"approve_error:{approve_exc}",
+                    })
+                    _emit_event(
+                        "staking.auto_stake",
+                        {
+                            "status": "error",
+                            "units": int(min_active_units),
+                            "error": f"approve:{approve_exc}",
+                        },
+                    )
+                    self._auto_stake_attempted = True
+                    raise
+
                 res = self.staking.stake(int(min_active_units))
                 logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
                 _emit_event(
@@ -87,10 +108,8 @@ class StakeMaster:
                 staked_units = int(status.get("staked", staked_units))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Auto-stake attempt failed: {exc}")
-                stake_action.update({
-                    "executed": False,
-                    "reason": f"error:{exc}",
-                })
+                stake_action.setdefault("reason", f"error:{exc}")
+                stake_action.setdefault("executed", False)
                 _emit_event(
                     "staking.auto_stake",
                     {
