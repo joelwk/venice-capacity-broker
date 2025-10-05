@@ -187,6 +187,23 @@ def get_engine():
         kwargs.update(_sqlite_connect_kwargs())
     else:
         kwargs["pool_size"] = pool_size
+        pre_ping_env = os.getenv("DATABASE_POOL_PRE_PING")
+        if pre_ping_env is None:
+            kwargs["pool_pre_ping"] = True
+        else:
+            kwargs["pool_pre_ping"] = str(pre_ping_env).strip().lower() in {"1", "true", "yes", "on"}
+        try:
+            recycle = int(os.getenv("DATABASE_POOL_RECYCLE_SECONDS") or 0)
+            if recycle > 0:
+                kwargs["pool_recycle"] = recycle
+        except Exception:
+            pass
+        try:
+            timeout = float(os.getenv("DATABASE_POOL_TIMEOUT_SECONDS") or 0)
+            if timeout > 0:
+                kwargs["pool_timeout"] = timeout
+        except Exception:
+            pass
 
     try:
         return _call_engine_factory(url, **kwargs)
