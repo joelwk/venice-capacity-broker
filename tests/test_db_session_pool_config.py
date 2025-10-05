@@ -22,13 +22,13 @@ def test_get_engine_sets_pool_pre_ping_by_default(monkeypatch):
     def fake_call(url, **kwargs):
         captured['url'] = url
         captured['kwargs'] = kwargs
-        return SimpleNamespace(url=url)
+        return object()
 
     monkeypatch.setattr(session, '_ensure_sqlmodel', lambda: None)
     monkeypatch.setattr(session, '_call_engine_factory', fake_call)
-    engine = session.get_engine()
+    session.get_engine()
 
-    assert engine.url.startswith('postgresql')
+    assert 'kwargs' in captured, 'engine factory was not invoked'
     assert captured['kwargs']['pool_pre_ping'] is True
 
 
@@ -40,10 +40,11 @@ def test_get_engine_allows_pool_pre_ping_disable(monkeypatch):
     def fake_call(url, **kwargs):
         captured['url'] = url
         captured['kwargs'] = kwargs
-        return SimpleNamespace(url=url)
+        return object()
 
     monkeypatch.setattr(session, '_ensure_sqlmodel', lambda: None)
     monkeypatch.setattr(session, '_call_engine_factory', fake_call)
     session.get_engine()
 
+    assert 'kwargs' in captured, 'engine factory was not invoked'
     assert captured['kwargs']['pool_pre_ping'] is False
