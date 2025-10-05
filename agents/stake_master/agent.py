@@ -66,59 +66,97 @@ class StakeMaster:
         min_active_units = int(status.get("min_active_stake") or os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
         progressive_env = str(os.getenv("STAKEMASTER_PROGRESSIVE_ENABLE", "true")).strip().lower() in {"1", "true", "yes", "on"}
         if live and progressive_env and not self._auto_stake_attempted and staked_units <= 0 and min_active_units > 0:
-            stake_action["attempted"] = True
-            try:
-                approve_tx = None
+            available_units = self._wallet_vvv_balance()
+            if available_units is not None:
                 try:
-                    approve_tx = self.staking.approve(int(min_active_units))
-                    stake_action["approve"] = approve_tx
-                except Exception as approve_exc:  # noqa: BLE001
-                    logger.warning(f"Auto-stake approve failed: {approve_exc}")
+                    stake_action["available"] = int(available_units)
+                except Exception:
+                    stake_action["available"] = available_units
+            try:
+                stake_action["required"] = int(min_active_units)
+            except Exception:
+                stake_action["required"] = min_active_units
+            if available_units is not None and int(available_units) < int(min_active_units):
+                available_int = int(available_units)
+                required_int = int(min_active_units)
+                logger.warning(
+                    "Auto-stake skipped: insufficient VVV balance",
+                    extra={"available": available_int, "required": required_int},
+                )
+                stake_action.update({
+                    "attempted": False,
+                    "executed": False,
+                    "reason": "insufficient_balance",
+                })
+                stake_action["available"] = available_int
+                stake_action["required"] = required_int
+                try:
+                    _emit_event(
+                        "staking.auto_stake",
+                        {
+                            "status": "skipped",
+                            "units": required_int,
+                            "available": available_int,
+                            "reason": "insufficient_balance",
+                        },
+                    )
+                except Exception:
+                    pass
+                self._auto_stake_attempted = True
+            else:
+                stake_action["attempted"] = True
+                try:
+                    approve_tx = None
+                    try:
+                        approve_tx = self.staking.approve(int(min_active_units))
+                        stake_action["approve"] = approve_tx
+                    except Exception as approve_exc:  # noqa: BLE001
+                        logger.warning(f"Auto-stake approve failed: {approve_exc}")
+                        stake_action.update({
+                            "executed": False,
+                            "reason": f"approve_error:{approve_exc}",
+                        })
+                        _emit_event(
+                            "staking.auto_stake",
+                            {
+                                "status": "error",
+                                "units": int(min_active_units),
+                                "error": f"approve:{approve_exc}",
+                            },
+                        )
+                        self._auto_stake_attempted = True
+                        raise
+
+                    res = self.staking.stake(int(min_active_units))
+                    logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
+                    _emit_event(
+                        "staking.auto_stake",
+                        {
+                            "status": res.get("status") if isinstance(res, dict) else "ok",
+                            "units": int(min_active_units),
+                        },
+                    )
                     stake_action.update({
-                        "executed": False,
-                        "reason": f"approve_error:{approve_exc}",
+                        "executed": True,
+                        "tx": res,
+                        "reason": "auto_stake",
                     })
+                    self._auto_stake_attempted = True
+                    status = self.staking.status()
+                    staked_units = int(status.get("staked", staked_units))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(f"Auto-stake attempt failed: {exc}")
+                    stake_action.setdefault("reason", f"error:{exc}")
+                    stake_action.setdefault("executed", False)
                     _emit_event(
                         "staking.auto_stake",
                         {
                             "status": "error",
                             "units": int(min_active_units),
-                            "error": f"approve:{approve_exc}",
+                            "error": str(exc),
                         },
                     )
                     self._auto_stake_attempted = True
-                    raise
-
-                res = self.staking.stake(int(min_active_units))
-                logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
-                _emit_event(
-                    "staking.auto_stake",
-                    {
-                        "status": res.get("status") if isinstance(res, dict) else "ok",
-                        "units": int(min_active_units),
-                    },
-                )
-                stake_action.update({
-                    "executed": True,
-                    "tx": res,
-                    "reason": "auto_stake",
-                })
-                self._auto_stake_attempted = True
-                status = self.staking.status()
-                staked_units = int(status.get("staked", staked_units))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"Auto-stake attempt failed: {exc}")
-                stake_action.setdefault("reason", f"error:{exc}")
-                stake_action.setdefault("executed", False)
-                _emit_event(
-                    "staking.auto_stake",
-                    {
-                        "status": "error",
-                        "units": int(min_active_units),
-                        "error": str(exc),
-                    },
-                )
-                self._auto_stake_attempted = True
 
         rewards = int(status.get("rewards", 0))
 
@@ -169,6 +207,25 @@ class StakeMaster:
                 "error": heartbeat_error,
             },
         }
+
+    def _wallet_vvv_balance(self) -> Optional[int]:
+        actions = getattr(self.staking, "actions", None)
+        if actions is None:
+            return None
+        erc20 = getattr(actions, "erc20", None)
+        if erc20 is None:
+            return None
+        try:
+            from libs.agentkit_ext.agentkit_wallet import get_address
+
+            balance = erc20.functions.balanceOf(get_address()).call()
+            return int(balance)
+        except Exception as exc:  # noqa: BLE001
+            try:
+                logger.debug(f"VVV balance lookup failed: {exc}")
+            except Exception:
+                pass
+            return None
 
     # --- heartbeat helpers -------------------------------------------------
     def _kv(self):  # lazy to keep Replit/Redis optional

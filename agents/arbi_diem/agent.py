@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 import math
+from decimal import Decimal, InvalidOperation
 
 from libs.telemetry.logger import get_logger
 from importlib import import_module
@@ -53,10 +54,38 @@ class ArbiDiem:
         return []
 
     def _desired_units(self) -> int:
+        os_mod = __import__("os")
+        raw = str(os_mod.getenv("ARBI_DIEM_MINT_UNITS") or "1000").strip()
+        if not raw:
+            raw = "1000"
+        base_flag_raw = str(os_mod.getenv("ARBI_DIEM_MINT_UNITS_BASE_UNITS") or "").strip().lower()
+        base_flag = base_flag_raw in {"1", "true", "yes", "on"}
+        if base_flag:
+            try:
+                value = int(raw, 0)
+            except Exception:
+                try:
+                    value = int(Decimal(raw))
+                except Exception:
+                    return 0
+            return max(0, int(value))
         try:
-            return int((__import__("os").getenv("ARBI_DIEM_MINT_UNITS") or "1000").strip() or 1000)
+            tokens = Decimal(raw)
+        except (InvalidOperation, ValueError):
+            tokens = Decimal("1000")
+        decimals = 18
+        try:
+            decimals = int(self.risk._diem_decimals())
         except Exception:
-            return 1000
+            decimals = 18
+        scale = Decimal(10) ** decimals
+        units = tokens * scale
+        if units <= 0:
+            return 0
+        try:
+            return int(units)
+        except Exception:
+            return 0
 
     def _decimals_out(self) -> int:
         try:
