@@ -117,8 +117,36 @@ def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
     global create_engine
-    if create_engine is not None:
+    import importlib
+    import sys
+
+    def _import_sqlalchemy():
+        try:
+            return importlib.import_module("sqlalchemy")  # type: ignore[return-value]
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("sqlalchemy not installed") from exc
+
+    sqlalchemy = sys.modules.get("sqlalchemy")
+    if sqlalchemy is None:
+        sqlalchemy = _import_sqlalchemy()
+
+    def _ensure_sqlite_dialect() -> bool:
+        try:
+            importlib.import_module("sqlalchemy.dialects.sqlite")
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    if create_engine is not None and _ensure_sqlite_dialect():
         return create_engine
+
+    if not _ensure_sqlite_dialect():
+        sys.modules.pop("sqlalchemy", None)
+        sqlalchemy = _import_sqlalchemy()
+
+    if not _ensure_sqlite_dialect():
+        raise RuntimeError("sqlalchemy sqlite dialect unavailable")
+
     try:
         from sqlalchemy import create_engine as _sa_create_engine  # type: ignore
     except Exception as exc:  # noqa: BLE001
