@@ -256,10 +256,8 @@ def enrich_route(
         a = tokens[idx]
         b = tokens[idx + 1]
         info = get_cached_pair_info_for_tokens(a, b)
-        reverse = False
         if not info:
             info = get_cached_pair_info_for_tokens(b, a)
-            reverse = True if info else False
         if not info:
             ensure_verified = True
             continue

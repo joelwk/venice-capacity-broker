@@ -44,7 +44,7 @@ def test_diem_lock_on_mint_and_unlock_on_burn(monkeypatch):
     amount = 10**18  # 1 DIEM in base units
 
     r1 = svc.mint(amount)
-    r2 = svc.burn(amount)
+    svc.burn(amount)
 
     # Expected sequence: lock -> mint -> burn -> unlock
     kinds = [k for (k, _v) in calls]

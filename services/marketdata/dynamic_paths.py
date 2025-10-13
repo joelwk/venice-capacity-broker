@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
 
-from libs.dex.routes import make_route
+from libs.dex.routes import RoutePlan, make_route
 from libs.telemetry.logger import get_logger
 from services.marketdata.etherscan_verify import get_uniswap_v3_fee
 
@@ -362,9 +362,9 @@ def discover_trade_paths(logger_instance=None) -> List[Dict[str, object]]:
     return ordered
 
 
-def discover_trade_route_plans(logger_instance=None) -> List["RoutePlan"]:
+def discover_trade_route_plans(logger_instance=None) -> List[RoutePlan]:
     specs = discover_trade_paths(logger_instance=logger_instance)
-    plans: List["RoutePlan"] = []
+    plans: List[RoutePlan] = []
     for spec in specs:
         tokens = spec.get("tokens")
         if not tokens or len(tokens) < 2:

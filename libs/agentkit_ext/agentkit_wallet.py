@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 
 def _must(env: str) -> str:
@@ -94,9 +94,6 @@ def get_agentkit_wallet() -> Tuple[object, str]:
         rpc_url=os.getenv("BASE_RPC_URL"),
     )
     return EthAccountWalletProvider(cfg), "eth"
-
-
-from typing import Optional
 
 
 def send_tx(to: str, data: Optional[bytes] = None, value: int = 0) -> str:

@@ -42,7 +42,8 @@ def test_path_quote_engine_external_fallback(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", quote_addr)
     monkeypatch.delenv("DIEM_VVV_PAIR_ADDRESS", raising=False)
     monkeypatch.delenv("VVV_USDC_POOL_ADDRESS", raising=False)
-    fetcher = lambda symbol: 1.25 if symbol == "DIEM" else None
+    def fetcher(symbol: str) -> float | None:
+        return 1.25 if symbol == "DIEM" else None
     engine = PathQuoteEngine(external_price_fetcher=fetcher)
     request = QuoteRequest(
         token_in=diem_addr,

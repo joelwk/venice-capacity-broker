@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 SQL-backed TenantStore replacement using SQLModel.
 
@@ -11,14 +9,15 @@ Enable by setting `BROKER_STORE_BACKEND=sql` and configuring
 SQLModel is unavailable or initialization fails.
 """
 
+from __future__ import annotations
+
+import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from datetime import datetime, timezone
-import threading
-
-from db.models import Tenant as DbTenant, Key as DbKey
-from db.session import get_session, create_db_and_tables
+from db.models import Key as DbKey, Tenant as DbTenant
+from db.session import create_db_and_tables, get_session
 
 
 @dataclass

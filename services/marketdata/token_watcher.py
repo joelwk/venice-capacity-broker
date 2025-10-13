@@ -10,18 +10,18 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+from db.models import AssetToken, TokenSnapshot
+from db.session import create_db_and_tables, get_session
+from libs.dex.routes import RoutePlan, make_route
 from libs.telemetry.logger import get_logger
 
 # Optional: load .env automatically if python-dotenv is installed
 try:  # pragma: no cover - optional convenience
     from dotenv import load_dotenv  # type: ignore
-
-    load_dotenv()
 except Exception:
-    pass
-
-from db.session import get_session, create_db_and_tables
-from db.models import AssetToken, TokenSnapshot
+    load_dotenv = None
+else:
+    load_dotenv()
 
 
 logger = get_logger("marketdata.token_watcher")
@@ -50,8 +50,7 @@ DEFAULT_BRIDGE_TOKEN_BY_CHAIN: Dict[int, str] = {
 }
 
 # In-memory cache for successful pricing paths per token
-# Keyed by "<token_addr.lower()>-><quote_addr.lower()>" → (RoutePlan, timestamp)
-from libs.dex.routes import RoutePlan, make_route
+# Keyed by "<token_addr.lower()>-><quote_addr.lower()>" (RoutePlan, timestamp)
 
 _PRICE_PATH_CACHE: Dict[str, Tuple[RoutePlan, float]] = {}
 
@@ -634,11 +633,14 @@ def persist_metrics(m: TokenMetrics) -> None:
         else:
             changed = False
             if m.symbol and tok.symbol != m.symbol:
-                tok.symbol = m.symbol; changed = True
+                tok.symbol = m.symbol
+                changed = True
             if m.name and tok.name != m.name:
-                tok.name = m.name; changed = True
+                tok.name = m.name
+                changed = True
             if m.decimals is not None and tok.decimals != m.decimals:
-                tok.decimals = m.decimals; changed = True
+                tok.decimals = m.decimals
+                changed = True
             if changed:
                 tok.updated_at = now
         snap = TokenSnapshot(

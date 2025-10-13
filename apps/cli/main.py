@@ -2,53 +2,50 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
-from pathlib import Path
+import re
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-# Ensure repo root is in sys.path before importing local packages
-_repo_root = Path(__file__).resolve().parents[2]
-if str(_repo_root) not in sys.path:
-    sys.path.insert(0, str(_repo_root))
+import requests
 
-from apps._path import add_repo_root_to_sys_path
-
-add_repo_root_to_sys_path()
-
-# Load .env early so CLI subcommands see expected environment
-# Use repo root .env explicitly so CWD does not matter
-try:
-    from libs.env import load_dotenv_if_present  # type: ignore
-    load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
-    docker_env = _repo_root / ".env.docker"
-    if docker_env.exists():
-        load_dotenv_if_present(path=str(docker_env), override=True)
-except Exception:
-    # Fallback: try direct dotenv loading at repo root
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(dotenv_path=str(_repo_root / ".env"), override=False)
-        docker_env = _repo_root / ".env.docker"
-        if docker_env.exists():
-            load_dotenv(dotenv_path=str(docker_env), override=True)
-    except Exception:
-        pass
-
+from apps._path import REPO_ROOT
+from libs.runtime.preflight import ensure_agentkit_installed, validate_live_wallet_env
 from libs.telemetry.logger import get_logger
 from libs.venice_sdk.client import VeniceClient
-from services.venice_keys.manager import KeyManager
-from services.wallet.provider import WalletError
-from libs.runtime.preflight import ensure_agentkit_installed, validate_live_wallet_env
 from scripts.wallet_cli import (
     cmd_address as wallet_cmd_address,
-    cmd_sign as wallet_cmd_sign,
     cmd_send as wallet_cmd_send,
+    cmd_sign as wallet_cmd_sign,
     cmd_sweep as wallet_cmd_sweep,
     cmd_transfer_cold as wallet_cmd_transfer_cold,
 )
-from typing import Any, Dict, List, Optional
-import requests
-import re
-from datetime import datetime
+from services.venice_keys.manager import KeyManager
+from services.wallet.provider import WalletError
+
+
+def _load_dotenv() -> None:
+    """Best-effort loading of repo-level dotenv files for CLI usage."""
+
+    docker_env = REPO_ROOT / ".env.docker"
+    try:
+        from libs.env import load_dotenv_if_present  # type: ignore
+    except Exception:
+        try:
+            from dotenv import load_dotenv
+        except Exception:
+            return
+
+        load_dotenv(dotenv_path=str(REPO_ROOT / ".env"), override=False)
+        if docker_env.exists():
+            load_dotenv(dotenv_path=str(docker_env), override=True)
+        return
+
+    load_dotenv_if_present(path=str(REPO_ROOT / ".env"), override=False)
+    if docker_env.exists():
+        load_dotenv_if_present(path=str(docker_env), override=True)
+
+
+_load_dotenv()
 
 
 logger = get_logger("cli")
@@ -1254,11 +1251,14 @@ def build_parser() -> argparse.ArgumentParser:
                 try:
                     r = session.get(base.rstrip('/') + path, timeout=timeout)
                     if r.ok:
-                        spec = r.json(); spec_loc = path; break
+                        spec = r.json()
+                        spec_loc = path
+                        break
                 except Exception:
                     continue
             if spec is None:
-                logger.error(f"Failed to fetch OpenAPI from {base}"); return
+                logger.error(f"Failed to fetch OpenAPI from {base}")
+                return
             servers = spec.get("servers") or []
             server_url = servers[0].get("url") if servers and isinstance(servers[0], dict) else None
             if server_url and isinstance(server_url, str):

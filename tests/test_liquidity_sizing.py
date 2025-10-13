@@ -5,8 +5,6 @@ from importlib import import_module
 
 def test_liquidity_adjustment_halves_until_within_cap(monkeypatch):
     # Arrange a fake aggregator that worsens price for large sizes
-    dex_mod = import_module("libs.dex.providers")
-
     class FakeAgg:
         def best_quote(self, amount_in: int, path):  # noqa: ANN001
             # amount_in is DIEM units (base units, 1e18); path unused
