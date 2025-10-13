@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
-logger = logging.getLogger("db.session")
+from libs.telemetry.logger import get_logger
+
+logger = get_logger("db.session")
 
 
 _ENGINE_ATTEMPTS: List[Dict[str, Any]] = []

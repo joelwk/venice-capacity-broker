@@ -11,6 +11,7 @@ try:
 
     _repo_root = _PathRoot(__file__).resolve().parents[2]
     load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
+    load_dotenv_if_present(path=str(_repo_root / ".env.docker"), override=False)
 except Exception:
     pass
 
@@ -279,8 +280,9 @@ try:
     # --- Defaults from environment ---
     ADMIN_TOKEN = _os.getenv("BROKER_ADMIN_TOKEN")
     REQUIRE_ADMIN = (_os.getenv("BROKER_REQUIRE_ADMIN_TOKEN") or "false").strip().lower() in {"1", "true", "yes", "on"}
-    DEFAULT_QUOTA = int((_os.getenv("BROKER_DEFAULT_QUOTA") or "0").strip() or 0)
-    DEFAULT_EXPIRY_DAYS = int((_os.getenv("BROKER_DEFAULT_EXPIRY_DAYS") or "0").strip() or 0)
+    # Sensible defaults to satisfy contract: consumptionLimit + expiresAt required
+    DEFAULT_QUOTA = int((_os.getenv("BROKER_DEFAULT_QUOTA") or "1000").strip() or 1000)
+    DEFAULT_EXPIRY_DAYS = int((_os.getenv("BROKER_DEFAULT_EXPIRY_DAYS") or "30").strip() or 30)
 
     # Startup security checks/logs
     if REQUIRE_ADMIN and not ADMIN_TOKEN:
@@ -658,8 +660,9 @@ try:
         }
         ven_key = (_os.getenv("VENICE_API_KEY") or "").strip()
         ven_headers = {"Content-Type": "application/json"}
+        # Never expose Authorization header value in responses or logs
         if ven_key:
-            ven_headers["Authorization"] = f"Bearer {ven_key}"
+            ven_headers["Authorization"] = "Bearer <redacted>"
         models_ok = False
         vvv_ok = False
         models_code: int | None = None
@@ -671,7 +674,11 @@ try:
             try:
                 import requests as _rq
 
-                r = _rq.get(ven_base.rstrip("/") + ven_paths["models"], headers=ven_headers, timeout=3)
+                # Use a transient header for probing; do not reuse/redact object
+                _h = dict(ven_headers)
+                if ven_key:
+                    _h["Authorization"] = f"Bearer {ven_key}"
+                r = _rq.get(ven_base.rstrip("/") + ven_paths["models"], headers=_h, timeout=3)
                 models_ok = bool(r.ok)
                 models_code = int(r.status_code)
             except _rq.exceptions.Timeout:
@@ -683,7 +690,10 @@ try:
             try:
                 import requests as _rq2
 
-                r2 = _rq2.get(ven_base.rstrip("/") + ven_paths["vvv"], headers=ven_headers, timeout=3)
+                _h2 = dict(ven_headers)
+                if ven_key:
+                    _h2["Authorization"] = f"Bearer {ven_key}"
+                r2 = _rq2.get(ven_base.rstrip("/") + ven_paths["vvv"], headers=_h2, timeout=3)
                 vvv_ok = bool(r2.ok)
                 vvv_code = int(r2.status_code)
             except _rq2.exceptions.Timeout:
@@ -695,7 +705,10 @@ try:
             # Explicit VVV metrics (any one success implies metrics availability)
             try:
                 import requests as _rq4
-                r4 = _rq4.get(ven_base.rstrip("/") + ven_paths["vvv_circ"], headers=ven_headers, timeout=3)
+                _h4 = dict(ven_headers)
+                if ven_key:
+                    _h4["Authorization"] = f"Bearer {ven_key}"
+                r4 = _rq4.get(ven_base.rstrip("/") + ven_paths["vvv_circ"], headers=_h4, timeout=3)
                 vvv_circ_code = int(r4.status_code)
                 vvv_ok = vvv_ok or bool(r4.ok)
             except _rq4.exceptions.Timeout:
@@ -704,7 +717,10 @@ try:
                 vvv_circ_code = None
             try:
                 import requests as _rq5
-                r5 = _rq5.get(ven_base.rstrip("/") + ven_paths["vvv_util"], headers=ven_headers, timeout=3)
+                _h5 = dict(ven_headers)
+                if ven_key:
+                    _h5["Authorization"] = f"Bearer {ven_key}"
+                r5 = _rq5.get(ven_base.rstrip("/") + ven_paths["vvv_util"], headers=_h5, timeout=3)
                 vvv_util_code = int(r5.status_code)
                 vvv_ok = vvv_ok or bool(r5.ok)
             except _rq5.exceptions.Timeout:
@@ -713,7 +729,10 @@ try:
                 vvv_util_code = None
             try:
                 import requests as _rq6
-                r6 = _rq6.get(ven_base.rstrip("/") + ven_paths["vvv_yield"], headers=ven_headers, timeout=3)
+                _h6 = dict(ven_headers)
+                if ven_key:
+                    _h6["Authorization"] = f"Bearer {ven_key}"
+                r6 = _rq6.get(ven_base.rstrip("/") + ven_paths["vvv_yield"], headers=_h6, timeout=3)
                 vvv_yield_code = int(r6.status_code)
                 vvv_ok = vvv_ok or bool(r6.ok)
             except _rq6.exceptions.Timeout:
@@ -737,7 +756,8 @@ try:
             return f"http:{code}"
 
         venice_cfg = {
-            "baseUrl": ven_base or None,
+            # Hide base URL in env snapshot to avoid leaking internal hosts; provide a coarse label instead
+            "baseUrl": ("set" if ven_base else None),
             "modelsPath": ven_paths["models"],
             "vvvPath": ven_paths["vvv"],
             "offlineSignals": ((_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}),
@@ -1283,7 +1303,7 @@ try:
         # Optional: per-tenant KV-configured limits override env defaults
         win_s = RATE_LIMIT_WINDOW_SECONDS
         max_req = RATE_LIMIT_MAX_REQUESTS
-        if _kv_admin is not None:
+        if _kv_admin is not None and RATE_LIMITS_ENABLED and _limiter is not None:
             try:
                 import json as _json
                 raw = _kv_admin.get(f"broker:tenant:{t.id}:limits")
@@ -1309,7 +1329,7 @@ try:
             pass
 
         # Optional: enforce KV-based sliding-window limit per tenant
-        if _limiter is not None and max_req > 0 and win_s > 0:
+        if RATE_LIMITS_ENABLED and _limiter is not None and max_req > 0 and win_s > 0:
             key = f"tenant:{t.id}:chat"
             allowed, hdrs = _limiter.allow(key, max_req, win_s)
             if not allowed:
@@ -1646,7 +1666,7 @@ try:
                 last_latency = duration
                 last_ts = time.time()
 
-            sla_raw = _os.getenv("MARKETDATA_PRICE_SLA_SECONDS")
+            sla_raw = _os.getenv("MARKETDATA_PRICE_SLA_SECONDS") or _os.getenv("MARKETDATA_SLA_SECONDS")
             try:
                 sla_target = float(sla_raw) if sla_raw not in (None, "") else 0.0
             except Exception:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, List
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional, Tuple, Union
 
 from libs.telemetry.logger import get_logger
 
@@ -17,14 +17,87 @@ class QuorumMember:
 
 
 @dataclass
+class QuorumVote:
+    approve: bool
+    weight: Optional[float] = None
+    confidence: float = 1.0
+    reason: Optional[str] = None
+
+
+@dataclass
 class Quorum:
     members: List[QuorumMember]
     threshold: float = 0.5  # simple majority by weight
+    _last_info: Optional[dict] = field(default=None, init=False, repr=False)
+    _last_decision: Optional[bool] = field(default=None, init=False, repr=False)
 
     def decide(self) -> bool:
-        total = sum(m.weight for m in self.members)
-        yes = sum(m.weight for m in self.members if m.vote())
-        ratio = yes / total if total else 0
-        logger.info(f"Quorum vote ratio={ratio:.2f} (thr={self.threshold:.2f})")
-        return ratio >= self.threshold
+        decision, info = self.decide_with_details()
+        self._last_decision = decision
+        self._last_info = info
+        return decision
 
+    def decide_with_details(self) -> Tuple[bool, dict]:
+        breakdown = []
+        approved = 0.0
+        total = 0.0
+
+        for member in self.members:
+            raw_vote = member.vote()
+            normalized = self._normalize_vote(raw_vote, member.weight)
+            weight = normalized.weight if normalized.weight is not None else member.weight
+            confidence = self._clamp_confidence(normalized.confidence)
+            effective_weight = float(weight) * confidence
+            total += effective_weight
+            if normalized.approve:
+                approved += effective_weight
+            breakdown.append(
+                {
+                    "name": member.name,
+                    "approve": bool(normalized.approve),
+                    "weight": float(weight),
+                    "confidence": confidence,
+                    "effectiveWeight": effective_weight,
+                    "reason": normalized.reason,
+                }
+            )
+
+        ratio = approved / total if total else 0.0
+        decision = ratio >= float(self.threshold)
+        info = {
+            "ratio": ratio,
+            "approvedWeight": approved,
+            "totalWeight": total,
+            "threshold": float(self.threshold),
+            "breakdown": breakdown,
+            "confidence": max((entry["confidence"] for entry in breakdown), default=0.0),
+        }
+        logger.info(
+            "Quorum vote ratio=%.2f thr=%.2f",
+            ratio,
+            float(self.threshold),
+        )
+        self._last_info = info
+        self._last_decision = decision
+        return decision, info
+
+    def last_info(self) -> Optional[dict]:
+        return self._last_info
+
+    def _normalize_vote(self, raw: Union[bool, QuorumVote, dict], default_weight: float) -> QuorumVote:
+        if isinstance(raw, QuorumVote):
+            return raw
+        if isinstance(raw, dict):
+            return QuorumVote(
+                approve=bool(raw.get("approve", raw.get("vote", False))),
+                weight=raw.get("weight", default_weight),
+                confidence=float(raw.get("confidence", 1.0)),
+                reason=raw.get("reason"),
+            )
+        return QuorumVote(approve=bool(raw), weight=default_weight, confidence=1.0)
+
+    def _clamp_confidence(self, value: float) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return 1.0

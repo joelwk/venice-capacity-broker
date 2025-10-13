@@ -22,7 +22,8 @@ For economics/timing details and risk levers (utilization, emissions, “active 
 * Completed: Wallet and staking automation keeps us active (`services/wallet`, `services/staking/client.py`, `agents/stake_master/agent.py`).
 * Completed: Broker API with scoped keys and buyer UI handles quotes, payments, and issuance (`apps/broker-api/app.py`, `apps/control-plane/*`).
 * Completed: DIEM mint/burn plus ArbiDiem risk and pricing loops run in production (`services/diem`, `agents/arbi_diem/agent.py`, `services/marketdata/provider.py`).
-* Next: Promote the orchestrator to the quorum graph and expand AI Treasurer automation before scaling tenant load.
+* Completed: Quorum-weighted orchestrator with dynamic listen intervals, AI Treasurer rebalancing, and capacity failsafe logic (`graph/workflows/orchestrator.py`, `agents/quorum/core.py`, `agents/capacity_broker/agent.py`, `agents/ai_treasurer/agent.py`).
+* Next: Harden operations (abuse analytics, autoscale) and expand treasury execution into live hedging ahead of tenant scale-up.
 
 ---
 
@@ -161,7 +162,7 @@ We encode each revenue stream as a **LangGraph workflow** with nodes for observa
 
 1. **Broker API**: a thin HTTP service that accepts prompts and forwards to Venice using **per-tenant scoped keys** with **consumptionLimit** (1–N Diem/day) and expiry; throttle per key. ([docs.venice.ai][2])
 2. **Pricing**: dynamic (surge when utilisation is high), set to undercut centralized APIs while margining >0 since our marginal cost is 0 when staked. Venice explicitly allows reselling capacity. ([Venice AI][3])
-3. **Inventory failsafe**: if Diem budget nearly exhausted midday, broker pauses lower-tier tenants, offers upsell to DIEM rental, or raises price.
+3. **Inventory failsafe**: automated surge/discount guidance now ships in the CapacityBroker agent so we pause lower tiers, raise price, or open intake based on utilisation (`agents/capacity_broker/agent.py`).
 4. **CapacityBroker agent**: matches supply/demand (escrow DIEM for B2B rentals; or just sub-keys with quotas) and replays buyer verifications when necessary; with a valid Venice parent key the broker now issues scoped keys as soon as payments clear.
 5. **Abuse controls**: content filters if you need them; rate limits; revocation of keys.
 
@@ -215,10 +216,10 @@ We encode each revenue stream as a **LangGraph workflow** with nodes for observa
 * Delivered DIEM mint, burn, and staking module with Aerodrome routing and slippage guards (`services/diem/client.py`, `libs/dex/providers.py`).
 * Delivered ArbiDiem agent with fair value model and mint-rate watcher (`agents/arbi_diem/agent.py`, `services/marketdata/provider.py`).
 
-**Sprint 4 - Quorum & treasury** *(Status: Next - promote orchestration to multi-agent)*
+**Sprint 4 - Quorum & treasury** *(Status: Completed - orchestrator upgraded and treasury loop active)*
 
-* Implement Quorum orchestrator with weighted voting, dynamic listen intervals, and LangGraph wiring over existing agents.
-* Expand AI Treasurer into executable treasury actions that coordinate DIEM buffers for Broker demand.
+* Implemented quorum orchestrator with weighted voting and dynamic listen intervals that react to volatility/utilization signals (`graph/workflows/orchestrator.py`, `agents/quorum/core.py`).
+* Expanded AI Treasurer into executable rebalancing that buffers DIEM inventory based on broker demand while exposing the plan in orchestrator telemetry (`agents/ai_treasurer/agent.py`, `graph/workflows/orchestrator.py`).
 
 **Sprint 5 - Hardening & scale** *(Status: Later - after quorum launch)*
 

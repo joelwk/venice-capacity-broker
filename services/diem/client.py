@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.dex.providers import DexAggregator, build_aggregator_from_env
 from libs.dex.routes import RoutePlan, make_route
+from libs.telemetry.logger import get_logger
 from importlib import import_module
 try:
     from libs.telemetry.events import emit as _emit_event
@@ -25,7 +25,7 @@ def _debug_enabled() -> bool:
     return str(flag).strip().lower() in {"1", "true", "yes", "on"}
 
 
-_logger = logging.getLogger("services.diem.client")
+_logger = get_logger("services.diem.client")
 
 @dataclass
 class DIEMService:

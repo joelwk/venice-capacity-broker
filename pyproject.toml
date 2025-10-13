@@ -26,6 +26,8 @@ dependencies = [
   "uvicorn",
   # Load environment variables from .env when present
   "python-dotenv>=1.0",
+  "web3>=6.15",
+  "eth-account>=0.10",
 ]
 
 [project.urls]
@@ -72,10 +74,10 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.sdist]
-packages = ["apps", "libs", "services", "agents", "graph"]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
 exclude = ["@tool.hatch.build.exclude"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["apps", "libs", "services", "agents", "graph"]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
 exclude = ["@tool.hatch.build.exclude"]
 

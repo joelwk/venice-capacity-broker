@@ -6,7 +6,14 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
+
+_repo_root = Path(__file__).resolve().parents[1]
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from libs.runtime.preflight import ensure_agentkit_installed
 
 
 @dataclass
@@ -151,6 +158,12 @@ class ProcessManager:
 
 
 def main() -> None:
+    try:
+        ensure_agentkit_installed()
+    except RuntimeError as exc:
+        print(f"[stack] {exc}", flush=True)
+        sys.exit(2)
+
     specs = build_command_specs()
     if not specs:
         print("[stack] no processes configured. Enable AUTOSTART_* env vars to launch components.")

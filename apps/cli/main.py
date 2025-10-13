@@ -19,11 +19,17 @@ add_repo_root_to_sys_path()
 try:
     from libs.env import load_dotenv_if_present  # type: ignore
     load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
+    docker_env = _repo_root / ".env.docker"
+    if docker_env.exists():
+        load_dotenv_if_present(path=str(docker_env), override=True)
 except Exception:
     # Fallback: try direct dotenv loading at repo root
     try:
         from dotenv import load_dotenv
         load_dotenv(dotenv_path=str(_repo_root / ".env"), override=False)
+        docker_env = _repo_root / ".env.docker"
+        if docker_env.exists():
+            load_dotenv(dotenv_path=str(docker_env), override=True)
     except Exception:
         pass
 
@@ -31,6 +37,7 @@ from libs.telemetry.logger import get_logger
 from libs.venice_sdk.client import VeniceClient
 from services.venice_keys.manager import KeyManager
 from services.wallet.provider import WalletError
+from libs.runtime.preflight import ensure_agentkit_installed, validate_live_wallet_env
 from scripts.wallet_cli import (
     cmd_address as wallet_cmd_address,
     cmd_sign as wallet_cmd_sign,
@@ -444,6 +451,19 @@ def cmd_venice_validate_addresses(args: argparse.Namespace) -> None:
 
 
 def cmd_run_stakemaster(args: argparse.Namespace) -> None:
+    try:
+        ensure_agentkit_installed(logger)
+    except RuntimeError as exc:
+        raise SystemExit(2) from exc
+
+    if getattr(args, "enable_live", False):
+        missing_env = validate_live_wallet_env(
+            ["BASE_RPC_URL", "VVV_TOKEN_ADDRESS", "VVV_STAKING_ADDRESS"],
+            logger,
+        )
+        if missing_env:
+            raise SystemExit(2)
+
     # Lazy imports to avoid web3 deps for other commands
     from services.staking.client import StakingService
     from libs.agentkit_ext.actions import VVVActions
@@ -456,6 +476,11 @@ def cmd_run_stakemaster(args: argparse.Namespace) -> None:
 
 def cmd_run_loop(args: argparse.Namespace) -> None:
     """Run the v1 single-loop orchestrator (StakeMaster → ArbiDiem → CapacityBroker)."""
+
+    try:
+        ensure_agentkit_installed(logger)
+    except RuntimeError as exc:
+        raise SystemExit(2) from exc
 
     from services.staking.client import StakingService
     from libs.agentkit_ext.actions import VVVActions
@@ -478,7 +503,19 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     live_target = explicit_live or progressive
     dry_run = not explicit_live
 
-    stake_agent = StakeMaster(StakingService(VVVActions()))
+    if explicit_live or progressive:
+        missing_env = validate_live_wallet_env(
+            ["BASE_RPC_URL", "VVV_TOKEN_ADDRESS", "VVV_STAKING_ADDRESS"],
+            logger,
+        )
+        if missing_env:
+            raise SystemExit(2)
+
+    try:
+        stake_agent = StakeMaster(StakingService(VVVActions()))
+    except (EnvironmentError, RuntimeError) as exc:
+        logger.error(f"StakeMaster startup failed: {exc}")
+        raise SystemExit(2) from exc
     aggregator = build_aggregator_from_env() if live_target else None
     market = MarketDataProvider()
     diem_service = DIEMService(aggregator, market_data=market)
@@ -1540,21 +1577,43 @@ def build_parser() -> argparse.ArgumentParser:
         if not es_key:
             logger.warning("ETHERSCAN_API_KEY is not set; skipping DEX startup probe.")
             return
-        tp = os.getenv("TRADE_PATH")
-        if not tp:
-            logger.warning("TRADE_PATH is not set; skipping DEX startup probe.")
-            return
         fee_tiers: Optional[List[Optional[int]]] = None
-        route_tokens: List[str]
-        try:
-            from services.marketdata.provider import MarketDataProvider
+        route_tokens: List[str] = []
 
-            plan = MarketDataProvider._parse_route_spec(tp)
-            route_tokens = [str(tok) for tok in plan.tokens]
-            fee_tiers = [hop.fee for hop in plan.hops]
-        except Exception as parse_exc:  # noqa: BLE001
-            logger.debug("startup probe: falling back to comma-split TRADE_PATH (%s)", parse_exc)
-            route_tokens = [p.strip() for p in tp.split(",") if p.strip()]
+        tp = os.getenv("TRADE_PATH")
+        if tp:
+            try:
+                from services.marketdata.provider import MarketDataProvider
+
+                plan = MarketDataProvider._parse_route_spec(tp)
+                route_tokens = [str(tok) for tok in plan.tokens]
+                fee_tiers = [hop.fee for hop in plan.hops]
+            except Exception as parse_exc:  # noqa: BLE001
+                logger.debug("startup probe: falling back to comma-split TRADE_PATH (%s)", parse_exc)
+                route_tokens = [p.strip() for p in tp.split(",") if p.strip()]
+        else:
+            try:
+                from services.marketdata.dynamic_paths import discover_trade_paths
+
+                auto_routes = discover_trade_paths(logger)
+                if auto_routes:
+                    first = auto_routes[0]
+                    route_tokens = [str(tok) for tok in first.get("tokens") or []]
+                    fees = first.get("fees")
+                    if isinstance(fees, list):
+                        fee_tiers = [int(f) if f is not None else None for f in fees]
+                else:
+                    logger.warning(
+                        "TRADE_PATH is not set and dynamic discovery returned no routes; skipping DEX startup probe."
+                    )
+                    return
+            except Exception as discovery_exc:  # noqa: BLE001
+                logger.warning(
+                    "TRADE_PATH is not set and dynamic discovery failed; skipping DEX startup probe. (%s)",
+                    discovery_exc,
+                )
+                return
+
         if len(route_tokens) < 2:
             logger.warning("Parsed TRADE_PATH contains fewer than two tokens; skipping DEX startup probe.")
             return

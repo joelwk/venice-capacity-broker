@@ -4,6 +4,7 @@ import importlib.util
 import sys
 from types import ModuleType
 import pytest
+import os
 
 # Remove lightweight stubs so we can reload the real modules when available.
 for _mod in ("sqlmodel", "sqlalchemy", "db.session", "db.models"):
@@ -15,6 +16,18 @@ pytest.importorskip("sqlmodel")
 
 
 def _load_broker_app_module() -> ModuleType:
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    sqlalc = sys.modules.get("sqlalchemy")
+    if sqlalc is None or not hasattr(sqlalc, "dialects"):
+        sqlalc = ModuleType("sqlalchemy")
+        sqlalc.desc = lambda arg: arg  # type: ignore[attr-defined]
+        sqlalc.dialects = SimpleNamespace()
+        sys.modules["sqlalchemy"] = sqlalc
+    os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "false")
+    os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
+    os.environ.setdefault("VENICE_PARENT_KEY", "parent-test")
     spec = importlib.util.spec_from_file_location("broker_app_test", "apps/broker-api/app.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -186,6 +199,18 @@ def test_budget_quote_path(monkeypatch, tmp_path):
         return (200.0, {"DIEM": 200.0, "ETH": 4000.0, "USDC": 1.0})
 
     monkeypatch.setattr(engine, "_resolve_prices", _fake_prices, raising=True)
+
+    class DummyMDP:
+        def prices(self, symbols):  # noqa: ANN001
+            return {"DIEM": 200.0, "ETH": 4000.0, "USDC": 1.0}
+
+        def last_prices_stats(self):  # noqa: D401
+            return {}
+
+        def price_health(self, symbol: str, max_age: float = 180.0):  # noqa: D401
+            return {"symbol": symbol, "valid": True, "source": "prefetch", "value": 200.0}
+
+    monkeypatch.setattr("services.marketdata.provider.MarketDataProvider", lambda: DummyMDP(), raising=True)
 
     from fastapi.testclient import TestClient
 

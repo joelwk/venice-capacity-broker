@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
@@ -29,6 +27,77 @@ services:
       timeout: 3s
       retries: 10
 
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: venice-broker:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+      - .env.docker
+    environment:
+      BROKER_REQUIRE_ADMIN_TOKEN: "true"
+      BROKER_ADMIN_TOKEN: ${BROKER_ADMIN_TOKEN:?set}
+      VENICE_API_BASE_URL: ${VENICE_API_BASE_URL:-https://api.venice.ai/api/v1}
+      VENICE_PARENT_KEY: ${VENICE_PARENT_KEY:-}
+      SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CORS_ENABLED: ${CORS_ENABLED:-false}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: venice-broker:latest
+    depends_on:
+      broker:
+        condition: service_started
+    env_file:
+      - .env
+      - .env.docker
+    environment:
+      AUTOSTART_BROKER_API: "0"
+      AUTOSTART_ORCHESTRATOR: "1"
+      AUTOSTART_ORCHESTRATOR_LIVE: ${AUTOSTART_ORCHESTRATOR_LIVE:-0}
+      SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    command: bash -lc "python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 ${AUTOSTART_ORCHESTRATOR_LIVE:+--enable-live}"
+    profiles: [helpers]
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+
+  token-watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: venice-broker:latest
+    depends_on:
+      broker:
+        condition: service_started
+    env_file:
+      - .env
+      - .env.docker
+    environment:
+      SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY: ${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-0}
+    command: bash -lc "python services/marketdata/token_watcher.py"
+    profiles: [helpers]
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+
 volumes:
   pgdata:
-

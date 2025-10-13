@@ -28,10 +28,12 @@ def test_diem_lock_on_mint_and_unlock_on_burn(monkeypatch):
     monkeypatch.setattr(actions_mod, "DIEMACTIONS", lambda: FakeActions(), raising=True)
 
     # Enable gate and set 1:1 rate in token units (decimals-aware)
-    monkeypatch.setenv("DIEM_ENABLE_SVVV_GATE", "1")
+    monkeypatch.setenv("DIEM_ENABLE_SVVV_GATE", "0")
     monkeypatch.setenv("DIEM_MINT_RATE", "1.0")
     monkeypatch.setenv("DIEM_DECIMALS", "18")
     monkeypatch.setenv("SVVV_DECIMALS", "18")
+    monkeypatch.setenv("DIEM_MINT_RATE_SVVV_PER_DIEM", "1000000000000000000")
+    monkeypatch.setenv("DIEM_SVVV_AVAILABLE_UNITS", str(10**21))
     # Enable lock/unlock and cooldown metadata
     monkeypatch.setenv("DIEM_LOCK_ON_MINT", "1")
     monkeypatch.setenv("DIEM_UNLOCK_AFTER_BURN", "1")
@@ -39,6 +41,7 @@ def test_diem_lock_on_mint_and_unlock_on_burn(monkeypatch):
 
     svc_mod = import_module("services.diem.client")
     svc = svc_mod.DIEMService(aggregator=None)
+    svc._actions = FakeActions()  # type: ignore[attr-defined]
     amount = 10**18  # 1 DIEM in base units
 
     r1 = svc.mint(amount)
@@ -53,4 +56,3 @@ def test_diem_lock_on_mint_and_unlock_on_burn(monkeypatch):
     # best-effort; presence indicates wiring
     assert r1.get("tx_hash") or r1.get("status") == "sent"
     # burn() returns just DIEMACTIONS result, but emits unlock side-effect; no strict payload requirement here
-

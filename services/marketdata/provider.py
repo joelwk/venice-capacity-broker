@@ -14,6 +14,9 @@ import requests
 
 from libs.dex.providers import build_aggregator_from_env
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
+from services.marketdata.pathing import PathQuoteEngine, QuoteMode, QuoteRequest, QuoteResult
+from services.marketdata.pathing.env import EnvConfig, load_env_config
+from services.marketdata.pathing.fallbacks import bridge_vvv_price
 
 try:
     from libs.telemetry.metrics import inc as _metrics_inc
@@ -464,6 +467,78 @@ class MarketDataProvider:
         except Exception:
             _logger.debug("failed to warm default WBTC route", exc_info=True)
 
+    def _path_quote_mode(self) -> QuoteMode:
+        enable_live = self._env_flag("MARKETDATA_ENABLE_LIVE_QUOTING", default=False)
+        progressive = self._env_flag("MARKETDATA_PROGRESSIVE_LIVE", default=False)
+        return QuoteMode.from_flags(enable_live=enable_live, progressive_live=progressive)
+
+    def _build_quote_request(
+        self,
+        token_in: str,
+        token_out: str,
+        amount_in_decimal: float,
+        *,
+        tenant_tier: Optional[str] = None,
+    ) -> Optional[QuoteRequest]:
+        token_in = (token_in or "").strip()
+        token_out = (token_out or "").strip()
+        if not token_in or not token_out:
+            return None
+        try:
+            dec_in = self._erc20_decimals(token_in)
+        except Exception:
+            dec_in = 18
+        try:
+            base_amount = float(amount_in_decimal)
+        except Exception:
+            base_amount = 0.0
+        if base_amount <= 0:
+            base_amount = 1.0
+        amount_in_wei = int(base_amount * (10 ** dec_in))
+        if amount_in_wei <= 0:
+            amount_in_wei = 1
+        mode = self._path_quote_mode()
+        progressive_cycle: Optional[int] = None
+        raw_cycle = os.getenv("STAKEMASTER_PROGRESSIVE_CYCLE")
+        if raw_cycle and raw_cycle.strip():
+            try:
+                progressive_cycle = int(raw_cycle)
+            except Exception:
+                progressive_cycle = None
+        return QuoteRequest(
+            token_in=token_in,
+            token_out=token_out,
+            amount_in_wei=amount_in_wei,
+            mode=mode,
+            tenant_tier=tenant_tier,
+            progressive_cycle=progressive_cycle,
+        )
+
+    def _quote_via_path_engine(
+        self,
+        token_in: str,
+        token_out: str,
+        amount_in_decimal: float,
+        *,
+        tenant_tier: Optional[str] = None,
+    ) -> Optional[QuoteResult]:
+        try:
+            request = self._build_quote_request(token_in, token_out, amount_in_decimal, tenant_tier=tenant_tier)
+        except Exception:
+            return None
+        if request is None:
+            return None
+        try:
+            return self._path_engine.quote(request)
+        except Exception:
+            return None
+
+    def _env_flag(self, name: str, default: bool = False) -> bool:
+        v = os.getenv(name)
+        if v is None:
+            return default
+        return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
     def _warm_route_liquidity(self, tokens: Sequence[str]) -> None:
         if not tokens or len(tokens) < 2:
             return
@@ -475,6 +550,8 @@ class MarketDataProvider:
         self._stats_lock = Lock()
         self._active_stats: Optional[Dict[str, Any]] = None
         self._last_prices_stats: Dict[str, Any] = {}
+        self._path_engine = PathQuoteEngine(external_price_fetcher=self._external_price)
+        self._cached_trade_paths: Optional[Tuple[RoutePlan, ...]] = None
         self._ensure_warm_thread()
         self._validate_trade_paths()
         self._check_wbtc_configuration()
@@ -946,7 +1023,19 @@ class MarketDataProvider:
         return 1e-6 < v < 1e6
 
     def _collect_trade_paths(self) -> List[RoutePlan]:
+        cached = getattr(self, "_cached_trade_paths", None)
+        if cached is not None:
+            return [plan for plan in cached]
+
         paths: List[RoutePlan] = []
+        seen: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+        def _add_route(route: RoutePlan) -> None:
+            key = (tuple(route.tokens), tuple(hop.fee for hop in route.hops))
+            if key in seen:
+                return
+            seen.add(key)
+            paths.append(route)
 
         raw_paths = os.getenv("TRADE_PATHS")
         if raw_paths:
@@ -959,7 +1048,7 @@ class MarketDataProvider:
                             continue
                         try:
                             route = self._parse_route_spec(spec)
-                            paths.append(route)
+                            _add_route(route)
                         except Exception:
                             _logger.warning("trade path entry invalid", exc_info=True)
                 else:
@@ -973,11 +1062,22 @@ class MarketDataProvider:
                 if not raw:
                     continue
                 try:
-                    paths.append(self._parse_route_spec(raw))
+                    _add_route(self._parse_route_spec(raw))
                 except Exception:
                     _logger.warning("invalid %s env route", key, exc_info=True)
-                    continue
-        return paths
+
+        if self._env_flag("TRADE_PATHS_DYNAMIC", True):
+            try:
+                from services.marketdata.dynamic_paths import discover_trade_route_plans
+
+                dynamic_plans = discover_trade_route_plans(logger_instance=_logger)
+                for plan in dynamic_plans:
+                    _add_route(plan)
+            except Exception:
+                _logger.warning("dynamic trade path discovery failed", exc_info=True)
+
+        self._cached_trade_paths = tuple(paths)
+        return [plan for plan in paths]
 
     def route_candidates(self, token_in: str, token_out: str) -> List[RoutePlan]:
         src = (token_in or "").strip()
@@ -1070,6 +1170,10 @@ class MarketDataProvider:
             return None
         if token_in.lower() == token_out.lower():
             return 1.0
+
+        path_result = self._quote_via_path_engine(token_in, token_out, amount_in_decimal=1.0)
+        if path_result and self._valid_price(path_result.price):
+            return float(path_result.price)
 
         attempted: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
 
@@ -1541,18 +1645,42 @@ class MarketDataProvider:
     def diem_price_with_fallback(self) -> Optional[float]:
         """Return DIEM price quoted in the configured QUOTE asset."""
         symbol = "DIEM"
-        source = "missing"
-        selected: Optional[float] = None
-
         try:
             diem = (self._address_for_symbol("DIEM") or "").strip()
             quote = self._quote_token_address().strip()
         except Exception:
-            type(self)._record_price_source(symbol, source, {"valid": False, "reason": "lookup_failed"})
+            type(self)._record_price_source(symbol, "missing", {"valid": False, "reason": "lookup_failed"})
             return None
         if not diem or not quote:
-            type(self)._record_price_source(symbol, source, {"valid": False, "reason": "missing_env"})
+            type(self)._record_price_source(symbol, "missing", {"valid": False, "reason": "missing_env"})
             return None
+
+        config = load_env_config()
+        path_result = self._quote_via_path_engine(diem, quote, amount_in_decimal=1.0)
+        if path_result and self._valid_price(path_result.price):
+            detail_payload = {
+                "valid": True,
+                "provider": path_result.provider,
+                "path": list(path_result.route.tokens) if path_result.route else path_result.metadata.get("path"),
+                "source": path_result.source,
+                "score": path_result.score,
+                "policy_penalty": path_result.metadata.get("policy_penalty") if isinstance(path_result.metadata, dict) else None,
+                "guardrail_penalty": path_result.metadata.get("guardrail_penalty") if isinstance(path_result.metadata, dict) else None,
+            }
+            type(self)._record_price_source(symbol, path_result.source or "path_engine", detail_payload)
+            return float(path_result.price)
+
+        return self._diem_price_with_fallback_legacy(symbol, diem, quote, config)
+
+    def _diem_price_with_fallback_legacy(
+        self,
+        symbol: str,
+        diem: str,
+        quote: str,
+        config: EnvConfig,
+    ) -> Optional[float]:
+        source = "missing"
+        selected: Optional[float] = None
 
         routes = self._collect_trade_paths()
         if not routes:
@@ -1630,8 +1758,39 @@ class MarketDataProvider:
         if self._valid_price(selected):
             detail_payload = detail_payload or {}
             detail_payload["valid"] = True
+            path_tokens: list[str] = []
+            try:
+                for tok in detail_payload.get("path", []) or []:
+                    if tok is not None:
+                        path_tokens.append(str(tok).strip().lower())
+            except Exception:
+                path_tokens = []
+            if path_tokens:
+                try:
+                    weth_addr = self._weth_address().strip().lower()
+                except Exception:
+                    weth_addr = ""
+                if weth_addr and len(path_tokens) >= 2 and path_tokens[1] == weth_addr:
+                    bridge_price = bridge_vvv_price(config)
+                    if self._valid_price(bridge_price):
+                        type(self)._record_price_source(
+                            symbol,
+                            "bridge_vvv",
+                            {"valid": True, "path": ["bridge", "vvv", "usdc"], "reason": "override_weth"},
+                        )
+                        return float(bridge_price)
+
             type(self)._record_price_source(symbol, source, detail_payload)
             return float(selected)
+
+        bridge_price = bridge_vvv_price(config)
+        if self._valid_price(bridge_price):
+            type(self)._record_price_source(
+                symbol,
+                "bridge_vvv",
+                {"valid": True, "path": ["bridge", "vvv", "usdc"]},
+            )
+            return float(bridge_price)
 
         type(self)._record_price_source(symbol, "missing", {"valid": False})
         return None
@@ -1885,7 +2044,7 @@ class MarketDataProvider:
                 bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0, label_symbol=su)
                 price = float(bp.get("price") or 0.0)
                 if self._valid_price(price):
-                    return price
+                    return self._apply_price_sanity("ETH", price)
             except Exception:
                 pass
             try:
@@ -1893,10 +2052,10 @@ class MarketDataProvider:
                 quote = self._quote_token_address()
                 px = self._mid_price_from_reserves(weth, quote)
                 if self._valid_price(px):
-                    return float(px)
+                    return self._apply_price_sanity("ETH", float(px))
             except Exception:
                 pass
-            return 0.0
+            return self._apply_price_sanity("ETH", 0.0)
         return 0.0
 
 

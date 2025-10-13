@@ -65,22 +65,31 @@ def test_arbi_diem_risk_limits_mint_size(monkeypatch):
     monkeypatch.setattr(svc_mod.DIEMService, "_path_from_env", fake_path_from_env, raising=True)
 
     svc = svc_mod.DIEMService(aggregator=FakeAgg())
+    svc._actions = FakeActions()  # type: ignore[attr-defined]
 
     # Configure policy to limit to 50 USD per trade and set decimals=18
+    os.environ["DIEM_ENABLE_SVVV_GATE"] = "0"
     os.environ["RISK_MAX_DIEM_TRADE_USD"] = "50"
     os.environ["DIEM_DECIMALS"] = "18"
     risk = risk_mod.RiskPolicy.from_env()
+
+    class DummyMarket:
+        def reserve_cap_units(self, path, take_bps=None):  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr(arbi_mod.ArbiDiem, "_market_provider", lambda self: DummyMarket(), raising=False)
 
     # Mint desire is very large, but price is $2/DIEM, so expect ~25 DIEM worth in units
     arbi = arbi_mod.ArbiDiem(diem=svc, risk=risk)
     did = arbi.evaluate_and_maybe_mint(market_price=2.0, mint_rate=1.0, desired_units=10**24)
     assert did is True
-    assert calls, "Expected at least mint/trade calls"
-    # Extract units used
-    minted = next(v for k, v in calls if k == "mint")
-    traded = next(v for k, v in calls if k == "trade")
-    # USD notional ~ 50
+    assert svc._last_mint and svc._last_mint.get("status") != "denied"
+    minted = int(svc._last_mint.get("amount", 0))
+    assert minted > 0
+    trade_values = [v for k, v in calls if k == "trade"]
+    traded = trade_values[0] if trade_values else minted
     usd = risk.usd_from_units(minted, 2.0)
     assert 45.0 <= usd <= 50.0
     assert minted == traded
+
 

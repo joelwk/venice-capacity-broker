@@ -3099,11 +3099,13 @@ name = "venice-capacity-broker"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "eth-account" },
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "uvicorn" },
+    { name = "web3" },
 ]
 
 [package.optional-dependencies]
@@ -3150,6 +3152,7 @@ requires-dist = [
     { name = "alembic", marker = "extra == 'dev'", specifier = ">=1.12" },
     { name = "cdp-sdk", marker = "extra == 'agentkit'", specifier = ">=0.10" },
     { name = "coinbase-agentkit", marker = "extra == 'agentkit'", specifier = ">=0.3" },
+    { name = "eth-account", specifier = ">=0.10" },
     { name = "eth-account", marker = "extra == 'web3'", specifier = ">=0.10" },
     { name = "fastapi" },
     { name = "httpx", marker = "extra == 'dev'" },
@@ -3170,6 +3173,7 @@ requires-dist = [
     { name = "sqlmodel", marker = "extra == 'broker'", specifier = ">=0.0.14" },
     { name = "sqlmodel", marker = "extra == 'db'", specifier = ">=0.0.14" },
     { name = "uvicorn" },
+    { name = "web3", specifier = ">=6.15" },
     { name = "web3", marker = "extra == 'web3'", specifier = ">=6.15" },
 ]
 provides-extras = ["broker", "db", "kv", "tracing", "graph", "web3", "agentkit", "dev"]
