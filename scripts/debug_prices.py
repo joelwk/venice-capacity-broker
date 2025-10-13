@@ -56,7 +56,7 @@ def main():
     if vvv_addr and quote:
         try:
             bp = md.best_price([vvv_addr, quote], amount_in_decimal=1.0)
-            print(f"   VVV->USDC best_price result:")
+            print("   VVV->USDC best_price result:")
             print(f"     Provider: {bp.get('provider')}")
             print(f"     Price: {bp.get('price')}")
             print(f"     Decimals: {bp.get('decimals')}")

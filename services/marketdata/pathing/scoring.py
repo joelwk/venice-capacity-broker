@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Dict, Optional, Tuple
 
 from .models import GuardrailContext, PolicyContext, RouteEvaluation

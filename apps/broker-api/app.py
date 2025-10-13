@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-from apps._path import add_repo_root_to_sys_path
-
-add_repo_root_to_sys_path()
-
-# Ensure local .env is loaded for Replit/shell runs (without overriding Replit secrets)
-try:
-    from libs.env import load_dotenv_if_present  # type: ignore
-    from pathlib import Path as _PathRoot
-
-    _repo_root = _PathRoot(__file__).resolve().parents[2]
-    load_dotenv_if_present(path=str(_repo_root / ".env"), override=False)
-    load_dotenv_if_present(path=str(_repo_root / ".env.docker"), override=False)
-except Exception:
-    pass
-
+from apps._path import REPO_ROOT
+from libs.agentkit_ext.web3_utils import resolve_rpc_url, rpc_url_candidates
 from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
 from libs.venice_sdk.client import VeniceClient
 from services.venice_keys.manager import KeyManager
-from libs.agentkit_ext.web3_utils import resolve_rpc_url, rpc_url_candidates
+
+
+def _load_dotenv() -> None:
+    """Best-effort load of repo-level dotenv files for manual runs."""
+    try:
+        from libs.env import load_dotenv_if_present  # type: ignore
+
+        load_dotenv_if_present(path=str(REPO_ROOT / ".env"), override=False)
+        load_dotenv_if_present(path=str(REPO_ROOT / ".env.docker"), override=False)
+    except Exception:
+        pass
+
+
+_load_dotenv()
 try:
-    from .tenant_store import TenantStore, Tenant
+    from .tenant_store import TenantStore, Tenant  # noqa: E402
 except Exception:
     # Fallback for direct file execution/import where package context is absent
     import importlib.util as _ilu
@@ -38,7 +38,7 @@ except Exception:
     TenantStore = _mod.TenantStore  # type: ignore[assignment]
     Tenant = _mod.Tenant  # type: ignore[assignment]
 try:
-    from .tenant_store_sql import SQLTenantStore as _SQLTenantStore  # type: ignore
+    from .tenant_store_sql import SQLTenantStore as _SQLTenantStore  # type: ignore  # noqa: E402
 except Exception:
     # Fallback for direct execution where package context is absent
     try:
@@ -95,8 +95,9 @@ try:
     from starlette.staticfiles import StaticFiles
     from pathlib import Path as _Path2
     from starlette.middleware.base import BaseHTTPMiddleware
-    import threading, time
-    import hashlib, json as _json
+    import hashlib
+    import threading
+    import time
     from pydantic import BaseModel
 
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
@@ -3213,9 +3214,6 @@ try:
                                         # Estimate execution price with constant product formula
                                         # After swap: (input_reserve + amt_in) * (output_reserve - amt_out) = k
                                         # This gives us the actual execution price
-                                        new_input_reserve = float(input_reserve) + float(amt_in_units)
-                                        new_output_reserve = float(output_reserve) - float(amt_out)
-                                        
                                         # Execution price = amt_out / amt_in (in token units)
                                         exec_price = amt_out_float / amt_in_float
                                         

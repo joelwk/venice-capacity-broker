@@ -569,7 +569,6 @@ def cmd_run_quorum(args: argparse.Namespace) -> None:
 
 def cmd_run_orchestrator(args: argparse.Namespace) -> None:
     """Run the orchestrator loop coordinating ArbiDiem decisions with persistence."""
-    import time
 
     from services.marketdata.provider import MarketDataProvider
     from services.diem.client import DIEMService
@@ -1120,7 +1119,6 @@ def cmd_ci_gate(args: argparse.Namespace) -> None:
       offline signals disabled, and basic CORS allowlist when enabled.
     Exits non-zero on violations.
     """
-    import json
     import sys as _sys
     import requests as _rq
 

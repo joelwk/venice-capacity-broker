@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from libs.dex.providers import DexAggregator, build_aggregator_from_env
+from libs.dex.providers import DexAggregator
 from libs.dex.routes import RoutePlan, make_route
 from libs.telemetry.logger import get_logger
 from importlib import import_module
@@ -698,7 +697,6 @@ class DIEMService:
     def calc_mint_rate(self, ttl_s: int = 120) -> Dict[str, Any]:
         """Return a summary of the current DIEM mint rate (sVVV per DIEM)."""
 
-        from services.marketdata.provider import MarketDataProvider
 
         try:
             info = self._market_provider().diem_mint_rate(ttl_s=ttl_s)

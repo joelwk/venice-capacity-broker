@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, Dict, Optional
+from typing import Callable, Optional
 
 import requests
 

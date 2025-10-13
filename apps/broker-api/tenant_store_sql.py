@@ -89,7 +89,6 @@ class SQLTenantStore:
             return None
 
     def upsert(self, t: Tenant) -> None:
-        from sqlmodel import select  # lazy import within method
 
         with next(get_session()) as session:  # type: ignore[call-arg]
             # Upsert tenant row

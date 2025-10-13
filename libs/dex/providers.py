@@ -163,7 +163,6 @@ class UniswapV2DexProvider(DexProvider):
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def quote(self, amount_in: int, route: RoutePlan) -> Optional[Quote]:
-        from web3 import Web3 as _Web3  # type: ignore
 
         t0 = time.perf_counter()
         try:
@@ -184,7 +183,6 @@ class UniswapV2DexProvider(DexProvider):
             return None
 
     def quote_exact_out(self, amount_out: int, route: RoutePlan) -> Optional[Quote]:
-        from web3 import Web3 as _Web3  # type: ignore
 
         try:
             checksum_path = route.to_uniswap_v2_path(checksum=True)
@@ -293,7 +291,6 @@ class AerodromeDexProvider(DexProvider):
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def _routes(self, route: RoutePlan, stable: Optional[bool] = None) -> List[tuple[Address, Address, bool]]:
-        from web3 import Web3 as _Web3  # type: ignore
 
         path = route.to_uniswap_v2_path(checksum=True)
         st = bool(self.stable) if stable is None else bool(stable)
@@ -303,7 +300,6 @@ class AerodromeDexProvider(DexProvider):
         return hops
 
     def _routes_with_mask(self, route: RoutePlan, mask: Sequence[bool]) -> List[tuple[Address, Address, bool]]:
-        from web3 import Web3 as _Web3  # type: ignore
 
         path = route.to_uniswap_v2_path(checksum=True)
         if len(path) - 1 != len(mask):

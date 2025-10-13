@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import pytest
 
 from libs.dex.providers import DexAggregator, DexProvider, Quote

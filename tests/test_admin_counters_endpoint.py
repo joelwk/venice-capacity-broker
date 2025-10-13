@@ -6,7 +6,6 @@ from pathlib import Path
 import importlib.util
 from types import SimpleNamespace, ModuleType
 from datetime import datetime, timedelta, timezone
-import json
 
 
 def _make_fake_sql_stubs(rows):

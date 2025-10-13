@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from libs.telemetry.logger import get_logger
 from libs.pricing.diem import fair_value_per_diem
