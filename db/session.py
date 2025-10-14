@@ -120,38 +120,42 @@ def _resolve_engine_factory():
     import importlib
     import sys
 
+    # Prefer an existing create_engine bound from sqlmodel.
+    if callable(create_engine):
+        return create_engine
+
+    # When sqlmodel is installed, rely on its helper to preserve behaviour.
+    try:
+        import sqlmodel  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        sqlmodel = None  # type: ignore[assignment]
+    if sqlmodel is not None and hasattr(sqlmodel, "create_engine"):
+        create_engine = sqlmodel.create_engine  # type: ignore[assignment]
+        return create_engine
+
     def _import_sqlalchemy():
         try:
             return importlib.import_module("sqlalchemy")  # type: ignore[return-value]
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
             raise RuntimeError("sqlalchemy not installed") from exc
 
-    sqlalchemy = sys.modules.get("sqlalchemy")
-    if sqlalchemy is None:
-        sqlalchemy = _import_sqlalchemy()
-
-    def _ensure_sqlite_dialect() -> bool:
-        try:
-            importlib.import_module("sqlalchemy.dialects.sqlite")
-            return True
-        except Exception:  # noqa: BLE001
-            return False
-
-    if create_engine is not None and _ensure_sqlite_dialect():
-        return create_engine
-
-    if not _ensure_sqlite_dialect():
+    # Drop obvious stand-in modules so we can reload the actual package.
+    sqlalc = sys.modules.get("sqlalchemy")
+    if sqlalc is not None and not hasattr(sqlalc, "create_engine"):
         sys.modules.pop("sqlalchemy", None)
-        sqlalchemy = _import_sqlalchemy()
+        sys.modules.pop("sqlalchemy.engine", None)
+        sys.modules.pop("sqlalchemy.dialects", None)
+        sqlalc = None
 
-    if not _ensure_sqlite_dialect():
-        raise RuntimeError("sqlalchemy sqlite dialect unavailable")
+    if sqlalc is None:
+        sqlalc = _import_sqlalchemy()
 
     try:
-        from sqlalchemy import create_engine as _sa_create_engine  # type: ignore
-    except Exception as exc:  # noqa: BLE001
+        sa_create_engine = getattr(sqlalc, "create_engine")  # type: ignore[attr-defined]
+    except AttributeError as exc:  # pragma: no cover - defensive guard
         raise RuntimeError("sqlalchemy create_engine not available") from exc
-    create_engine = _sa_create_engine  # type: ignore[assignment]
+
+    create_engine = sa_create_engine  # type: ignore[assignment]
     return create_engine
 
 
