@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
-logger = logging.getLogger("db.session")
+from libs.telemetry.logger import get_logger
+
+logger = get_logger("db.session")
 
 
 _ENGINE_ATTEMPTS: List[Dict[str, Any]] = []
@@ -116,13 +117,45 @@ def _resolve_engine_factory():
     """Return a usable create_engine callable, importing sqlalchemy if needed."""
 
     global create_engine
-    if create_engine is not None:
+    import importlib
+    import sys
+
+    # Prefer an existing create_engine bound from sqlmodel.
+    if callable(create_engine):
         return create_engine
+
+    # When sqlmodel is installed, rely on its helper to preserve behaviour.
     try:
-        from sqlalchemy import create_engine as _sa_create_engine  # type: ignore
-    except Exception as exc:  # noqa: BLE001
+        import sqlmodel  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        sqlmodel = None  # type: ignore[assignment]
+    if sqlmodel is not None and hasattr(sqlmodel, "create_engine"):
+        create_engine = sqlmodel.create_engine  # type: ignore[assignment]
+        return create_engine
+
+    def _import_sqlalchemy():
+        try:
+            return importlib.import_module("sqlalchemy")  # type: ignore[return-value]
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError("sqlalchemy not installed") from exc
+
+    # Drop obvious stand-in modules so we can reload the actual package.
+    sqlalc = sys.modules.get("sqlalchemy")
+    if sqlalc is not None and not hasattr(sqlalc, "create_engine"):
+        sys.modules.pop("sqlalchemy", None)
+        sys.modules.pop("sqlalchemy.engine", None)
+        sys.modules.pop("sqlalchemy.dialects", None)
+        sqlalc = None
+
+    if sqlalc is None:
+        sqlalc = _import_sqlalchemy()
+
+    try:
+        sa_create_engine = getattr(sqlalc, "create_engine")  # type: ignore[attr-defined]
+    except AttributeError as exc:  # pragma: no cover - defensive guard
         raise RuntimeError("sqlalchemy create_engine not available") from exc
-    create_engine = _sa_create_engine  # type: ignore[assignment]
+
+    create_engine = sa_create_engine  # type: ignore[assignment]
     return create_engine
 
 

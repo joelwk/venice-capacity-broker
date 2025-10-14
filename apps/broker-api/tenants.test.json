@@ -1,0 +1,12 @@
+{
+  "tdebug": {
+    "id": "tdebug",
+    "label": "Tdebug",
+    "subkey": "sub-debug",
+    "quota": 0,
+    "expires_at": null,
+    "status": "active",
+    "key_id": null,
+    "owner_address": null
+  }
+}

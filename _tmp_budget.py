@@ -1,6 +1,8 @@
 import importlib.util
-import pathlib
 import os
+import pathlib
+
+from fastapi.testclient import TestClient
 
 os.environ['QUOTES_ENABLED'] = 'true'
 os.environ['PRICE_ENGINE'] = 'market'
@@ -21,7 +23,6 @@ def _fake_prices():
 
 engine._resolve_prices = _fake_prices
 
-from fastapi.testclient import TestClient
 client = TestClient(mod.app)
 resp = client.get('/v1/quotes', params={'budget': 10, 'asset': 'ETH'})
 print(resp.status_code, resp.text)

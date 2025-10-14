@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
@@ -305,10 +305,55 @@ class SingleLoopOrchestrator:
     capacity_broker: Any
     market: Any
     quorum: Optional[Any] = None
+    ai_treasurer: Optional[Any] = None
     parent_key: Optional[str] = None
     memory_store: Optional[Any] = None
     reflection: Optional[Any] = None
     reflex_guard: Optional[Any] = None
+
+    def __post_init__(self) -> None:
+        self._last_listen_interval: Optional[float] = None
+
+    def _dynamic_listen_enabled(self) -> bool:
+        return _env_flag("ORCHESTRATOR_DYNAMIC_LISTEN", True)
+
+    def _compute_listen_interval(self, base_interval: float, cycle_record: Dict[str, Any]) -> float:
+        if not self._dynamic_listen_enabled():
+            self._last_listen_interval = base_interval
+            return base_interval
+        min_interval = float(os.getenv("ORCHESTRATOR_INTERVAL_MIN", "5.0"))
+        max_interval = float(os.getenv("ORCHESTRATOR_INTERVAL_MAX", "60.0"))
+        vol_ref = max(1.0, float(os.getenv("ORCHESTRATOR_VOL_REF_BPS", "25.0")))
+        interval = float(base_interval)
+
+        arbi_block = cycle_record.get("arbi") or {}
+        signals = arbi_block.get("signals") or {}
+        vol_bps = float(signals.get("vol_bps") or 0.0)
+        util = float(signals.get("utilization_ratio") or 0.0)
+        quorum_info = arbi_block.get("quorum") or {}
+        quorum_confidence = 0.0
+        if isinstance(quorum_info, dict):
+            conf = quorum_info.get("confidence")
+            if isinstance(conf, (int, float)):
+                quorum_confidence = max(0.0, min(1.0, float(conf)))
+        stress = max(
+            util,
+            min(1.0, vol_bps / vol_ref),
+            quorum_confidence,
+        )
+        if bool(arbi_block.get("signalDecision")):
+            stress = max(stress, 0.6)
+
+        if stress >= 0.8:
+            interval = base_interval * 0.5
+        elif stress >= 0.5:
+            interval = base_interval * 0.75
+        elif stress <= 0.2:
+            interval = base_interval * 1.3
+
+        interval = max(min_interval, min(max_interval, interval))
+        self._last_listen_interval = interval
+        return interval
 
     def _summarize_capacity(self, cap_summary: Any) -> Dict[str, Any]:
         if not isinstance(cap_summary, dict):
@@ -337,7 +382,117 @@ class SingleLoopOrchestrator:
         warning = cap_summary.get("warningMessage")
         if warning:
             summary["warning"] = str(warning)
+        utilization = cap_summary.get("utilization")
+        if utilization is not None:
+            try:
+                summary["utilization"] = float(utilization)
+            except Exception:
+                summary["utilization"] = utilization
+        pricing = cap_summary.get("pricing")
+        if isinstance(pricing, dict):
+            summary["pricing_mode"] = pricing.get("mode")
+            summary["pricing_suggested"] = pricing.get("suggested")
+        failsafe = cap_summary.get("inventoryFailsafe")
+        if isinstance(failsafe, dict):
+            summary["failsafe_status"] = failsafe.get("status")
+            summary["failsafe_actions"] = failsafe.get("actions")
         return summary
+
+    def _extract_usage_daily(self, usage: Any) -> Optional[float]:
+        if not isinstance(usage, dict):
+            return None
+        for key in ("dailyAverageDiem", "daily_average_diem", "avgDailyDiem"):
+            if key in usage:
+                try:
+                    return float(usage[key])
+                except Exception:
+                    continue
+        data = usage.get("data")
+        if isinstance(data, list) and data:
+            totals: List[float] = []
+            for entry in data:
+                if not isinstance(entry, dict):
+                    continue
+                for candidate in ("dailyAverageDiem", "daily_average_diem", "consumptionDaily", "consumption"):
+                    if candidate in entry:
+                        try:
+                            totals.append(float(entry[candidate]))
+                        except Exception:
+                            continue
+                        break
+            if totals:
+                return sum(totals) / len(totals)
+        aggregate = usage.get("aggregate")
+        if isinstance(aggregate, dict):
+            for key in ("daily", "daily_diem"):
+                value = aggregate.get(key)
+                if value is not None:
+                    try:
+                        return float(value)
+                    except Exception:
+                        continue
+        return None
+
+    def _extract_limit_total(self, limits: Any) -> Optional[float]:
+        if limits is None:
+            return None
+        entries: List[Any]
+        if isinstance(limits, list):
+            entries = limits
+        elif isinstance(limits, dict):
+            entries = []
+            for key in ("data", "items", "keys"):
+                value = limits.get(key)
+                if isinstance(value, list):
+                    entries = value
+                    break
+            if not entries:
+                entries = list(limits.values()) if all(isinstance(v, dict) for v in limits.values()) else []
+        else:
+            return None
+        total = 0.0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            limit = entry.get("consumptionLimit") or entry.get("consumption_limit")
+            amount = None
+            if isinstance(limit, dict):
+                amount = limit.get("diem") or limit.get("daily")
+            elif isinstance(limit, (int, float)):
+                amount = limit
+            if amount is not None:
+                try:
+                    total += float(amount)
+                except Exception:
+                    continue
+        return total if total > 0 else None
+
+    def _compute_treasury_plan(self, cap_summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if self.ai_treasurer is None:
+            return None
+        usage = cap_summary.get("usage")
+        limits = cap_summary.get("limits")
+        avg_daily = self._extract_usage_daily(usage)
+        capacity_total = self._extract_limit_total(limits)
+        if avg_daily is None or capacity_total is None:
+            return None
+        try:
+            delta = float(self.ai_treasurer.rebalance(avg_daily, capacity_total))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"AI Treasurer error: {exc}")
+            return {"status": "error", "error": str(exc), "avgDailyDiem": avg_daily, "currentCapacity": capacity_total}
+        action = "hold"
+        if delta > 0:
+            action = "acquire"
+        elif delta < 0:
+            action = "release"
+        return {
+            "status": "planned",
+            "action": action,
+            "avgDailyDiem": avg_daily,
+            "currentCapacity": capacity_total,
+            "delta": delta,
+        }
 
     def _log_cycle_payload(self, cycle_record: Dict[str, Any]) -> Dict[str, Any]:
         log_cycle = dict(cycle_record)
@@ -567,6 +722,7 @@ class SingleLoopOrchestrator:
         enable_live: bool = False,
         mint_rate: float = 1.0,
         progressive_live: bool = False,
+        listen_base: Optional[float] = None,
     ) -> Dict[str, Any]:
         cycle_ts = time.time()
 
@@ -850,8 +1006,13 @@ class SingleLoopOrchestrator:
                     quorum_allowed = True
                     if self.quorum is not None:
                         try:
-                            quorum_allowed = bool(self.quorum.decide())
-                            quorum_info = {"status": "approved" if quorum_allowed else "blocked"}
+                            if hasattr(self.quorum, "decide_with_details"):
+                                quorum_allowed, quorum_meta = self.quorum.decide_with_details()
+                            else:
+                                quorum_allowed = bool(self.quorum.decide())
+                                quorum_meta = getattr(self.quorum, "last_info", None) or {}
+                            quorum_info = dict(quorum_meta or {})
+                            quorum_info["status"] = "approved" if quorum_allowed else "blocked"
                         except Exception as exc:  # noqa: BLE001
                             quorum_allowed = False
                             quorum_info = {"status": "error", "error": str(exc)}
@@ -959,17 +1120,25 @@ class SingleLoopOrchestrator:
         except Exception as exc:  # noqa: BLE001
             cap_summary = {"status": "error", "error": str(exc)}
 
+        treasury_plan = None
+        if isinstance(cap_summary, dict):
+            treasury_plan = self._compute_treasury_plan(cap_summary)
+
         cycle_record = {
             "ts": cycle_ts,
             "stake": stake_result,
             "arbi": arbi_record,
             "capacity": cap_summary,
         }
+        if treasury_plan is not None:
+            cycle_record["treasury"] = treasury_plan
         cycle_record["agents"] = {
             "stake_master": stake_result,
             "arbi_diem": arbi_record,
             "capacity_broker": cap_summary,
         }
+        if treasury_plan is not None:
+            cycle_record["agents"]["ai_treasurer"] = treasury_plan
         cycle_record["reflex"] = reflex_info
         prog_state = getattr(self, "_progressive_state", None)
         if isinstance(prog_state, dict):
@@ -987,6 +1156,9 @@ class SingleLoopOrchestrator:
             setattr(self, "_price_guard_runtime_streak", guard_streak_prev + 1)
         else:
             setattr(self, "_price_guard_runtime_streak", 0)
+
+        if listen_base is not None:
+            cycle_record["listenInterval"] = self._compute_listen_interval(float(listen_base), cycle_record)
 
         if self.reflection is not None:
             try:
@@ -1029,6 +1201,8 @@ class SingleLoopOrchestrator:
         base_live = bool(enable_live)
         progressive_state = self._prepare_progressive_state(progressive_live or enable_live)
         live_intent = bool(base_live or (progressive_state is not None and progressive_live))
+        base_interval = float(interval_s)
+        next_interval = base_interval
 
         while True:
             cycle += 1
@@ -1049,12 +1223,21 @@ class SingleLoopOrchestrator:
                     enable_live=enable_flag,
                     mint_rate=mint_rate,
                     progressive_live=progressive_override,
+                    listen_base=base_interval,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"single-loop error: {exc}")
+                next_interval = base_interval
             else:
                 if progressive_state is not None and cycle_record is not None:
                     self._update_progressive_state(progressive_state, cycle_record, live_intent=live_intent)
+                if cycle_record is not None:
+                    try:
+                        next_interval = float(cycle_record.get("listenInterval", base_interval))
+                    except Exception:
+                        next_interval = base_interval
+                else:
+                    next_interval = base_interval
             if max_cycles and cycle >= max_cycles:
                 break
-            time.sleep(max(0.0, float(interval_s)))
+            time.sleep(max(0.0, next_interval))

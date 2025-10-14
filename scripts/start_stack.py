@@ -8,6 +8,11 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from apps import _path as _app_path
+from libs.runtime.preflight import ensure_agentkit_installed
+
+REPO_ROOT = _app_path.REPO_ROOT
+
 
 @dataclass
 class CommandSpec:
@@ -54,7 +59,7 @@ def build_command_specs() -> List[CommandSpec]:
             "uvicorn",
             "app:app",
             "--app-dir",
-            "apps/broker-api",
+            str(REPO_ROOT / "apps" / "broker-api"),
             "--host",
             str(host),
             "--port",
@@ -64,7 +69,7 @@ def build_command_specs() -> List[CommandSpec]:
 
     if _truthy("AUTOSTART_ORCHESTRATOR", True):
         argv = [
-            "apps/cli/main.py",
+            str(REPO_ROOT / "apps" / "cli" / "main.py"),
             "run:loop",
             "--sleep",
             os.getenv("AUTOSTART_ORCHESTRATOR_INTERVAL", "15"),
@@ -151,6 +156,12 @@ class ProcessManager:
 
 
 def main() -> None:
+    try:
+        ensure_agentkit_installed()
+    except RuntimeError as exc:
+        print(f"[stack] {exc}", flush=True)
+        sys.exit(2)
+
     specs = build_command_specs()
     if not specs:
         print("[stack] no processes configured. Enable AUTOSTART_* env vars to launch components.")

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
 import textwrap
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlencode
 
 import requests
 import time
@@ -85,6 +89,36 @@ def _etherscan_api_key() -> Optional[str]:
     return _env("ETHERSCAN_API_KEY")
 
 
+def _curl_available() -> bool:
+    return shutil.which("curl") is not None
+
+
+def _es_get_via_curl(base: str, params: Dict[str, str]) -> Dict[str, Any]:
+    """Fallback to curl when Python ssl is unavailable."""
+    if not _curl_available():
+        raise RuntimeError("curl not available for Etherscan fallback")
+    url = f"{base}?{urlencode(params)}"
+    try:
+        proc = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "--max-time",
+                "10",
+                url,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = proc.stdout.strip()
+        if not payload:
+            return {}
+        return json.loads(payload)
+    except Exception as exc:
+        raise RuntimeError(f"curl fallback failed: {exc}") from exc
+
+
 def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
     base = _etherscan_base_url()
     q = {
@@ -94,9 +128,19 @@ def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
     key = _etherscan_api_key()
     if key:
         q["apikey"] = key
-    r = requests.get(base, params=q, timeout=10)
-    r.raise_for_status()
-    return r.json()  # type: ignore[no-any-return]
+    try:
+        r = requests.get(base, params=q, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        if _curl_available():
+            try:
+                data = _es_get_via_curl(base, q)
+            except Exception as curl_exc:
+                raise type(exc)(f"{exc} (curl fallback also failed: {curl_exc})") from curl_exc
+        else:
+            raise
+    return data  # type: ignore[no-any-return]
 
 
 def eth_call(to: str, data: str) -> Optional[str]:
@@ -204,6 +248,19 @@ def get_uniswap_v3_sqrt_price_x96(pool_addr: str) -> Optional[int]:
         return None
     try:
         return int(out[2:66], 16)
+    except Exception:
+        return None
+
+
+def get_uniswap_v3_fee(pool_addr: str) -> Optional[int]:
+    sel = _selector('fee()')
+    if sel == '0x00000000':
+        return None
+    out = eth_call(pool_addr, sel)
+    if not out or not isinstance(out, str) or len(out) < 10 or not out.startswith('0x'):
+        return None
+    try:
+        return int(out, 16)
     except Exception:
         return None
 
@@ -363,8 +420,22 @@ def verify_trade_path(path: List[str], fees: Optional[List[Optional[int]]] = Non
                 pool = get_pool_uniswap_v3(fac.get("uniswap_v3", ""), a, b, fee_val)
             except Exception:
                 pool = None
+            detected_fee = fee_val
+            if not pool:
+                alt_fees = _discover_extra_fee_tiers(fee_val)
+                for alt in alt_fees:
+                    try:
+                        pool = get_pool_uniswap_v3(fac.get("uniswap_v3", ""), a, b, alt)
+                    except Exception:
+                        pool = None
+                    if pool:
+                        detected_fee = alt
+                        break
             if pool:
-                info = rec.setdefault("uniswap_v3", {"fee": fee_val})
+                info = rec.setdefault("uniswap_v3", {"fee": detected_fee})
+                info["fee"] = detected_fee
+                if detected_fee != fee_val:
+                    info["requested_fee"] = fee_val
                 info["pool"] = pool
                 info["liquidity"] = get_uniswap_v3_liquidity(pool)
                 info["sqrt_price_x96"] = get_uniswap_v3_sqrt_price_x96(pool)
@@ -503,10 +574,14 @@ def format_report(result: Dict[str, Any]) -> str:
         lines.append(f"Hop {idx}: {hop.get('from')} -> {hop.get('to')}")
         v3_info = hop.get("uniswap_v3") if isinstance(hop, dict) else None
         if isinstance(v3_info, dict):
+            requested = v3_info.get("requested_fee")
             fee = v3_info.get("fee")
             label = "UniswapV3"
             if fee is not None:
-                label = f"{label}(fee={fee})"
+                label = f"{label}(fee={fee}"
+                if requested is not None and requested != fee:
+                    label = f"{label}, requested={requested}"
+                label = f"{label})"
             pool = v3_info.get("pool")
             if pool:
                 extras: List[str] = []
@@ -578,3 +653,25 @@ if __name__ == "__main__":
             print(f" - {k}: pair={v.get('pair')} has_reserves={v.get('has_reserves')}")
     except Exception:
         pass
+def _discover_extra_fee_tiers(current_fee: int) -> List[int]:
+    """Return additional Uniswap V3 fee tiers to probe when the requested one is missing."""
+
+    defaults = [100, 500, 1000, 3000, 10000]
+    env_raw = _env("UNISWAP_V3_FEE_TIERS")
+    tiers: List[int] = []
+    if env_raw:
+        for part in env_raw.split(","):
+            try:
+                tiers.append(int(part.strip()))
+            except Exception:
+                continue
+    else:
+        tiers = defaults
+    seen: set[int] = {int(current_fee)}
+    ordered: List[int] = []
+    for tier in tiers:
+        if tier in seen:
+            continue
+        seen.add(tier)
+        ordered.append(tier)
+    return ordered

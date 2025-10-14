@@ -68,7 +68,7 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
    Keep Python 3.10 or newer.
 
-2. Copy `.env.example` to `.env` and populate the required secrets.
+2. Create `.env` from the template below and populate the required secrets.
 
    The Broker API, RiskPolicy, MarketDataProvider, and DIEM service read from this file on startup. Make sure the KV store values are set whenever you deploy the Broker API in a shared environment: `KV_URL` (Replit DB URL or Redis endpoint) and `KV_API_TOKEN` when using Replit DB. Without those values broker limits fall back to the ephemeral in-memory stub. If you have multiple RPC endpoints, list them in `BASE_RPC_URLS` (or the generic `RPC_URLS`) and the node selector will probe them in order until it finds one that responds.
 
@@ -164,7 +164,31 @@ Dynamic DIEM rentals, marketplace pricing strategies, and quorum-governed alloca
 ## Quickstart
 
 - Python 3.10+
-- Copy `.env.example` to `.env` and fill values as you integrate real services.
+- Create `.env` using the template below and fill values as you integrate real services.
+
+Minimal `.env` template (example values are placeholders):
+
+```
+# Broker
+BROKER_ADMIN_TOKEN=change-me
+
+# Venice
+VENICE_API_BASE_URL=https://api.venice.ai/api/v1
+VENICE_PARENT_KEY=
+# Optional
+VENICE_API_KEY=
+
+# Database/Redis
+SQL_DATABASE_URL=postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/postgres
+REDIS_URL=redis://127.0.0.1:6379/0
+
+# Base (on-chain)
+BASE_RPC_URL=https://mainnet.base.org
+BASE_CHAIN_ID=8453
+
+# Optional observability
+LOG_LEVEL=INFO
+```
 - Dependency management uses `uv` with `pyproject.toml` (requirements.txt remains for compatibility).
 
 Install with uv (recommended):
@@ -349,6 +373,35 @@ This repository tracks the implementation plan in `implementation-plan` and prio
 
 ## Docker Compose (Postgres + Redis)
 
+Quickstart to run the Broker API in Docker alongside Postgres and Redis:
+
+```
+# Build and start
+docker compose up --build -d
+
+# Required env (set in .env / .env.docker before up)
+#   BROKER_ADMIN_TOKEN=<strong-random>
+#   VENICE_API_BASE_URL=https://api.venice.ai/api/v1
+#   VENICE_PARENT_KEY=<parent or admin key>
+
+# Health
+curl -fsS http://127.0.0.1:8000/health
+
+# Environment snapshot
+curl -fsS http://127.0.0.1:8000/v1/env | jq
+
+# Seed a tenant (admin)
+export BROKER_BASE_URL=http://127.0.0.1:8000
+export BROKER_ADMIN_TOKEN=<your-admin-token>
+make rotate-probe TENANT=t1 LABEL=TeamA MESSAGE=Hello
+```
+
+Notes:
+- The image runs Alembic migrations on startup and then launches Uvicorn.
+- SQL is configured via `SQL_DATABASE_URL` in compose (points to the `postgres` service).
+- Rate limiting/idempotency use Redis when `REDIS_URL` is set (compose wires it to `redis`).
+- Shared configuration lives in `.env`; Docker overrides go in `.env.docker` (ignored by git). Run `cp .env.docker.example .env.docker` for a starter file.
+
 
 ### New/Updated Make Targets
 
@@ -529,7 +582,7 @@ LangSmith tracing:
 
 ## Configuration
 
-See `config/default.yml` and `.env.example` for environment variables and defaults.
+See `config/default.yml` for environment variables and defaults. Use the `.env` template below.
 
 DEX aggregator (Base mainnet example)
 - Set providers: `DEX_PROVIDERS=uniswap_v2,aerodrome`
@@ -675,7 +728,7 @@ python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
 
 Proprietary. Do not distribute.
 Addresses on Base:
-- Defaults target Base mainnet (`NETWORK_ID=base-mainnet`). Prefilled values in `.env.example` and `config/addresses.base-mainnet.yml`:
+- Defaults target Base mainnet (`NETWORK_ID=base-mainnet`). See `config/addresses.base-mainnet.yml` for addresses:
   - `VVV_TOKEN_ADDRESS`: 0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf
   - `VVV_STAKING_ADDRESS`: 0x321b7ff75154472B18EDb199033fF4D116F340Ff
   - `DIEM_TOKEN_ADDRESS`: 0xF4d97F2da56e8c3098f3a8D538DB630A2606a024

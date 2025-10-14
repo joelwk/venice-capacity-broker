@@ -2,85 +2,37 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
-    tags: []
+    branches: [ "**" ]
   pull_request:
-    branches: ["**"]
-
-permissions:
-  contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  publish_guard:
-    name: Block publish/release steps
+  build-and-test:
     runs-on: ubuntu-latest
-    env:
-      # Set a repository variable CI_PUBLISH_GUARD_SKIP=true to temporarily bypass the guard if needed.
-      CI_PUBLISH_GUARD_SKIP: ${{ vars.CI_PUBLISH_GUARD_SKIP || 'false' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Scan for publish/release commands
-        if: ${{ env.CI_PUBLISH_GUARD_SKIP != 'true' }}
-        run: |
-          set -euo pipefail
-          # Restrict scan to workflows and scripts
-          files=$(mktemp)
-          if [ -d .github/workflows ]; then \
-            # Exclude this guard file without a pipe (avoid pipefail when only ci.yml exists)
-            find .github/workflows -type f \( -name "*.yml" -o -name "*.yaml" \) ! -name "ci.yml" -print >> "$files"; \
-          fi
-          if [ -d scripts ]; then find scripts -type f >> "$files"; fi
-          if [ ! -s "$files" ]; then echo "No candidate files to scan."; exit 0; fi
-          echo "Candidate files to scan:" && cat "$files"
-          echo "Scanning for forbidden publish commands…"
-          # Add patterns that imply publishing to registries or creating releases
-          # Use non-recursive grep against explicit file list to avoid scanning the whole repo
-          found=$(mktemp)
-          # shellcheck disable=SC2016
-          xargs -r grep -nE 'twine +upload|npm +publish|hatch +publish|poetry +publish|python +-m +build(.*twine)?|gh +release +create' < "$files" | tee "$found" | sed 's/^/match: /' || true
-          if [ -s "$found" ]; then
-            echo "Forbidden publish/release command detected in the following locations:" >&2
-            cat "$found" >&2
-            echo "Remove/alter these commands or update the guard allowlist if intentional." >&2
-            exit 1
-          fi
-          echo "OK: no publish commands found."
-
-  tests:
-    name: Tests (pytest)
-    runs-on: ubuntu-latest
-    needs: publish_guard
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
         with:
-          python-version: '3.10'
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          echo "$PWD/.local/bin" >> $GITHUB_PATH
-      - name: Sync dependencies (dev extras)
+      - name: Install deps
         run: |
-          uv --version
+          uv venv
           uv sync --extra dev
-      - name: Run tests
-        run: uv run pytest -q
-
-  # This job is intentionally a no-op placeholder for deployments.
-  # Deployment is handled manually via Replit Deployments as described in docs/DEPLOYMENT.md.
-  # Keeping this here communicates intent and prevents accidental automation.
-  deployment_instructions:
-    name: Deployment (manual via Replit)
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          echo "Deployment is manual via Replit Deployments."
-          echo "See docs/DEPLOYMENT.md for step-by-step instructions."
+      - name: Secrets scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+      - name: Lint
+        run: |
+          uv run ruff check --output-format=github
+      - name: Tests
+        run: |
+          uv run pytest -q
+      - name: CI security gate
+        env:
+          BROKER_REQUIRE_ADMIN_TOKEN: 'true'
+        run: |
+          uv run python apps/cli/main.py ci:gate || exit 1

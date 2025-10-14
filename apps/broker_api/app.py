@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Thin compatibility shim so `from apps.broker_api.app import app` works.
 
@@ -8,8 +6,10 @@ which is not importable as a Python package name. We load it via importlib
 and re-export the FastAPI `app` instance.
 """
 
+from __future__ import annotations
+
 import sys
-from importlib.util import spec_from_file_location, module_from_spec
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 
@@ -39,4 +39,3 @@ try:
     app = getattr(_impl, "app")
 except AttributeError as e:
     raise AttributeError("`app` not found in loaded implementation module") from e
-

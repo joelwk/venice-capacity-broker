@@ -43,8 +43,8 @@ def test_orchestrator_passes_util_and_volatility(monkeypatch):
 
     orch = orch_mod.Orchestrator(market=FakeMarket(), arbi=FakeArbi())
     # Run multiple times to accumulate a small price history
-    r1 = orch.run_once(dry_run=False)
-    r2 = orch.run_once(dry_run=False)
+    orch.run_once(dry_run=False)
+    orch.run_once(dry_run=False)
     r3 = orch.run_once(dry_run=False)
     # Utilization should be propagated
     assert seen.get("util") == 0.8

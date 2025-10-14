@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import os
 
 from fastapi.testclient import TestClient
 
@@ -7,6 +8,9 @@ from libs.dex.routes import as_route_plan
 from services.marketdata.provider import MarketDataProvider
 
 APP_PATH = Path("apps/broker-api/app.py").resolve()
+os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "false")
+os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
+os.environ.setdefault("VENICE_PARENT_KEY", "parent-test")
 spec = importlib.util.spec_from_file_location("broker_app_test", APP_PATH)
 module = importlib.util.module_from_spec(spec)
 assert spec and spec.loader

@@ -89,7 +89,6 @@ class ArbiDiem:
 
     def _decimals_out(self) -> int:
         try:
-            import os
             from libs.agentkit_ext.web3_utils import get_contract, get_web3
             from web3 import Web3  # type: ignore
 

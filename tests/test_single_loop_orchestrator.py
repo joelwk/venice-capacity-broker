@@ -147,3 +147,71 @@ def test_single_loop_quorum_blocks_actions(monkeypatch):
     assert len(arbi.calls) == 1 and arbi.calls[0]["simulate"] is True
     assert record["arbi"]["execution"]["status"] == "blocked"
     assert record["arbi"]["outcome"] is False
+
+
+def test_single_loop_treasurer_and_listen_interval(monkeypatch):
+    orch_mod = import_module("graph.workflows.orchestrator")
+    risk_mod = import_module("services.risk.policy")
+
+    class FakeStake:
+        def run_once(self, live: bool = False):
+            return {"status": "ok", "live": live}
+
+    class FakeMarket:
+        def __init__(self) -> None:
+            self._idx = 0
+            self._util = [0.9, 0.2]
+            self._vol = [80.0, 5.0]
+
+        def unified_signals(self, ttl_s: int = 30):
+            val = self._util[min(self._idx, len(self._util) - 1)]
+            return {"vvv": {"utilization": val}}
+
+        def utilization_volatility_bps(self, window: int = 3):
+            val = self._vol[min(self._idx, len(self._vol) - 1)]
+            self._idx = min(self._idx + 1, len(self._vol) - 1)
+            return val
+
+    class FakeArbi:
+        def __init__(self) -> None:
+            self.risk = risk_mod.RiskPolicy.from_env()
+            self.calls = 0
+
+        def evaluate_and_maybe_mint(self, price, **kwargs):
+            self.calls += 1
+            return self.calls == 1
+
+    class FakeCapacity:
+        def __init__(self) -> None:
+            self._usage = [90.0, 20.0]
+            self.calls: list[float] = []
+
+        def run_once(self, parent_key: str | None = None, enforce_limits: bool = True):
+            idx = len(self.calls)
+            use = self._usage[min(idx, len(self._usage) - 1)]
+            self.calls.append(use)
+            return {
+                "status": "ok",
+                "usage": {"dailyAverageDiem": use},
+                "limits": {"data": [{"consumptionLimit": {"diem": 100.0}}]},
+            }
+
+    capacity = FakeCapacity()
+    treasurer_mod = import_module("agents.ai_treasurer.agent")
+    treasurer = treasurer_mod.AITreasurer()
+    orchestrator = orch_mod.SingleLoopOrchestrator(
+        stake_master=FakeStake(),
+        arbi=FakeArbi(),
+        capacity_broker=capacity,
+        market=FakeMarket(),
+        ai_treasurer=treasurer,
+    )
+
+    record_hot = orchestrator.run_cycle(dry_run=True, enable_live=False, listen_base=10.0)
+    record_calm = orchestrator.run_cycle(dry_run=True, enable_live=False, listen_base=10.0)
+
+    assert record_hot["treasury"]["action"] == "acquire"
+    assert record_hot["listenInterval"] < 10.0
+    assert record_calm["listenInterval"] > 10.0
+    assert orchestrator._last_listen_interval == record_calm["listenInterval"]
+    assert record_calm["treasury"]["action"] == "release"

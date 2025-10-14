@@ -18,7 +18,17 @@ Venice’s Capacity Broker is a multi‑agent system that maximises revenue from
 
 The system uses LangGraph for orchestration and Coinbase AgentKit for on‑chain actions.  
 A quorum layer synthesises signals from several models (Yield, Arbitrage, Risk, Demand and Treasury) to decide which path to execute.  
-Agents must respect protocol constraints such as the seven‑day unstake cooldown and maintain safety through stop‑losses and capacity limits.
+Agents must respect protocol constraints such as the seven-day unstake cooldown and maintain safety through stop-losses and capacity limits.
+
+## Status checkpoint
+
+- StakeMaster, key issuance, and wallet services are live in the repo. Dry-run them with `uv run python apps/cli/main.py run:stakemaster --enable-live` before changing prompts.
+
+- ArbiDiem mint and trade loop is merged but guardrails need another calibration pass. Capture premium thresholds and slippage caps in `services/risk`.
+
+- CapacityBroker API already serves pilot tenants. Expand analytics and abuse heuristics next.
+
+- Quorum coordinator and AI Treasurer wiring remain behind a flag. Resume here to finish the single-loop handoff and reflection gating.
 
 ---
 
@@ -193,8 +203,45 @@ Tune behaviour with env: `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `R
 Follow the sprint plan outlined in the implementation document:
 
 - **Sprint 1 – Foundations**: wallet and staking services, Venice autonomous key flow, StakeMaster with heartbeat and compounding.
-- **Sprint 2 – Broker & quotas**: Broker API and keys service, per‑tenant quotas, basic usage metrics.
-- **Sprint 3 – DIEM mint/trade**: DIEM service and ArbiDiem crew, including mint, sell, buy‑back, and fair‑value calculations.
+- **Sprint 2 – Broker & quotas**: Broker API and keys service, per-tenant quotas, basic usage metrics.
+- **Sprint 3 – DIEM mint/trade**: DIEM service and ArbiDiem crew, including mint, sell, buy-back, and fair-value calculations.
 - **Sprint 4 – Quorum & treasury**: quorum coordinator and initial AI Treasurer actions.
 - **Sprint 5 – Hardening & scale**: abuse prevention, SLAs, autoscaling, and advanced risk management (e.g., price hedging).
 
+## Run and test surfaces
+
+- `uv run python apps/cli/main.py run:loop --enable-live --sleep 15 --max-cycles 3` exercises the orchestrator with tight safety caps.
+
+- `uv run python apps/cli/main.py startup:probe` validates environment wiring before a live run.
+
+- `uv run pytest -q` keeps the regression pack green.
+
+- `uv run python apps/cli/main.py venice:keys:cleanup --prefix T1 --dry-run` runs the daily tenant key audit.
+
+## Operational guardrails
+
+- Keep `DIEM_DEBUG_ROUTES` and `MARKETDATA_DEBUG_SANITY` disabled in production. Toggle them only when investigating incidents.
+
+- Enforce `consumptionLimit` and `expiresAt` on every sub-key. Revoke suspicious keys fast and rotate daily.
+
+- Respect pool-take and slippage caps from `services/risk`. Budget the buyback reserve before going short DIEM.
+
+- Stagger unstake requests and confirm the heartbeat before enabling progressive live.
+
+## Tooling and prompts
+
+- Maintain concise manager-and-tools prompts for StakeMaster, ArbiDiem, and CapacityBroker. Call out objectives, guardrails, and exit criteria.
+
+- Tool schema must cover `stake_vvv`, `claim_and_compound`, `mint_diem`, `burn_diem`, `quote_swap_exact_in`, and `issue_scoped_key`. Keep parameters JSON friendly.
+
+- Reflection engine writes critiques to `db/agent_memory.jsonl`. Surface the key findings inside the next agent cycle prompt.
+
+- Add explicit stop conditions for risky tools so the guardian can halt early.
+
+## Next actions
+
+- Finalise quorum coordinator integration while preserving the single-loop default.
+
+- Backfill unit tests for the new guardian heuristics and key revocation flows.
+
+- Prepare a go-live runbook covering tenant onboarding, DIEM mint toggles, and telemetry checks.

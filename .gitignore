@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.docker
 .pytest_cache/
 
 # OS
@@ -40,6 +41,9 @@ coverage.xml
 htmlcov/
 coverage/
 
+# Legacy Replit export
+local.json
+
 # Tool caches
 .mypy_cache/
 .ruff_cache/
@@ -48,3 +52,8 @@ coverage/
 # Logs
 logs/
 *.log
+
+# Transient local scratch files
+tmp_*
+tmp*/
+*.jsonl

@@ -26,6 +26,8 @@ dependencies = [
   "uvicorn",
   # Load environment variables from .env when present
   "python-dotenv>=1.0",
+  "web3>=6.15",
+  "eth-account>=0.10",
 ]
 
 [project.urls]
@@ -46,7 +48,7 @@ tracing = ["langsmith>=0.1.38"]
 graph = ["langchain", "langgraph"]
 web3 = ["web3>=6.15", "eth-account>=0.10"]
 agentkit = ["coinbase-agentkit>=0.3", "cdp-sdk>=0.10"]
-dev = ["pytest", "pytest-asyncio", "httpx", "alembic>=1.12", "playwright>=1.44"]
+dev = ["pytest", "pytest-asyncio", "httpx", "alembic>=1.12", "playwright>=1.44", "ruff>=0.5.0"]
 
 [tool.uv]
 # uv configuration (no editable flag needed; uv installs project in editable mode for the workspace root).
@@ -72,10 +74,10 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.sdist]
-packages = ["apps", "libs", "services", "agents", "graph"]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
 exclude = ["@tool.hatch.build.exclude"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["apps", "libs", "services", "agents", "graph"]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
 exclude = ["@tool.hatch.build.exclude"]
 

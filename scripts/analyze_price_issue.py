@@ -63,7 +63,7 @@ def main():
     usdc_diem_ratio_given = given_ratios["USDC_DIEM"]
     usdc_diem_ratio_expected = expected_prices["USDC"] / expected_prices["DIEM"]
     
-    print(f"\n   USDC/DIEM ratio:")
+    print("\n   USDC/DIEM ratio:")
     print(f"      Given: {usdc_diem_ratio_given:,.2f}")
     print(f"      Expected: {usdc_diem_ratio_expected:.6f}")
     print(f"      Ratio of ratios: {usdc_diem_ratio_given / usdc_diem_ratio_expected:,.2e}")

@@ -5,7 +5,7 @@ import os
 from collections import deque
 from pathlib import Path
 from threading import Lock
-from typing import Any, Deque, Dict, Iterable, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 class MemoryStore:

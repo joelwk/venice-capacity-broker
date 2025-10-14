@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import json
-from importlib import reload
 
 
 def setup_module(module):
@@ -12,6 +10,8 @@ def setup_module(module):
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "2"
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = "apps/broker-api/tenants.test.json"
+    os.environ["BROKER_REQUIRE_ADMIN_TOKEN"] = "false"
+    os.environ["BROKER_ADMIN_TOKEN"] = "test-admin"
     # Force in-memory KV (avoid remote Replit DB / Redis during tests)
     os.environ.pop("KV_URL", None)
     os.environ.pop("REPLIT_DB_URL", None)
@@ -92,6 +92,18 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
     broker_app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
 
+    from collections import deque
+
+    times = deque([100.0, 100.1, 101.5])
+
+    def fake_now() -> float:
+        if len(times) > 1:
+            return times.popleft()
+        return times[0]
+
+    broker_app._limiter._now = fake_now  # type: ignore[attr-defined]
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+
     def fake_chat(self, messages, model=None, **kw):  # noqa: ANN001
         return {"status": "ok", "echo": messages}
 
@@ -114,7 +126,7 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
     assert r1.status_code == 200
     r2 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "a2"}, json=payload)
     assert r2.status_code == 429
-    # Wait for window to roll
+    # Wait for window to roll (monkeypatched to no-op but advances via fake_now)
     time.sleep(1.2)
     r3 = client.post("/v1/chat", headers={**headers, "Idempotency-Key": "a3"}, json=payload)
     assert r3.status_code == 200
@@ -208,3 +220,26 @@ def test_no_rate_limit_when_disabled(monkeypatch, tmp_path):
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r3.status_code == 200
+
+
+def test_kv_limiter_without_redis(monkeypatch):
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("KV_REDIS_URL", raising=False)
+
+    from libs.kv import KVStore
+    from libs.ratelimit.kv_sliding_window import KVSlidingWindowLimiter
+    import time
+
+    kv = KVStore()
+    limiter = KVSlidingWindowLimiter(kv)
+
+    allowed1, _ = limiter.allow("tenant:test", limit=1, window_seconds=1)
+    allowed2, headers2 = limiter.allow("tenant:test", limit=1, window_seconds=1)
+
+    assert allowed1 is True
+    assert allowed2 is False
+    assert headers2["X-RateLimit-Remaining"] == "0"
+
+    time.sleep(1.1)
+    allowed3, _ = limiter.allow("tenant:test", limit=1, window_seconds=1)
+    assert allowed3 is True

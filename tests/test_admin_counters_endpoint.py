@@ -6,7 +6,6 @@ from pathlib import Path
 import importlib.util
 from types import SimpleNamespace, ModuleType
 from datetime import datetime, timedelta, timezone
-import json
 
 
 def _make_fake_sql_stubs(rows):
@@ -189,7 +188,7 @@ def test_counters_requires_admin_token(monkeypatch, tmp_path):
     try:
         # Patch DB engine fetch to avoid real SQL deps
         import db.session as db_session
-        db_session.get_engine = lambda: object()  # type: ignore[assignment]
+        monkeypatch.setattr(db_session, "get_engine", lambda: object())
 
         broker_app = _load_app("broker_api_counters_auth")
         _add_tenant(broker_app, "t1")
@@ -203,7 +202,9 @@ def test_counters_requires_admin_token(monkeypatch, tmp_path):
         assert r.status_code == 401
     finally:
         cleanup()
-def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
+
+
+def test_counters_validates_tenant_and_bucket_seconds(monkeypatch, tmp_path):
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants2.json")
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
@@ -223,7 +224,7 @@ def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
     try:
         # Patch DB engine fetch to avoid real SQL deps
         import db.session as db_session
-        db_session.get_engine = lambda: object()  # type: ignore[assignment]
+        monkeypatch.setattr(db_session, "get_engine", lambda: object())
 
         broker_app = _load_app("broker_api_counters_validate")
         _add_tenant(broker_app, "t1")
@@ -242,7 +243,9 @@ def test_counters_validates_tenant_and_bucket_seconds(tmp_path):
         assert r_bad_bs.status_code == 400
     finally:
         cleanup()
-def test_counters_filters_limit_and_asc(tmp_path):
+
+
+def test_counters_filters_limit_and_asc(monkeypatch, tmp_path):
     os.environ["BROKER_STORE_BACKEND"] = "json"
     os.environ["BROKER_STORE_FILE"] = str(tmp_path / "tenants3.json")
     os.environ["BROKER_ADMIN_TOKEN"] = "adminkey"
@@ -261,7 +264,7 @@ def test_counters_filters_limit_and_asc(tmp_path):
     try:
         # Patch DB engine fetch to avoid real SQL deps
         import db.session as db_session
-        db_session.get_engine = lambda: object()  # type: ignore[assignment]
+        monkeypatch.setattr(db_session, "get_engine", lambda: object())
 
         broker_app = _load_app("broker_api_counters_filters")
         _add_tenant(broker_app, "t1")

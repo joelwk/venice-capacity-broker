@@ -2,12 +2,10 @@
 """Test price normalization with deterministic market data overrides."""
 
 import os
-import sys
-from pathlib import Path
 
-_repo_root = Path(__file__).resolve().parents[1]
-if str(_repo_root) not in sys.path:
-    sys.path.insert(0, str(_repo_root))
+from libs.dex.routes import as_route_plan
+from services.marketdata.provider import MarketDataProvider
+
 
 os.environ['VVV_TOKEN_ADDRESS'] = '0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf'
 os.environ['DIEM_TOKEN_ADDRESS'] = '0xf4d97f2da56e8c3098f3a8d538db630a2606a024'
@@ -18,9 +16,6 @@ os.environ['TRADE_PATH'] = ','.join([
     os.environ['WETH_ADDRESS'],
     os.environ['QUOTE_TOKEN_ADDRESS'],
 ])
-
-from libs.dex.routes import as_route_plan
-from services.marketdata.provider import MarketDataProvider
 
 
 class DemoProvider(MarketDataProvider):
