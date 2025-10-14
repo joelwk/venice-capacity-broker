@@ -50,6 +50,10 @@ _load_dotenv()
 
 logger = get_logger("cli")
 
+# Safe defaults so local tooling/CI gates have secure-but-present config.
+os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "true")
+os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
+os.environ.setdefault("VENICE_API_BASE_URL", "https://api.venice.ai/api/v1")
 
 def _env_flag(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
