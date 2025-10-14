@@ -23,7 +23,8 @@ def _load_broker_app_module() -> ModuleType:
     if sqlalc is None or not hasattr(sqlalc, "dialects"):
         sqlalc = ModuleType("sqlalchemy")
         sqlalc.desc = lambda arg: arg  # type: ignore[attr-defined]
-        sqlalc.dialects = SimpleNamespace()
+        sqlalc.sqlite = SimpleNamespace()  # type: ignore[attr-defined]
+        sqlalc.dialects = SimpleNamespace(sqlite=SimpleNamespace())  # type: ignore[attr-defined]
         sys.modules["sqlalchemy"] = sqlalc
     os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "false")
     os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
