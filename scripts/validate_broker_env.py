@@ -207,7 +207,7 @@ def validate_env() -> Dict[str, Any]:
         return value
 
     # --- Core service configuration ---
-    admin_token = require_env(
+    require_env(
         "BROKER_ADMIN_TOKEN",
         stages=("broker_api", "orchestrator_dry_run", "orchestrator_live"),
         severity="critical",
@@ -238,7 +238,7 @@ def validate_env() -> Dict[str, Any]:
     else:
         record_stage_check(stage_checks, ("broker_api",), "Admin auth enforced", True)
 
-    session_secret = require_env(
+    require_env(
         "SESSION_SECRET",
         stages=("broker_api",),
         severity="high",
@@ -275,7 +275,7 @@ def validate_env() -> Dict[str, Any]:
         else:
             record_stage_check(stage_checks, STAGES.keys(), "Postgres backend in use", True)
 
-    redis_url = require_env(
+    require_env(
         "REDIS_URL",
         stages=("core_infra", "broker_api", "orchestrator_dry_run", "orchestrator_live", "token_watcher"),
         severity="high",
@@ -312,7 +312,7 @@ def validate_env() -> Dict[str, Any]:
         else:
             record_stage_check(stage_checks, STAGES.keys(), "Venice base URL includes /api/v1", True)
 
-    parent_key = require_env(
+    require_env(
         "VENICE_PARENT_KEY",
         stages=tuple(STAGES.keys()),
         severity="critical",
@@ -322,7 +322,7 @@ def validate_env() -> Dict[str, Any]:
         remediation="VENICE_PARENT_KEY=<parent-key-from-venice>",
     )
 
-    api_key = require_env(
+    require_env(
         "VENICE_API_KEY",
         stages=tuple(STAGES.keys()),
         severity="high",
@@ -333,7 +333,7 @@ def validate_env() -> Dict[str, Any]:
     )
 
     # --- On-chain connectivity ---
-    base_rpc = require_env(
+    require_env(
         "BASE_RPC_URL",
         stages=("orchestrator_dry_run", "orchestrator_live", "token_watcher"),
         severity="high",
