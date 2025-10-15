@@ -1,5 +1,7 @@
-.PHONY: help health create-tenant chat-admin rotate-probe limits-get limits-set setup-cli run-broker db-migrate db-stamp db-compact db-counters demo-e2e enable-buyer ci-gate smoke-quotes-preview
- .PHONY: db-setup-and-migrate
+.PHONY: help env-status validate-env doctor setup-cli health create-tenant chat-admin rotate-probe limits-get limits-set \
+	run-broker run-stack docker-build docker-up docker-down docker-logs docker-ps docker-shell deploy-docker replit-run \
+	db-migrate db-stamp db-setup-and-migrate db-compact db-counters server-db-compact demo-e2e enable-buyer ci-gate \
+	smoke-quotes-preview watch-tokens watch-tokens-once watch-tokens-debug
 
 # Broker base URL; can be overridden via environment or CLI
 # Example: make create-tenant BROKER_BASE_URL=https://<your-repl>.repl.co
@@ -12,6 +14,27 @@ MESSAGE ?= Hello
 # Try to find uv in common install locations; fall back to plain python
 UV_BIN ?= $(if $(wildcard $(HOME)/.local/bin/uv),$(HOME)/.local/bin/uv,$(if $(wildcard $(PWD)/.local/bin/uv),$(PWD)/.local/bin/uv,))
 RUNPY ?= $(if $(UV_BIN),$(UV_BIN) run python,python)
+RUNUVICORN := $(if $(UV_BIN),$(UV_BIN) run uvicorn,python -m uvicorn)
+
+ENV_VALIDATOR ?= scripts/validate_broker_env.py
+SKIP_ENV_VALIDATION ?= 0
+ENV_VALIDATION_FORMAT ?= text
+ENV_VALIDATION_EXPORT ?= 0
+ENV_VALIDATION_ARGS = $(strip $(if $(filter json,$(ENV_VALIDATION_FORMAT)),--json,) $(if $(filter 1,$(ENV_VALIDATION_EXPORT)),--export,))
+
+COMPOSE_CMD ?= docker compose
+COMPOSE_FILES ?= docker-compose.yml
+COMPOSE_FILE_ARGS = $(strip $(foreach file,$(COMPOSE_FILES),-f $(file)))
+DOCKER_PROFILES ?=
+DOCKER_PROFILE_ARGS = $(strip $(foreach profile,$(DOCKER_PROFILES),--profile $(profile)))
+DOCKER_DETACH ?= 0
+DOCKER_BUILD ?= 0
+DOCKER_NO_CACHE ?= 0
+DOCKER_REMOVE_VOLUMES ?= 0
+
+REPLIT_MODE ?= dry
+
+LOAD_ENV_CMD := set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a;
 
 setup-cli:
 	@echo "Installing minimal CLI dependencies (requests + httpx) for shell usage..."
@@ -22,8 +45,17 @@ setup-cli:
 env-status:
 	@$(RUNPY) apps/cli/main.py env:status
 
+validate-env doctor:
+	@if [ "$(SKIP_ENV_VALIDATION)" = "1" ]; then \
+	  echo "[env] Skipping environment validation (SKIP_ENV_VALIDATION=1)"; \
+	else \
+	  echo "[env] Validating environment via $(ENV_VALIDATOR) $(ENV_VALIDATION_ARGS)"; \
+	  $(RUNPY) $(ENV_VALIDATOR) $(ENV_VALIDATION_ARGS); \
+	fi
+
 help:
 	@echo "Targets:"
+	@echo "  make validate-env [ENV_VALIDATION_FORMAT=json] - run env readiness audit"
 	@echo "  make health                          - GET /health"
 	@echo "  make create-tenant TENANT=t1 LABEL=TeamA [QUOTA=0 EXPIRES=...]"
 	@echo "  make chat-admin TENANT=t1 [MESSAGE=Hello]    - admin act-as /v1/chat"
@@ -32,6 +64,13 @@ help:
 	@echo "  make limits-set TENANT=t1 WINDOW=60 MAX=60 [LABEL=premium]"
 	@echo "  make run-broker                      - start uvicorn app:app with --app-dir"
 	@echo "  make run-stack                       - start API + orchestrator + staker + watcher"
+	@echo "  make docker-build                    - docker compose build (set SERVICE=name for scoped build)"
+	@echo "  make docker-up [DOCKER_DETACH=1]     - docker compose up (set DOCKER_PROFILES=helpers for full stack)"
+	@echo "  make docker-down [DOCKER_REMOVE_VOLUMES=1] - docker compose down"
+	@echo "  make docker-logs [SERVICE=broker]    - follow logs for a compose service"
+	@echo "  make docker-shell SERVICE=broker     - exec into a running compose service"
+	@echo "  make deploy-docker                   - build+up detached via docker compose"
+	@echo "  make replit-run [REPLIT_MODE=live]   - launch stack through Replit entry script"
 	@echo "  make db-migrate                      - alembic upgrade head"
 	@echo "  make db-stamp                        - alembic stamp head (mark current)"
 	@echo "  make db-setup-and-migrate           - install DB deps + alembic, then upgrade head"
@@ -83,28 +122,44 @@ limits-set:
 	@$(RUNPY) scripts/set_broker_limits.py --tenant "$(TENANT)" $(if $(WINDOW),--window $(WINDOW),) $(if $(MAX),--max $(MAX),) $(if $(LABEL),--label "$(LABEL)",)
 
 # --- Convenience targets ---
-run-broker:
-	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
-	# Optional: one-screen DEX startup probe (skips silently if no key/path)
-	@if command -v uv >/dev/null 2>&1; then \
-	  ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" uv run python apps/cli/main.py startup:probe || true; \
-	else \
-	  ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" python apps/cli/main.py startup:probe || true; \
-	fi; \
-	# Start the Broker API
-	if command -v uv >/dev/null 2>&1; then \
-	  uv run uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
-	else \
-	  python -m uvicorn app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT); \
+run-broker: validate-env
+	@$(LOAD_ENV_CMD) \
+	ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" $(RUNPY) apps/cli/main.py startup:probe || true; \
+	$(RUNUVICORN) app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT)
+
+run-stack: validate-env
+	@$(LOAD_ENV_CMD) \
+	$(RUNPY) scripts/start_stack.py
+
+replit-run:
+	@$(MAKE) validate-env
+	@REPLIT_MODE=$(REPLIT_MODE) SKIP_ENV_VALIDATION=1 bash scripts/run_stack_entry.sh
+
+# --- Docker orchestration helpers ---
+docker-build:
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) build $(if $(filter 1,$(DOCKER_NO_CACHE)),--no-cache,) $(SERVICE)
+
+docker-up: validate-env
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) up $(if $(filter 1,$(DOCKER_BUILD)),--build,) $(if $(filter 1,$(DOCKER_DETACH)),-d,) $(DOCKER_PROFILE_ARGS) $(SERVICE)
+
+docker-down:
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) down $(if $(filter 1,$(DOCKER_REMOVE_VOLUMES)),-v,)
+
+docker-logs:
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) logs -f $(SERVICE)
+
+docker-ps:
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) ps $(SERVICE)
+
+docker-shell:
+	@if [ -z "$(SERVICE)" ]; then \
+	  echo "Usage: make docker-shell SERVICE=broker [CMD=/bin/bash]"; \
+	  exit 1; \
 	fi
-.PHONY: run-stack
-run-stack:
-	@set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a; \
-	if command -v uv >/dev/null 2>&1; then \
-	  uv run python scripts/start_stack.py; \
-	else \
-	  python scripts/start_stack.py; \
-	fi
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) exec $(SERVICE) $${CMD:-/bin/bash}
+
+deploy-docker:
+	@$(MAKE) docker-up DOCKER_DETACH=1 DOCKER_BUILD=1 $(if $(COMPOSE_FILES),COMPOSE_FILES="$(COMPOSE_FILES)",) $(if $(DOCKER_PROFILES),DOCKER_PROFILES="$(DOCKER_PROFILES)",) $(if $(SERVICE),SERVICE="$(SERVICE)",)
 
 
 .PHONY: ci-gate
@@ -147,7 +202,7 @@ server-db-compact:
 # One-shot Replit demo: seed tenant (SQL if no Venice parent), probe chat, compact, show
 TENANT ?= t1
 LABEL ?= Team A
-demo-e2e:
+demo-e2e: validate-env
 	@if [ -z "$$BROKER_ADMIN_TOKEN" ]; then echo "BROKER_ADMIN_TOKEN env is required"; exit 1; fi
 	@echo "[demo] Seeding tenant '$(TENANT)' (label='$(LABEL)')"
 	@if [ -n "$$FORCE_SQL" ]; then \

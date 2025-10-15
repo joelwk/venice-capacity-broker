@@ -17,6 +17,8 @@ COPY services ./services
 COPY db ./db
 COPY abi ./abi
 COPY docs ./docs
+COPY scripts ./scripts
+COPY config ./config
 
 # Install package with required extras
 RUN pip install --no-cache-dir .[agentkit,broker,web3,graph,db]
