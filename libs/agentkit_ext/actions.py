@@ -80,7 +80,16 @@ class VVVActions:
             variants = []
         inputs: List[Dict[str, Any]] = []
         if variants:
-            inputs = list(variants[0].abi.get("inputs", []))  # type: ignore[attr-defined]
+            if isinstance(variants, list):
+                candidates = variants
+            else:
+                candidates = [variants]
+            for variant in candidates:
+                abi = getattr(variant, "abi", None)
+                if not abi:
+                    continue
+                inputs = list(abi.get("inputs", []))  # type: ignore[attr-defined]
+                break
 
         args: List[Any] = []
         wallet = Web3.to_checksum_address(get_address())
