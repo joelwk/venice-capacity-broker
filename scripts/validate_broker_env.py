@@ -275,15 +275,32 @@ def validate_env() -> Dict[str, Any]:
         else:
             record_stage_check(stage_checks, STAGES.keys(), "Postgres backend in use", True)
 
-    require_env(
-        "REDIS_URL",
-        stages=("core_infra", "broker_api", "orchestrator_dry_run", "orchestrator_live", "token_watcher"),
-        severity="high",
-        category="storage",
-        message="REDIS_URL is not configured",
-        impact="Rate limits, KV counters, and orchestrator coordination will fail",
-        remediation="REDIS_URL=redis://redis:6379/0",
-    )
+    redis_stages = ("core_infra", "broker_api", "orchestrator_dry_run", "orchestrator_live", "token_watcher")
+    redis_url = env_value("REDIS_URL") or env_value("KV_REDIS_URL")
+    kv_fallback_url = env_value("KV_URL") or env_value("REPLIT_DB_URL")
+
+    if redis_url:
+        record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", True)
+    elif kv_fallback_url:
+        record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", True, "kv fallback")
+    else:
+        record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", False, "missing")
+        add_issue(
+            issues,
+            severity="high",
+            category="storage",
+            message="REDIS_URL is not configured",
+            impact="Rate limits, KV counters, and orchestrator coordination will fail",
+            remediation="REDIS_URL=redis://redis:6379/0",
+            affects=redis_stages,
+        )
+        suggestions.append(
+            {
+                "key": "REDIS_URL",
+                "value": "redis://redis:6379/0",
+                "reason": "REDIS_URL is not configured",
+            }
+        )
 
     # --- Venice API integration ---
     venice_base = require_env(
@@ -575,6 +592,13 @@ def validate_env() -> Dict[str, Any]:
         )
 
     # --- Artifact presence ---
+    is_replit_workspace = bool(
+        os.getenv("REPLIT_DB_URL")
+        or os.getenv("REPLIT_APP_ID")
+        or os.getenv("REPLIT_ENV")
+        or os.getenv("REPLIT_PLATFORM")
+    )
+
     required_files = [
         (".env", ("core_infra",), "Base environment file expected for shared configuration"),
         (".env.docker", ("core_infra",), "Docker-specific overrides required for `docker compose --env-file .env.docker up`"),
@@ -585,6 +609,9 @@ def validate_env() -> Dict[str, Any]:
     for rel_path, stages, description in required_files:
         file_path = REPO_ROOT / rel_path
         if not file_path.exists():
+            if rel_path == ".env.docker" and is_replit_workspace:
+                record_stage_check(stage_checks, stages, f"{rel_path} present", True, "skipped in replit")
+                continue
             record_stage_check(stage_checks, stages, f"{rel_path} present", False, "missing")
             add_issue(
                 issues,
