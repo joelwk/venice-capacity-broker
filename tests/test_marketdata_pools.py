@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy.exc import NoSuchModuleError
 
 from db.models import DexPool
 from db.session import create_db_and_tables, get_session
@@ -16,6 +17,13 @@ except Exception:  # noqa: BLE001
 
 pytestmark = pytest.mark.skipif(sqlmodel is None, reason="sqlmodel not installed")
 
+try:  # pragma: no cover - optional dependency in CI
+    from sqlalchemy.dialects import registry as _dialect_registry
+    _dialect_registry.load("sqlite")
+except Exception as exc:  # noqa: BLE001
+    if isinstance(exc, (AttributeError, NoSuchModuleError)) or "sqlite" in str(exc).lower():
+        pytestmark = pytest.mark.skip(reason="sqlite dialect not available")
+    _dialect_registry = None
 
 
 def _addr(suffix: str) -> str:

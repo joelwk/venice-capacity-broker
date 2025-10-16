@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from apps._path import REPO_ROOT
 from libs.agentkit_ext.web3_utils import resolve_rpc_url, rpc_url_candidates
 from libs.telemetry.logger import get_logger
@@ -10,6 +12,12 @@ from services.venice_keys.manager import KeyManager
 
 def _load_dotenv() -> None:
     """Best-effort load of repo-level dotenv files for manual runs."""
+    try:
+        flag = os.getenv("BROKER_SKIP_DOTENV", "").strip().lower()
+        if flag in {"1", "true", "yes", "on"}:
+            return
+    except Exception:
+        return
     try:
         from libs.env import load_dotenv_if_present  # type: ignore
 

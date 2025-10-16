@@ -533,9 +533,9 @@ class DexAggregator:
         self._circ_cool = int((os.getenv("DEX_CIRCUIT_COOL_OFF_SECONDS") or "60").strip() or 60)
         self._circ: Dict[str, Dict[str, float | int]] = {}
         try:
-            self._timeout = float((os.getenv("DEX_PROVIDER_TIMEOUT_SECONDS") or "0.5").strip() or 0.5)
+            self._timeout = float((os.getenv("DEX_PROVIDER_TIMEOUT_SECONDS") or "1.5").strip() or 1.5)
         except Exception:
-            self._timeout = 0.5
+            self._timeout = 1.5
         if self._timeout < 0:
             self._timeout = 0.0
         try:
@@ -655,9 +655,19 @@ class DexAggregator:
                     if quote.route is None:
                         object.__setattr__(quote, "route", route_plan)
                     quotes.append(quote)
-                elif _debug_routes_enabled():
-                    route_tokens = list(route_plan.tokens)
-                    _logger.info("dex aggregator empty quote provider=%s method=%s route=%s amount=%s", provider.name, method, route_tokens, int(amount))
+                    self._circ_on_success(provider.name)
+                else:
+                    _metrics_inc("dex_agg_null_quotes_total", labels={"provider": provider.name, "method": method})
+                    self._circ_on_failure(provider.name, reason="empty")
+                    if _debug_routes_enabled():
+                        route_tokens = list(route_plan.tokens)
+                        _logger.info(
+                            "dex aggregator empty quote provider=%s method=%s route=%s amount=%s",
+                            provider.name,
+                            method,
+                            route_tokens,
+                            int(amount),
+                        )
         return quotes
 
     def quote_all(self, amount_in: int, route: RouteLike) -> List[Quote]:

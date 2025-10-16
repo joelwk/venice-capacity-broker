@@ -47,12 +47,77 @@ class VVVActions:
         tx_hash = send_tx(self.token_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "approve", "tx_hash": tx_hash}
 
+    def _encode_staking_transaction(self, fn_name: str, args: List[Any]) -> str:
+        wallet = Web3.to_checksum_address(get_address())
+        try:
+            fn_builder = getattr(self.staking.functions, fn_name)
+        except AttributeError as exc:  # pragma: no cover - contract missing fn
+            raise AttributeError(f"staking contract missing function '{fn_name}'") from exc
+        func = fn_builder(*args)
+        try:
+            func.estimate_gas({"from": wallet})
+        except Exception as exc:
+            raise RuntimeError(f"{fn_name}_estimate_failed:{exc}") from exc
+        try:
+            data = func._encode_transaction_data()  # type: ignore[attr-defined]
+        except AttributeError:
+            built = func.build_transaction({"from": wallet})
+            data = built.get("data")
+        if not data:
+            data = encode_contract_call(self.staking, fn_name, args)
+        if isinstance(data, bytes):
+            data = "0x" + data.hex()
+        if not isinstance(data, str):
+            raise TypeError(f"Unexpected encoded data type for {fn_name}: {type(data)}")
+        if not data.startswith("0x"):
+            data = "0x" + data
+        return data
+
+    def _build_staking_args(self, fn_name: str, amount: int | None) -> List[Any]:
+        try:
+            variants = self.staking.get_function_by_name(fn_name)
+        except ValueError:
+            variants = []
+        inputs: List[Dict[str, Any]] = []
+        if variants:
+            inputs = list(variants[0].abi.get("inputs", []))  # type: ignore[attr-defined]
+
+        args: List[Any] = []
+        wallet = Web3.to_checksum_address(get_address())
+        for idx, param in enumerate(inputs):
+            p_type = str(param.get("type") or "")
+            name = str(param.get("name") or f"arg{idx}")
+            name_lower = name.lower()
+            if p_type == "address":
+                env_key = f"VVV_{fn_name.upper()}_{name.upper()}_ADDRESS"
+                override = os.getenv(env_key)
+                target = Web3.to_checksum_address(override) if override else wallet
+                args.append(target)
+            elif p_type.startswith("uint"):
+                value = amount
+                env_key = f"VVV_{fn_name.upper()}_{name.upper()}_UNITS"
+                override = os.getenv(env_key)
+                if value is None and override:
+                    try:
+                        value = int(str(override), 0)
+                    except Exception:
+                        value = int(str(override))
+                if value is None:
+                    raise ValueError(f"{fn_name} requires parameter '{name}' but no value was provided")
+                args.append(int(value))
+            else:
+                raise ValueError(f"Unsupported parameter type '{p_type}' for staking function '{fn_name}'")
+        if not inputs:
+            # fallback to legacy behaviour when ABI lacks metadata
+            if amount is None:
+                return []
+            return [int(amount)]
+        return args
+
     def stake(self, amount: int) -> Dict[str, Any]:
-        data = encode_contract_call(
-            self.staking,
-            os.getenv("VVV_STAKE_FN", "stake"),
-            [amount],
-        )
+        fn_name = os.getenv("VVV_STAKE_FN", "stake")
+        args = self._build_staking_args(fn_name, amount)
+        data = self._encode_staking_transaction(fn_name, args)
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "stake", "tx_hash": tx_hash}
 
@@ -66,8 +131,9 @@ class VVVActions:
         return {"status": "sent", "action": "claim", "tx_hash": tx_hash}
 
     def unstake(self, amount: int) -> Dict[str, Any]:
-        fn = os.getenv("VVV_UNSTAKE_FN", "unstake")
-        data = encode_contract_call(self.staking, fn, [amount])
+        fn = os.getenv("VVV_UNSTAKE_FN", "initiateUnstake")
+        args = self._build_staking_args(fn, amount)
+        data = self._encode_staking_transaction(fn, args)
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "unstake", "tx_hash": tx_hash}
 

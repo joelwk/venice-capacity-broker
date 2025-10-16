@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+_SKIP_REDIS_TESTS = os.getenv("SKIP_REDIS_TESTS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 def setup_module(module):
     # Configure env before importing app
@@ -134,6 +135,11 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
 
 def test_rate_limit_with_redis_if_available(monkeypatch, tmp_path):
     import os as _os
+
+    if _SKIP_REDIS_TESTS:
+        import pytest
+
+        pytest.skip("Redis-backed limiter tests disabled (SKIP_REDIS_TESTS)")
 
     if not _os.getenv("REDIS_URL"):
         import pytest

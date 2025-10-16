@@ -5,6 +5,7 @@ import sys
 from types import ModuleType
 import pytest
 import os
+from sqlalchemy.exc import NoSuchModuleError
 
 # Remove lightweight stubs so we can reload the real modules when available.
 for _mod in ("sqlmodel", "sqlalchemy", "db.session", "db.models"):
@@ -14,11 +15,22 @@ for _mod in ("sqlmodel", "sqlalchemy", "db.session", "db.models"):
 pytest.importorskip("sqlmodel")
 
 
+def _ensure_sqlite_dialect() -> None:
+    try:
+        from sqlalchemy.dialects import registry
+
+        registry.load("sqlite")
+    except Exception as exc:  # pragma: no cover - env specific
+        if isinstance(exc, (NoSuchModuleError, AttributeError)) or "sqlite" in str(exc).lower():
+            pytest.skip("sqlite dialect unavailable in current environment")
+        raise
+
 
 def _load_broker_app_module() -> ModuleType:
     import sys
     from types import ModuleType, SimpleNamespace
 
+    _ensure_sqlite_dialect()
     sqlalc = sys.modules.get("sqlalchemy")
     if sqlalc is None or not hasattr(sqlalc, "dialects"):
         sqlalc = ModuleType("sqlalchemy")

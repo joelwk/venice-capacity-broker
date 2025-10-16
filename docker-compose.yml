@@ -54,6 +54,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./logs:/app/logs
 
   orchestrator:
     build:
@@ -77,6 +78,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./logs:/app/logs
 
   token-watcher:
     build:
@@ -98,6 +100,28 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./logs:/app/logs
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: venice-broker:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+      - .env.docker
+    working_dir: /app
+    command: bash -lc "pytest -q"
+    profiles: [tests]
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+      - ./logs:/app/logs
 
 volumes:
   pgdata:

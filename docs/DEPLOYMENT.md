@@ -25,6 +25,8 @@ Overview
 
    Keep an eye on `/health`, `/metrics`, and `/v1/env` while the service warms up.
 
+   When you deploy with Docker Compose, the `scripts/docker_start_broker.sh` entrypoint enforces an environment validation + migration + pytest gate before Uvicorn starts. Inside the compose stack (Docker but not Replit) the gate preserves `REDIS_URL` so the Redis-backed limiter test executes; Replit and other environments that lack Redis automatically export `SKIP_REDIS_TESTS=1` and blank Redis URLs to keep the preflight fast. Override the behaviour by explicitly setting `SKIP_REDIS_TESTS=1` when you need to bypass the Redis suite locally.
+
 5. Backfill the DEX pool catalog once so auto-discovery has historical coverage.
 
    Run `uv run python apps/cli/main.py market:pools:watch --once`. Override `POOL_WATCH_BACKFILL_BLOCKS` or `POOL_WATCH_BLOCK_SPAN` when you need to tune the range per environment. The command exits after reaching the latest block and stores the last processed height in `dexfactorycursor`.
