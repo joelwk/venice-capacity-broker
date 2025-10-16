@@ -40,6 +40,7 @@ services:
     env_file:
       - .env
       - .env.docker
+      - docker/.env.local
     environment:
       BROKER_REQUIRE_ADMIN_TOKEN: "true"
       BROKER_ADMIN_TOKEN: ${BROKER_ADMIN_TOKEN:?set}
@@ -54,6 +55,7 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
       - ./logs:/app/logs
 
   orchestrator:
@@ -67,6 +69,7 @@ services:
     env_file:
       - .env
       - .env.docker
+      - docker/.env.local
     environment:
       AUTOSTART_BROKER_API: "0"
       AUTOSTART_ORCHESTRATOR: "1"
@@ -74,10 +77,10 @@ services:
       SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     command: bash -lc "python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 ${AUTOSTART_ORCHESTRATOR_LIVE:+--enable-live}"
-    profiles: [helpers]
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
       - ./logs:/app/logs
 
   token-watcher:
@@ -91,15 +94,16 @@ services:
     env_file:
       - .env
       - .env.docker
+      - docker/.env.local
     environment:
       SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY: ${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-0}
     command: bash -lc "python services/marketdata/token_watcher.py"
-    profiles: [helpers]
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
       - ./logs:/app/logs
 
   tests:
@@ -115,12 +119,14 @@ services:
     env_file:
       - .env
       - .env.docker
+      - docker/.env.local
     working_dir: /app
     command: bash -lc "pytest -q"
     profiles: [tests]
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
       - ./logs:/app/logs
 
 volumes:

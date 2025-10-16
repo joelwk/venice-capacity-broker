@@ -17,6 +17,7 @@ def setup_module(module):
     os.environ.pop("KV_URL", None)
     os.environ.pop("REPLIT_DB_URL", None)
     os.environ.pop("REDIS_URL", None)
+    os.environ.pop("KV_REDIS_URL", None)
 
 
 def test_rate_limit_enforced(monkeypatch, tmp_path):
@@ -81,6 +82,7 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
     os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "1"
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "1"
     os.environ.pop("REDIS_URL", None)
+    os.environ.pop("KV_REDIS_URL", None)
     monkeypatch.setenv("SQL_DATABASE_URL", "sqlite:///./test-rate-limit.db")
 
     from pathlib import Path

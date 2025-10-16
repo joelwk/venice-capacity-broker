@@ -23,6 +23,7 @@ def _load_dotenv() -> None:
 
         load_dotenv_if_present(path=str(REPO_ROOT / ".env"), override=False)
         load_dotenv_if_present(path=str(REPO_ROOT / ".env.docker"), override=False)
+        load_dotenv_if_present(path=str(REPO_ROOT / "docker" / ".env.local"), override=False)
     except Exception:
         pass
 

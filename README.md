@@ -401,6 +401,7 @@ Notes:
 - SQL is configured via `SQL_DATABASE_URL` in compose (points to the `postgres` service).
 - Rate limiting/idempotency use Redis when `REDIS_URL` is set (compose wires it to `redis`).
 - The Docker entrypoint (`scripts/docker_start_broker.sh`) runs `python scripts/validate_broker_env.py`, Alembic migrations, and `pytest -q` before the API starts. Inside Docker (non-Replit) it preserves `REDIS_URL` so the Redis-backed limiter test executes; Replit and other environments set `SKIP_REDIS_TESTS=1` and blank Redis URLs automatically when Redis is unavailable. Override by exporting `SKIP_REDIS_TESTS=1` if you need to bypass the Redis suite locally.
+- Store secrets in `docker/.env.local` (git-ignored) and run compose with both files: `docker compose --env-file .env.docker --env-file docker/.env.local up`.
 - Shared configuration lives in `.env`; Docker overrides go in `.env.docker` (ignored by git). Run `cp .env.docker.example .env.docker` for a starter file.
 
 
