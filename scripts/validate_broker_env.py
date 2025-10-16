@@ -716,6 +716,11 @@ def print_report(report: Dict[str, Any], export: bool = False) -> None:
             print(f"  blocker: {blocker}")
         for warning in stage["warnings"]:
             print(f"  warning: {warning}")
+        failed_checks = [check for check in stage.get("checks", []) if not check.get("ok")]
+        for check in failed_checks:
+            detail = check.get("detail")
+            suffix = f" ({detail})" if detail else ""
+            print(f"  check failed: {check['name']}{suffix}")
         for note in stage.get("notes", []):
             print(f"  note: {note}")
         print()
@@ -724,7 +729,12 @@ def print_report(report: Dict[str, Any], export: bool = False) -> None:
     counts = report["counts"]
 
     if not issues:
-        print("✓ Environment configuration looks good!")
+        non_ready = [stage for stage in stage_values if stage["status"] != "ready"]
+        if non_ready:
+            labels = ", ".join(stage["label"] for stage in non_ready)
+            print(f"[warn] Stage readiness requires attention: {labels}")
+        else:
+            print("[ok] Environment configuration looks good!")
         return
 
     total = sum(counts.get(sev, 0) for sev in SEVERITY_ORDER)
