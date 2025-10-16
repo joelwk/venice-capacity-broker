@@ -170,6 +170,29 @@ def _call_engine_factory(target_url: str, **kwargs: Any):
         "error": None,
     }
     _ENGINE_ATTEMPTS.append(attempt)
+    if target_url.strip().lower().startswith("sqlite"):
+        try:
+            from sqlalchemy.dialects import registry
+            registry.load("sqlite")
+        except Exception:
+            try:
+                import importlib
+
+                importlib.import_module("sqlalchemy.dialects.sqlite.pysqlite")
+                from sqlalchemy.dialects import registry as _registry
+
+                _registry.register(
+                    "sqlite",
+                    "sqlalchemy.dialects.sqlite.pysqlite",
+                    "SQLiteDialect_pysqlite",
+                )
+                _registry.register(
+                    "sqlite.pysqlite",
+                    "sqlalchemy.dialects.sqlite.pysqlite",
+                    "SQLiteDialect_pysqlite",
+                )
+            except Exception:
+                pass
     try:
         engine = engine_factory(target_url, **kwargs)  # type: ignore[misc]
     except Exception as exc:  # noqa: BLE001

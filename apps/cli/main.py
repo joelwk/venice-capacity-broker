@@ -27,6 +27,7 @@ def _load_dotenv() -> None:
     """Best-effort loading of repo-level dotenv files for CLI usage."""
 
     docker_env = REPO_ROOT / ".env.docker"
+    local_env = REPO_ROOT / "docker" / ".env.local"
     try:
         from libs.env import load_dotenv_if_present  # type: ignore
     except Exception:
@@ -38,11 +39,15 @@ def _load_dotenv() -> None:
         load_dotenv(dotenv_path=str(REPO_ROOT / ".env"), override=False)
         if docker_env.exists():
             load_dotenv(dotenv_path=str(docker_env), override=True)
+        if local_env.exists():
+            load_dotenv(dotenv_path=str(local_env), override=True)
         return
 
     load_dotenv_if_present(path=str(REPO_ROOT / ".env"), override=False)
     if docker_env.exists():
         load_dotenv_if_present(path=str(docker_env), override=True)
+    if local_env.exists():
+        load_dotenv_if_present(path=str(local_env), override=True)
 
 
 _load_dotenv()

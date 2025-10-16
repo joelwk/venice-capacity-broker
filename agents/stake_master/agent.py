@@ -27,9 +27,11 @@ class StakeMaster:
     staking: StakingService
     heartbeat_interval_hours: float = 48.0
     venice_client: Optional[object] = None
+    auto_stake_max_attempts: int = 3
     _kv_store: Optional[object] = field(default=None, init=False, repr=False)
     _venice_cached: Optional[object] = field(default=None, init=False, repr=False)
     _auto_stake_attempted: bool = field(default=False, init=False, repr=False)
+    _auto_stake_attempts: int = field(default=0, init=False, repr=False)
 
     def run_once(self, live: bool = False) -> Dict[str, Any]:
         """Single heartbeat cycle.
@@ -65,7 +67,14 @@ class StakeMaster:
         staked_units = int(status.get("staked", 0))
         min_active_units = int(status.get("min_active_stake") or os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
         progressive_env = str(os.getenv("STAKEMASTER_PROGRESSIVE_ENABLE", "true")).strip().lower() in {"1", "true", "yes", "on"}
-        if live and progressive_env and not self._auto_stake_attempted and staked_units <= 0 and min_active_units > 0:
+        try:
+            max_attempts_env = os.getenv("STAKEMASTER_AUTO_STAKE_MAX_ATTEMPTS")
+            max_attempts = int(max_attempts_env) if max_attempts_env else int(self.auto_stake_max_attempts)
+        except Exception:
+            max_attempts = int(self.auto_stake_max_attempts)
+        max_attempts = max(1, max_attempts)
+        stake_action["max_attempts"] = max_attempts
+        if live and progressive_env and staked_units <= 0 and min_active_units > 0 and self._auto_stake_attempts < max_attempts:
             available_units = self._wallet_vvv_balance()
             if available_units is not None:
                 try:
@@ -103,6 +112,7 @@ class StakeMaster:
                 except Exception:
                     pass
                 self._auto_stake_attempted = True
+                self._auto_stake_attempts = max_attempts
             else:
                 stake_action["attempted"] = True
                 try:
@@ -140,23 +150,44 @@ class StakeMaster:
                         "executed": True,
                         "tx": res,
                         "reason": "auto_stake",
+                        "attempts": self._auto_stake_attempts + 1,
                     })
                     self._auto_stake_attempted = True
+                    self._auto_stake_attempts = max_attempts
                     status = self.staking.status()
                     staked_units = int(status.get("staked", staked_units))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(f"Auto-stake attempt failed: {exc}")
-                    stake_action.setdefault("reason", f"error:{exc}")
-                    stake_action.setdefault("executed", False)
+                    self._auto_stake_attempts += 1
+                    attempt_reason = f"stake_error:{exc}"
+                    stake_action.update({
+                        "executed": False,
+                        "reason": attempt_reason,
+                        "attempts": self._auto_stake_attempts,
+                    })
                     _emit_event(
                         "staking.auto_stake",
                         {
                             "status": "error",
                             "units": int(min_active_units),
                             "error": str(exc),
+                            "attempt": self._auto_stake_attempts,
+                            "max_attempts": max_attempts,
                         },
                     )
-                    self._auto_stake_attempted = True
+                    if self._auto_stake_attempts >= max_attempts:
+                        self._auto_stake_attempted = True
+                    else:
+                        self._auto_stake_attempted = False
+
+        elif live and progressive_env and staked_units <= 0 and min_active_units > 0:
+            stake_action.update({
+                "attempted": False,
+                "executed": False,
+                "reason": "attempts_exhausted",
+                "attempts": self._auto_stake_attempts,
+                "max_attempts": max_attempts,
+            })
 
         rewards = int(status.get("rewards", 0))
 

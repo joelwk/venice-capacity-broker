@@ -32,6 +32,9 @@ try:
     docker_env = REPO_ROOT / ".env.docker"
     if docker_env.exists():
         load_dotenv_if_present(path=str(docker_env), override=True)
+    local_env = REPO_ROOT / "docker" / ".env.local"
+    if local_env.exists():
+        load_dotenv_if_present(path=str(local_env), override=True)
 except Exception:
     REPO_ROOT = Path(__file__).resolve().parents[1]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+_SKIP_REDIS_TESTS = os.getenv("SKIP_REDIS_TESTS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 def setup_module(module):
     # Configure env before importing app
@@ -16,6 +17,7 @@ def setup_module(module):
     os.environ.pop("KV_URL", None)
     os.environ.pop("REPLIT_DB_URL", None)
     os.environ.pop("REDIS_URL", None)
+    os.environ.pop("KV_REDIS_URL", None)
 
 
 def test_rate_limit_enforced(monkeypatch, tmp_path):
@@ -80,6 +82,7 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
     os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "1"
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "1"
     os.environ.pop("REDIS_URL", None)
+    os.environ.pop("KV_REDIS_URL", None)
     monkeypatch.setenv("SQL_DATABASE_URL", "sqlite:///./test-rate-limit.db")
 
     from pathlib import Path
@@ -134,6 +137,11 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
 
 def test_rate_limit_with_redis_if_available(monkeypatch, tmp_path):
     import os as _os
+
+    if _SKIP_REDIS_TESTS:
+        import pytest
+
+        pytest.skip("Redis-backed limiter tests disabled (SKIP_REDIS_TESTS)")
 
     if not _os.getenv("REDIS_URL"):
         import pytest
