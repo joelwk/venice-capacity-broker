@@ -9,6 +9,12 @@ export PATH="$PWD/.local/bin:$HOME/.local/bin:$PATH"
 
 # Ensure docker env overrides exist for stack validation when running in ephemeral environments.
 # Create an empty stub so `validate-env` passes without clobbering secrets supplied via Replit.
+if [ -f ".env.docker" ] && [ -f ".env.docker.example" ]; then
+  if cmp -s ".env.docker" ".env.docker.example"; then
+    rm ".env.docker"
+  fi
+fi
+
 if [ ! -f ".env.docker" ]; then
   : > ".env.docker"
 fi
