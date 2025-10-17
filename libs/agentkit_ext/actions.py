@@ -96,7 +96,6 @@ class VVVActions:
         for idx, param in enumerate(inputs):
             p_type = str(param.get("type") or "")
             name = str(param.get("name") or f"arg{idx}")
-            name_lower = name.lower()
             if p_type == "address":
                 env_key = f"VVV_{fn_name.upper()}_{name.upper()}_ADDRESS"
                 override = os.getenv(env_key)
