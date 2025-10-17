@@ -11,6 +11,7 @@ const state = {
   pricesLoading: false,
   lastQuoteLatencyMs: null,
   pricesMeta: null,
+  discounts: null,
 };
 
 const assetDecimals = {
@@ -89,6 +90,21 @@ function formatPercent(value) {
   return `${value >= 0 ? '' : '-'}${rounded}%`;
 }
 
+function getBaseDiscountPercent(asset) {
+  if (!asset) return null;
+  const map = state.discounts;
+  if (!map || typeof map !== "object") return null;
+  const info = map[String(asset).toUpperCase()];
+  if (!info || typeof info !== "object") return null;
+  const baseBps = Number(info.baseBps ?? info.bps);
+  if (Number.isFinite(baseBps)) return baseBps / 100;
+  const basePercent = Number(info.basePercent);
+  if (Number.isFinite(basePercent)) return basePercent;
+  const baseFraction = Number(info.baseFraction ?? info.fraction);
+  if (Number.isFinite(baseFraction)) return baseFraction * 100;
+  return null;
+}
+
 function computeQuoteMetrics() {
   state.quoteUsdPerDiem = null;
   state.quoteAsset = null;
@@ -156,21 +172,50 @@ function renderPricingTable() {
     const priceUsd = Number(prices[upper]);
     if (!Number.isFinite(priceUsd) || priceUsd <= 0) return;
     const ratio = Number.isFinite(diemUsd) && diemUsd > 0 ? diemUsd / priceUsd : null;
-    let discount = null;
-    if (state.quoteUsdPerDiem && Number.isFinite(diemUsd) && diemUsd > 0 && upper === state.quoteAsset) {
-      discount = ((diemUsd - state.quoteUsdPerDiem) / diemUsd) * 100;
+    const basePercent = getBaseDiscountPercent(upper);
+    let discountPercent = null;
+    if (upper === state.quoteAsset) {
+      const quoteBps = Number(
+        (state.quote && state.quote.discount && state.quote.discount.totalBps) ?? state.quote?.discountBps
+      );
+      if (Number.isFinite(quoteBps)) {
+        discountPercent = quoteBps / 100;
+      } else if (state.quoteUsdPerDiem && Number.isFinite(diemUsd) && diemUsd > 0) {
+        discountPercent = ((diemUsd - state.quoteUsdPerDiem) / diemUsd) * 100;
+      }
     }
-    rows.push({ asset: upper, priceUsd, ratio, discount, active: upper === state.quoteAsset });
+    if ((discountPercent === null || !Number.isFinite(discountPercent)) && Number.isFinite(basePercent)) {
+      discountPercent = basePercent;
+    }
+    rows.push({
+      asset: upper,
+      priceUsd,
+      ratio,
+      discountPercent: Number.isFinite(discountPercent) ? discountPercent : null,
+      basePercent: Number.isFinite(basePercent) ? basePercent : null,
+      active: upper === state.quoteAsset,
+    });
   });
 
   tbody.innerHTML = rows
-    .map(({ asset, priceUsd, ratio, discount, active }) => `
+    .map(({ asset, priceUsd, ratio, discountPercent, basePercent, active }) => {
+      const hasDiscount = discountPercent !== null && Number.isFinite(discountPercent);
+      const display = hasDiscount ? formatPercent(discountPercent) : "--";
+      const needsHint =
+        hasDiscount &&
+        active &&
+        basePercent !== null &&
+        Number.isFinite(basePercent) &&
+        Math.abs(discountPercent - basePercent) > 0.05;
+      const hint = needsHint ? ` (${formatPercent(basePercent)} base)` : "";
+      return `
       <tr class="${active ? "price-row-active" : ""}">
         <td>${asset}</td>
         <td>${formatUsd(priceUsd)}</td>
         <td>${formatRatio(ratio)}</td>
-        <td>${discount !== null ? formatPercent(discount) : "--"}</td>
-      </tr>`)
+        <td>${display}${hint}</td>
+      </tr>`;
+    })
     .join("");
 
   table.classList.toggle("hidden", rows.length === 0);
@@ -693,6 +738,21 @@ async function connectWallet() {
 function applyEnvPayload(payload) {
   const body = payload || {};
   state.env = body;
+  const pricingInfo = (body && body.pricing) || {};
+  const rawDiscounts = pricingInfo && pricingInfo.discounts;
+  if (rawDiscounts && typeof rawDiscounts === "object") {
+    const normalized = {};
+    Object.entries(rawDiscounts).forEach(([key, info]) => {
+      if (!key) return;
+      const upper = String(key).toUpperCase();
+      if (!upper) return;
+      if (!info || typeof info !== "object") return;
+      normalized[upper] = info;
+    });
+    state.discounts = Object.keys(normalized).length > 0 ? normalized : null;
+  } else {
+    state.discounts = null;
+  }
   const payments = (body && body.payments) || {};
   state.treasury = payments.treasury_address || "";
   populateAssets(payments.accepted_assets);

@@ -784,6 +784,37 @@ try:
         # Public env snapshot (web3/dex/pricing/abi)
         snap = _env_snapshot_public()
 
+        accepted_assets = [
+            asset
+            for asset in (
+                a.strip().upper()
+                for a in (_os.getenv("ACCEPT_ASSETS") or "ETH,USDC,WBTC").split(",")
+                if a.strip()
+            )
+            if not (
+                asset == "WBTC"
+                and not (
+                    (_os.getenv("WBTC_TOKEN_ADDRESS") or "").strip()
+                    or (_os.getenv("BTC_TOKEN_ADDRESS") or "").strip()
+                    or (_os.getenv("CBBTC_TOKEN_ADDRESS") or "").strip()
+                )
+            )
+        ]
+
+        pricing_section = {}
+        raw_pricing = snap.get("pricing") if isinstance(snap, dict) else {}
+        if isinstance(raw_pricing, dict):
+            pricing_section = dict(raw_pricing)
+        discounts = {}
+        try:
+            from services.pricing.service import configured_discount_map  # type: ignore
+
+            discounts = configured_discount_map(accepted_assets)
+        except Exception:
+            discounts = {}
+        if discounts:
+            pricing_section["discounts"] = discounts
+
         return {
             "version": "0.1.0",
             "admin": {
@@ -822,22 +853,7 @@ try:
             },
             "payments": {
                 "enabled": (_os.getenv("PURCHASES_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"},
-                "accepted_assets": [
-                    asset
-                    for asset in (
-                        a.strip().upper()
-                        for a in (_os.getenv("ACCEPT_ASSETS") or "ETH,USDC,WBTC").split(",")
-                        if a.strip()
-                    )
-                    if not (
-                        asset == "WBTC"
-                        and not (
-                            (_os.getenv("WBTC_TOKEN_ADDRESS") or "").strip()
-                            or (_os.getenv("BTC_TOKEN_ADDRESS") or "").strip()
-                            or (_os.getenv("CBBTC_TOKEN_ADDRESS") or "").strip()
-                        )
-                    )
-                ],
+                "accepted_assets": accepted_assets,
                 "treasury_address": (_os.getenv("TREASURY_ADDRESS") or "").strip() or None,
                 "usdc_address": (_os.getenv("USDC_ADDRESS") or "").strip() or None,
             },
@@ -869,7 +885,7 @@ try:
             "venice": venice_cfg,
             "web3": snap.get("web3", {}),
             "dex": snap.get("dex", {}),
-            "pricing": snap.get("pricing", {}),
+            "pricing": pricing_section,
             "abi": snap.get("abi", {}),
         }
 

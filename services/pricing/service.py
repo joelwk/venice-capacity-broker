@@ -2,12 +2,85 @@ from __future__ import annotations
 
 import time
 from typing import Dict, Any, Optional, Type
+from collections.abc import Iterable
 
 import importlib
 import os
 from libs.pricing.engine import StaticPricingEngine, MarketPricingEngine
 from db.session import get_session, create_db_and_tables
 from libs.telemetry.events import emit as emit_event
+
+
+def parse_discount_fraction(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        num = float(raw)
+    except Exception:
+        return None
+    if num < 0:
+        return None
+    if num <= 1.0:
+        fraction = num
+    elif num <= 100.0:
+        fraction = num / 100.0
+    else:
+        fraction = num / 10_000.0
+    return max(0.0, min(0.95, fraction))
+
+
+def resolve_discount_fraction(asset_u: str) -> tuple[float, str]:
+    asset_norm = str(asset_u or "USDC").strip().upper() or "USDC"
+    keys = [
+        f"PRICE_DISCOUNT_{asset_norm}_BPS",
+        f"PRICE_DISCOUNT_{asset_norm}",
+        f"PRICE_DISCOUNT_{asset_norm}_PCT",
+    ]
+    for key in keys:
+        fraction = parse_discount_fraction(os.getenv(key))
+        if fraction is not None:
+            return fraction, key
+    fallback_keys = [
+        "PRICE_DISCOUNT_BPS",
+        "PRICE_DISCOUNT_DEFAULT_BPS",
+        "PRICE_DISCOUNT_DEFAULT",
+    ]
+    for key in fallback_keys:
+        fraction = parse_discount_fraction(os.getenv(key))
+        if fraction is not None:
+            if asset_norm == "WBTC" and abs(fraction - 0.05) < 1e-9:
+                return 0.10, f"{key}+wbtc"
+            return fraction, key
+    if asset_norm == "WBTC":
+        return 0.10, "default_wbtc"
+    return 0.05, "default"
+
+
+def configured_discount_map(assets: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
+    seen = []
+    if assets:
+        for asset in assets:
+            candidate = str(asset or "").strip().upper()
+            if candidate and candidate not in seen:
+                seen.append(candidate)
+    else:
+        seen = ["USDC", "ETH", "WETH", "USDT", "WBTC"]
+    result: Dict[str, Dict[str, Any]] = {}
+    for asset in seen:
+        fraction, source = resolve_discount_fraction(asset)
+        fraction = max(0.0, min(0.95, float(fraction)))
+        base_bps = int(round(fraction * 10_000))
+        result[asset] = {
+            "baseFraction": fraction,
+            "baseBps": base_bps,
+            "basePercent": round(fraction * 100.0, 6),
+            "source": source,
+        }
+    return result
+
 
 def _refresh_session_bindings() -> None:
     """Ensure db.session helpers point to the real module (tests may stub earlier)."""
@@ -67,45 +140,11 @@ class PricingService:
 
     @staticmethod
     def _parse_discount_fraction(value: Optional[str]) -> Optional[float]:
-        if value is None:
-            return None
-        raw = str(value).strip()
-        if not raw:
-            return None
-        try:
-            num = float(raw)
-        except Exception:
-            return None
-        if num < 0:
-            return None
-        if num <= 1.0:
-            fraction = num
-        elif num <= 100.0:
-            fraction = num / 100.0
-        else:
-            fraction = num / 10_000.0
-        return max(0.0, min(0.95, fraction))
+        return parse_discount_fraction(value)
 
     def _base_discount_fraction(self, asset_u: str) -> float:
-        keys = [
-            f"PRICE_DISCOUNT_{asset_u}_BPS",
-            f"PRICE_DISCOUNT_{asset_u}",
-            f"PRICE_DISCOUNT_{asset_u}_PCT",
-        ]
-        for key in keys:
-            fraction = self._parse_discount_fraction(os.getenv(key))
-            if fraction is not None:
-                return fraction
-        fallback = self._parse_discount_fraction(os.getenv("PRICE_DISCOUNT_BPS"))
-        if fallback is None:
-            fallback = self._parse_discount_fraction(os.getenv("PRICE_DISCOUNT_DEFAULT_BPS"))
-        if fallback is None:
-            fallback = self._parse_discount_fraction(os.getenv("PRICE_DISCOUNT_DEFAULT"))
-        if fallback is None:
-            fallback = 0.05
-        if asset_u == "WBTC" and fallback == 0.05:
-            return 0.10
-        return fallback
+        fraction, _ = resolve_discount_fraction(asset_u)
+        return fraction
 
     def _asset_decimals(self, asset_u: str) -> int:
         return int(self._asset_decimals_map.get(asset_u, 18))
