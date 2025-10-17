@@ -7,6 +7,11 @@ fi
 
 export PATH="$PWD/.local/bin:$HOME/.local/bin:$PATH"
 
+# Ensure docker env overrides exist for stack validation when running in ephemeral environments
+if [ ! -f ".env.docker" ] && [ -f ".env.docker.example" ]; then
+  cp ".env.docker.example" ".env.docker"
+fi
+
 EXTRA_FLAGS="--extra broker --extra web3 --extra agentkit --extra db"
 if [ -n "${UV_EXTRAS:-}" ]; then
   for e in $UV_EXTRAS; do
