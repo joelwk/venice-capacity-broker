@@ -7,9 +7,10 @@ fi
 
 export PATH="$PWD/.local/bin:$HOME/.local/bin:$PATH"
 
-# Ensure docker env overrides exist for stack validation when running in ephemeral environments
-if [ ! -f ".env.docker" ] && [ -f ".env.docker.example" ]; then
-  cp ".env.docker.example" ".env.docker"
+# Ensure docker env overrides exist for stack validation when running in ephemeral environments.
+# Create an empty stub so `validate-env` passes without clobbering secrets supplied via Replit.
+if [ ! -f ".env.docker" ]; then
+  : > ".env.docker"
 fi
 
 EXTRA_FLAGS="--extra broker --extra web3 --extra agentkit --extra db"
