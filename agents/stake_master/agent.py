@@ -114,71 +114,116 @@ class StakeMaster:
                 self._auto_stake_attempted = True
                 self._auto_stake_attempts = max_attempts
             else:
-                stake_action["attempted"] = True
-                try:
-                    approve_tx = None
+                nonce_state = self._nonce_state()
+                pending_nonce = False
+                if nonce_state and int(nonce_state.get("pending", 0)) > int(nonce_state.get("latest", 0)):
+                    pending_nonce = True
                     try:
-                        approve_tx = self.staking.approve(int(min_active_units))
-                        stake_action["approve"] = approve_tx
-                    except Exception as approve_exc:  # noqa: BLE001
-                        logger.warning(f"Auto-stake approve failed: {approve_exc}")
-                        stake_action.update({
-                            "executed": False,
-                            "reason": f"approve_error:{approve_exc}",
-                        })
-                        _emit_event(
-                            "staking.auto_stake",
-                            {
-                                "status": "error",
-                                "units": int(min_active_units),
-                                "error": f"approve:{approve_exc}",
+                        logger.warning(
+                            "Auto-stake skipped: pending transaction requires nonce clearance",
+                            extra={
+                                "nonce_latest": nonce_state.get("latest"),
+                                "nonce_pending": nonce_state.get("pending"),
                             },
                         )
-                        self._auto_stake_attempted = True
-                        raise
-
-                    res = self.staking.stake(int(min_active_units))
-                    logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
-                    _emit_event(
-                        "staking.auto_stake",
-                        {
-                            "status": res.get("status") if isinstance(res, dict) else "ok",
-                            "units": int(min_active_units),
-                        },
-                    )
+                    except Exception:
+                        pass
                     stake_action.update({
-                        "executed": True,
-                        "tx": res,
-                        "reason": "auto_stake",
-                        "attempts": self._auto_stake_attempts + 1,
-                    })
-                    self._auto_stake_attempted = True
-                    self._auto_stake_attempts = max_attempts
-                    status = self.staking.status()
-                    staked_units = int(status.get("staked", staked_units))
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(f"Auto-stake attempt failed: {exc}")
-                    self._auto_stake_attempts += 1
-                    attempt_reason = f"stake_error:{exc}"
-                    stake_action.update({
+                        "attempted": False,
                         "executed": False,
-                        "reason": attempt_reason,
+                        "reason": "pending_nonce",
+                        "nonce": nonce_state,
                         "attempts": self._auto_stake_attempts,
                     })
                     _emit_event(
                         "staking.auto_stake",
                         {
-                            "status": "error",
+                            "status": "skipped",
                             "units": int(min_active_units),
-                            "error": str(exc),
-                            "attempt": self._auto_stake_attempts,
-                            "max_attempts": max_attempts,
+                            "reason": "pending_nonce",
+                            "nonce": nonce_state,
                         },
                     )
-                    if self._auto_stake_attempts >= max_attempts:
+                    self._auto_stake_attempted = True
+                    self._auto_stake_attempts = max_attempts
+
+                if not pending_nonce:
+                    stake_action["attempted"] = True
+                    try:
+                        approve_tx = None
+                        try:
+                            approve_tx = self.staking.approve(int(min_active_units))
+                            stake_action["approve"] = approve_tx
+                        except Exception as approve_exc:  # noqa: BLE001
+                            logger.warning(f"Auto-stake approve failed: {approve_exc}")
+                            stake_action.update({
+                                "executed": False,
+                                "reason": f"approve_error:{approve_exc}",
+                            })
+                            _emit_event(
+                                "staking.auto_stake",
+                                {
+                                    "status": "error",
+                                    "units": int(min_active_units),
+                                    "error": f"approve:{approve_exc}",
+                                },
+                            )
+                            self._auto_stake_attempted = True
+                            raise
+
+                        res = self.staking.stake(int(min_active_units))
+                        logger.info(f"Auto-stake executed: units={min_active_units} result={res}")
+                        _emit_event(
+                            "staking.auto_stake",
+                            {
+                                "status": res.get("status") if isinstance(res, dict) else "ok",
+                                "units": int(min_active_units),
+                            },
+                        )
+                        stake_action.update({
+                            "executed": True,
+                            "tx": res,
+                            "reason": "auto_stake",
+                            "attempts": self._auto_stake_attempts + 1,
+                        })
                         self._auto_stake_attempted = True
-                    else:
-                        self._auto_stake_attempted = False
+                        self._auto_stake_attempts = max_attempts
+                        status = self.staking.status()
+                        staked_units = int(status.get("staked", staked_units))
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(f"Auto-stake attempt failed: {exc}")
+                        self._auto_stake_attempts += 1
+                        attempt_reason = f"stake_error:{exc}"
+                        stake_action.update({
+                            "executed": False,
+                            "reason": attempt_reason,
+                            "attempts": self._auto_stake_attempts,
+                        })
+                        try:
+                            message_lower = str(exc).lower()
+                        except Exception:
+                            message_lower = ""
+                        if any(term in message_lower for term in ["nonce too low", "replacement transaction underpriced"]):
+                            nonce_details = nonce_state or self._nonce_state()
+                            if nonce_details:
+                                stake_action["nonce"] = nonce_details
+                            stake_action["followup"] = "nonce_conflict"
+                            self._auto_stake_attempted = True
+                            self._auto_stake_attempts = max_attempts
+                        _emit_event(
+                            "staking.auto_stake",
+                            {
+                                "status": "error",
+                                "units": int(min_active_units),
+                                "error": str(exc),
+                                "attempt": self._auto_stake_attempts,
+                                "max_attempts": max_attempts,
+                            },
+                        )
+                        if self._auto_stake_attempts >= max_attempts:
+                            self._auto_stake_attempted = True
+                        else:
+                            self._auto_stake_attempted = False
 
         elif live and progressive_env and staked_units <= 0 and min_active_units > 0:
             stake_action.update({
@@ -254,6 +299,27 @@ class StakeMaster:
         except Exception as exc:  # noqa: BLE001
             try:
                 logger.debug(f"VVV balance lookup failed: {exc}")
+            except Exception:
+                pass
+            return None
+
+    def _nonce_state(self) -> Optional[Dict[str, int]]:
+        actions = getattr(self.staking, "actions", None)
+        if actions is None:
+            return None
+        w3 = getattr(actions, "w3", None)
+        if w3 is None:
+            return None
+        try:
+            from libs.agentkit_ext.agentkit_wallet import get_address
+
+            address = get_address()
+            latest = int(w3.eth.get_transaction_count(address, "latest"))
+            pending = int(w3.eth.get_transaction_count(address, "pending"))
+            return {"latest": latest, "pending": pending}
+        except Exception as exc:  # noqa: BLE001
+            try:
+                logger.debug(f"Nonce lookup failed: {exc}")
             except Exception:
                 pass
             return None
