@@ -99,7 +99,7 @@ def _http_latency_bucket(seconds: float) -> str:
 
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
-    from fastapi.responses import PlainTextResponse, StreamingResponse, RedirectResponse
+    from fastapi.responses import PlainTextResponse, StreamingResponse, RedirectResponse, FileResponse
     from fastapi.middleware.cors import CORSMiddleware
     from starlette.staticfiles import StaticFiles
     from pathlib import Path as _Path2
@@ -111,9 +111,17 @@ try:
 
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
 
+    _buy_html_path = (_Path2(__file__).resolve().parent.parent / "control-plane" / "buy.html").resolve()
+
     @app.get("/", include_in_schema=False)
     async def index() -> RedirectResponse:
-        return RedirectResponse(url="/admin/buy.html", status_code=307)
+        return RedirectResponse(url="/buy.html", status_code=307)
+
+    @app.get("/buy.html", include_in_schema=False)
+    async def buy_landing() -> FileResponse:
+        if not _buy_html_path.exists():
+            raise HTTPException(status_code=404, detail="buy page not found")
+        return FileResponse(_buy_html_path)
 
     # Basic probe endpoint for platform health checks
     @app.get("/api", include_in_schema=False)
