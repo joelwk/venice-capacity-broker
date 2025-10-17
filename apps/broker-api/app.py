@@ -111,9 +111,6 @@ try:
 
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
 
-    # Minimal root index with links to docs and health
-    from fastapi.responses import HTMLResponse as _HTML
-
     @app.get("/", include_in_schema=False)
     async def index() -> RedirectResponse:
         return RedirectResponse(url="/admin/buy.html", status_code=307)
