@@ -159,7 +159,7 @@ def _resolve_engine_factory():
     return create_engine
 
 
-def _call_engine_factory(target_url: str, **kwargs: Any):
+def _call_engine_factory_impl(target_url: str, **kwargs: Any):
     """Invoke the currently configured engine factory."""
 
     engine_factory = _resolve_engine_factory()
@@ -202,6 +202,17 @@ def _call_engine_factory(target_url: str, **kwargs: Any):
         attempt["succeeded"] = True
         attempt["engine"] = engine
         return engine
+
+
+if "_call_engine_factory" not in globals():
+
+    def _call_engine_factory(target_url: str, **kwargs: Any):
+        """Proxy to the active engine factory implementation.
+
+        Defined conditionally so monkeypatches survive module reloads during tests.
+        """
+
+        return _call_engine_factory_impl(target_url, **kwargs)
 
 
 def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
