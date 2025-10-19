@@ -302,32 +302,18 @@ def _read_secret_candidate(path: str | Path) -> Optional[str]:
 def _resolve_api_key() -> Optional[str]:
     """Return an Etherscan-compatible API key from env or mounted secrets."""
 
-    env_candidates = ("ETHERSCAN_API_KEY", "BASESCAN_API_KEY")
-    for name in env_candidates:
+    for name in ("ETHERSCAN_API_KEY", "BASESCAN_API_KEY"):
         val = os.getenv(name)
         if val:
             stripped = val.strip()
             if stripped:
                 return stripped
-        file_env = os.getenv(f"{name}_FILE")
-        if file_env:
-            from_file = _read_secret_candidate(file_env)
-            if from_file:
-                os.environ.setdefault(name, from_file)
-                return from_file
-
-    file_candidates = (
-        "/run/secrets/ETHERSCAN_API_KEY",
-        "/run/secrets/BASESCAN_API_KEY",
-        "/etc/secrets/ETHERSCAN_API_KEY",
-        "/etc/secrets/BASESCAN_API_KEY",
-    )
-    for path in file_candidates:
-        from_file = _read_secret_candidate(path)
-        if from_file:
-            target = "ETHERSCAN_API_KEY" if "ETHERSCAN" in path.upper() else "BASESCAN_API_KEY"
-            os.environ.setdefault(target, from_file)
-            return from_file
+        file_hint = os.getenv(f"{name}_FILE")
+        if file_hint:
+            token = _read_secret_candidate(file_hint)
+            if token:
+                os.environ.setdefault(name, token)
+                return token
     return None
 
 
