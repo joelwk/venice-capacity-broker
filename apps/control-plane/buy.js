@@ -375,11 +375,16 @@ function updateVerifyButtonState() {
     verifyBtn.disabled = true;
     return;
   }
-  const wallet = ($("wallet-address")?.value || "").trim();
-  const txHash = ($("tx-hash")?.value || "").trim();
+  const walletInput = $("wallet-address");
+  const txInput = $("tx-hash");
+  const wallet = (walletInput?.value || "").trim();
+  const txHash = (txInput?.value || "").trim();
   const walletOk = wallet.startsWith("0x") && wallet.length === 42;
   const hashOk = txHash.startsWith("0x") && txHash.length === 66;
   verifyBtn.disabled = !walletOk || !hashOk || state.verifying;
+
+  if (walletInput) walletInput.setAttribute("aria-invalid", String(!walletOk));
+  if (txInput) txInput.setAttribute("aria-invalid", String(!hashOk));
 }
 
 function resetStep3() {
@@ -481,11 +486,36 @@ async function requestQuote() {
   state.lastQuoteLatencyMs = null;
 
   const unitsRaw = unitsInput ? Number(unitsInput.value) : DEFAULT_UNITS;
+  const unitsError = $("units-error");
+  const assetError = $("asset-error");
+
+  // Clear previous error messages
+  if (unitsError) unitsError.classList.add("hidden");
+  if (assetError) assetError.classList.add("hidden");
+
   if (!Number.isFinite(unitsRaw) || unitsRaw <= 0) {
-    showAlert(status, "error", "Enter a valid DIEM credit amount.");
+    if (unitsError) {
+      unitsError.textContent = "Enter a valid DIEM credit amount (minimum 0.01).";
+      unitsError.classList.remove("hidden");
+    }
+    if (unitsInput) unitsInput.setAttribute("aria-invalid", "true");
     return;
   }
+
+  if (unitsInput) unitsInput.setAttribute("aria-invalid", "false");
+
   const asset = assetSelect && assetSelect.value ? String(assetSelect.value).toUpperCase() : "USDC";
+
+  if (!asset) {
+    if (assetError) {
+      assetError.textContent = "Please select a payment asset.";
+      assetError.classList.remove("hidden");
+    }
+    if (assetSelect) assetSelect.setAttribute("aria-invalid", "true");
+    return;
+  }
+
+  if (assetSelect) assetSelect.setAttribute("aria-invalid", "false");
 
   try {
     if (btn) {
@@ -538,8 +568,10 @@ function setVerifying(flag) {
   state.verifying = flag;
   const btn = $("verify-btn");
   const spinner = $("verify-spinner");
+  const card = $("step-verify");
   if (btn) btn.disabled = flag;
   if (spinner) spinner.classList.toggle("hidden", !flag);
+  if (card) card.setAttribute("aria-busy", String(flag));
 }
 
 async function handleVerify() {
@@ -557,14 +589,34 @@ async function handleVerify() {
   if (!walletInput || !txInput) return;
   const buyerAddress = normalizeHex(walletInput.value);
   const txHash = normalizeHex(txInput.value);
+  const walletErrorEl = $("wallet-error");
+  const txErrorEl = $("tx-error");
+
+  // Clear previous error messages
+  if (walletErrorEl) walletErrorEl.classList.add("hidden");
+  if (txErrorEl) txErrorEl.classList.add("hidden");
+
   if (buyerAddress.length !== 42) {
-    showAlert($("verify-status"), "error", "Enter the wallet address that sent the payment.");
+    if (walletErrorEl) {
+      walletErrorEl.textContent = "Enter a valid wallet address (42 characters starting with 0x).";
+      walletErrorEl.classList.remove("hidden");
+    }
+    walletInput.setAttribute("aria-invalid", "true");
     return;
   }
+
   if (txHash.length !== 66) {
-    showAlert($("verify-status"), "error", "Enter a valid transaction hash.");
+    if (txErrorEl) {
+      txErrorEl.textContent = "Enter a valid transaction hash (66 characters starting with 0x).";
+      txErrorEl.classList.remove("hidden");
+    }
+    txInput.setAttribute("aria-invalid", "true");
     return;
   }
+
+  // Clear invalid states when validation passes
+  walletInput.setAttribute("aria-invalid", "false");
+  txInput.setAttribute("aria-invalid", "false");
 
   clearAlert($("verify-status"));
   clearAlert($("key-status"));

@@ -172,6 +172,27 @@ footer{padding:16px;color:var(--muted);text-align:center}
 .hidden{
   display:none!important;
 }
+.sr-only{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0,0,0,0);
+  white-space:nowrap;
+  border:0;
+}
+.error-message{
+  display:block;
+  margin-top:4px;
+  font-size:13px;
+  color:var(--err);
+}
+:where(a, button, input, select, textarea):focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+}
 .step-disabled{
   opacity:0.5;
   pointer-events:none;
