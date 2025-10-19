@@ -6,6 +6,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import requests
@@ -273,6 +274,61 @@ def _debug(message: str, *args) -> None:
             logger.debug(message, *args)
         else:
             logger.debug(message)
+
+
+def _log_missing_key_help() -> None:
+    """Log guidance for configuring the token watcher API keys."""
+
+    logger.error("ETHERSCAN_API_KEY missing; export it before running token watcher.")
+    logger.info("Minimal setup:")
+    logger.info("export ETHERSCAN_API_KEY='your_api_key'")
+    logger.info("export TOKEN_WATCH_DEBUG='true'  # Optional debug output")
+    logger.info("Optional but recommended:")
+    logger.info("export BASE_RPC_URL='https://base.publicnode.com'  # For metadata lookups")
+    logger.info("export QUOTE_TOKEN_ADDRESS='0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  # USDC for pricing")
+
+
+def _read_secret_candidate(path: str | Path) -> Optional[str]:
+    try:
+        candidate = Path(path)
+        if not candidate.is_file():
+            return None
+        data = candidate.read_text(encoding="utf-8").strip()
+        return data or None
+    except Exception:
+        return None
+
+
+def _resolve_api_key() -> Optional[str]:
+    """Return an Etherscan-compatible API key from env or mounted secrets."""
+
+    env_candidates = ("ETHERSCAN_API_KEY", "BASESCAN_API_KEY")
+    for name in env_candidates:
+        val = os.getenv(name)
+        if val:
+            stripped = val.strip()
+            if stripped:
+                return stripped
+        file_env = os.getenv(f"{name}_FILE")
+        if file_env:
+            from_file = _read_secret_candidate(file_env)
+            if from_file:
+                os.environ.setdefault(name, from_file)
+                return from_file
+
+    file_candidates = (
+        "/run/secrets/ETHERSCAN_API_KEY",
+        "/run/secrets/BASESCAN_API_KEY",
+        "/etc/secrets/ETHERSCAN_API_KEY",
+        "/etc/secrets/BASESCAN_API_KEY",
+    )
+    for path in file_candidates:
+        from_file = _read_secret_candidate(path)
+        if from_file:
+            target = "ETHERSCAN_API_KEY" if "ETHERSCAN" in path.upper() else "BASESCAN_API_KEY"
+            os.environ.setdefault(target, from_file)
+            return from_file
+    return None
 
 
 def _format_price(price: Optional[float]) -> str:
@@ -660,16 +716,38 @@ def persist_metrics(m: TokenMetrics) -> None:
 
 
 def run_watch_loop() -> None:
-    api_key = os.getenv("ETHERSCAN_API_KEY") 
-    if not api_key:
+    try:
+        interval = int(os.getenv("TOKEN_WATCH_INTERVAL_SECONDS") or "300")
+    except Exception:
+        interval = 300
+    idle_sleep = max(30, interval)
+
+    allow_no_key = _truthy_env("AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY") or _truthy_env("TOKEN_WATCH_ALLOW_NO_KEY")
+    idle_logged = False
+
+    api_key = _resolve_api_key()
+    while not api_key:
+        if allow_no_key:
+            if not idle_logged:
+                logger.warning(
+                    "ETHERSCAN_API_KEY missing; token watcher idling until a key is provided. "
+                    "Set ETHERSCAN_API_KEY or BASESCAN_API_KEY to enable metrics."
+                )
+                idle_logged = True
+            time.sleep(idle_sleep)
+            api_key = _resolve_api_key()
+            continue
+        _log_missing_key_help()
         raise RuntimeError("Set ETHERSCAN_API_KEY in environment")
+    if idle_logged:
+        logger.info("Token watcher detected API key; resuming normal operation.")
+
     # Prefer Etherscan V2 endpoint; allow override for testing
     base_url = os.getenv("ETHERSCAN_API_URL") or os.getenv("BASESCAN_API_URL") or DEFAULT_ETHERSCAN_V2_URL
     try:
         chain_id = int(os.getenv("ETHERSCAN_CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or 8453)
     except Exception:
         chain_id = 8453
-    interval = int(os.getenv("TOKEN_WATCH_INTERVAL_SECONDS") or 300)
     
     # Debug environment variables
     _debug("Environment check:")
@@ -713,15 +791,7 @@ def run_watch_loop() -> None:
 
 
 if __name__ == "__main__":
-    # Quick check for minimal configuration
-    if not (os.getenv("ETHERSCAN_API_KEY")):
-        logger.error('ETHERSCAN_API_KEY missing; export it before running token watcher')
-        logger.info('Minimal setup:')
-        logger.info("export ETHERSCAN_API_KEY='your_api_key'")
-        logger.info("export TOKEN_WATCH_DEBUG='true'  # See what's happening")
-        logger.info('Optional but recommended:')
-        logger.info("export BASE_RPC_URL='https://base.publicnode.com'  # For metadata")
-        logger.info("export QUOTE_TOKEN_ADDRESS='0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  # USDC for pricing")
+    try:
+        run_watch_loop()
+    except RuntimeError:
         sys.exit(1)
-    
-    run_watch_loop()
