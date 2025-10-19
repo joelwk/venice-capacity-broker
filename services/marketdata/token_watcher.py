@@ -285,7 +285,7 @@ def _log_missing_key_help() -> None:
     logger.info("export TOKEN_WATCH_DEBUG='true'  # Optional debug output")
     logger.info("Optional but recommended:")
     logger.info("export BASE_RPC_URL='https://base.publicnode.com'  # For metadata lookups")
-    logger.info("export QUOTE_TOKEN_ADDRESS='0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  # USDC for pricing")
+    logger.info("export QUOTE_TOKEN_ADDRESS='<quote-token-address>'  # e.g., USDC on Base mainnet")
 
 
 def _read_secret_candidate(path: str | Path) -> Optional[str]:
