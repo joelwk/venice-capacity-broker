@@ -8,7 +8,7 @@ import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
-from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -107,6 +107,11 @@ class MarketDataProvider:
     _price_clamp_events: Dict[str, Dict[str, Any]] = {}
     _util_samples_lock: Lock = Lock()
     _util_samples: Deque[Tuple[float, float]] = deque(maxlen=64)
+    _aggregator_lock: Lock = Lock()
+    _aggregator: Any = None
+    _aggregator_signature: Optional[str] = None
+    _route_quote_cache: Dict[str, Tuple[float, Any]] = {}
+    _route_quote_cache_lock: Lock = Lock()
 
 
     def _price_cache_key(self, symbol: str) -> str:
@@ -181,6 +186,122 @@ class MarketDataProvider:
             return
         with self._stats_lock:
             stats[key] = stats.get(key, 0) + delta
+
+    @classmethod
+    def _aggregator_env_signature(cls) -> str:
+        prefixes = ("DEX_", "UNISWAP_", "AERODROME_")
+        parts: List[str] = []
+        try:
+            for key in sorted(os.environ.keys()):
+                if any(key.startswith(prefix) for prefix in prefixes):
+                    parts.append(f"{key}={os.environ.get(key, '')}")
+        except Exception:
+            return ""
+        return "|".join(parts)
+
+    @classmethod
+    def _get_aggregator(cls) -> Any:
+        signature = cls._aggregator_env_signature()
+        agg = cls._aggregator
+        if agg is not None and signature == cls._aggregator_signature:
+            return agg
+        with cls._aggregator_lock:
+            agg = cls._aggregator
+            if agg is not None and signature == cls._aggregator_signature:
+                return agg
+            agg = build_aggregator_from_env()
+            cls._aggregator = agg
+            cls._aggregator_signature = signature
+            return agg
+
+    @classmethod
+    def reset_cached_aggregator(cls) -> None:
+        with cls._aggregator_lock:
+            cls._aggregator = None
+            cls._aggregator_signature = None
+
+    def _route_quote_ttl_seconds(self) -> float:
+        try:
+            raw = os.getenv("MARKETDATA_ROUTE_QUOTE_TTL_SECONDS")
+            if raw is None or str(raw).strip() == "":
+                return 2.0
+            ttl = float(raw)
+            return ttl if ttl > 0 else 0.0
+        except Exception:
+            return 2.0
+
+    def _route_quote_cache_capacity(self) -> int:
+        try:
+            raw = os.getenv("MARKETDATA_ROUTE_QUOTE_CACHE_MAX")
+            if raw is None or str(raw).strip() == "":
+                return 128
+            return max(0, int(raw))
+        except Exception:
+            return 128
+
+    def _route_quote_cache_key(self, plan: RoutePlan, amount_in_units: int) -> str:
+        tokens = getattr(plan, "tokens", None) or ()
+        path = "->".join(str(token).strip().lower() for token in tokens)
+        return f"{amount_in_units}:{path}"
+
+    def _route_quote_cache_get(self, key: str) -> Tuple[bool, Any]:
+        ttl = self._route_quote_ttl_seconds()
+        if ttl <= 0:
+            return False, None
+        now = time.time()
+        cache_type = type(self)
+        with cache_type._route_quote_cache_lock:
+            entry = cache_type._route_quote_cache.get(key)
+            if entry is None:
+                return False, None
+            ts, payload = entry
+            if (now - ts) > ttl:
+                cache_type._route_quote_cache.pop(key, None)
+                return False, None
+            return True, payload
+
+    def _route_quote_cache_set(self, key: str, payload: Any) -> None:
+        ttl = self._route_quote_ttl_seconds()
+        if ttl <= 0:
+            return
+        cache_type = type(self)
+        with cache_type._route_quote_cache_lock:
+            capacity = self._route_quote_cache_capacity()
+            cache = cache_type._route_quote_cache
+            if capacity > 0 and len(cache) >= capacity:
+                try:
+                    oldest_key = min(cache.items(), key=lambda item: item[1][0])[0]
+                    cache.pop(oldest_key, None)
+                except ValueError:
+                    cache.clear()
+            cache[key] = (time.time(), payload)
+
+    def _dex_best_quote(
+        self,
+        agg: Any,
+        plan: RoutePlan,
+        amount_in_units: int,
+        stage: str,
+        record: Callable[[str, float, str], None],
+    ) -> Tuple[Optional[Any], bool]:
+        key = self._route_quote_cache_key(plan, amount_in_units)
+        cached, payload = self._route_quote_cache_get(key)
+        if cached:
+            outcome = "ok" if payload is not None else "empty"
+            record(f"{stage}_cache", 0.0, outcome)
+            return payload, True
+        start = time.perf_counter()
+        try:
+            quote = agg.best_quote(amount_in_units, plan)
+        except Exception:
+            elapsed = time.perf_counter() - start
+            record(stage, elapsed, "error")
+            raise
+        elapsed = time.perf_counter() - start
+        outcome = "ok" if quote is not None else "empty"
+        record(stage, elapsed, outcome)
+        self._route_quote_cache_set(key, quote)
+        return quote, False
 
 
 
@@ -1274,9 +1395,7 @@ class MarketDataProvider:
 
         amount_in is in smallest units of the input token.
         """
-        from libs.dex.providers import build_aggregator_from_env
-
-        agg = build_aggregator_from_env()
+        agg = self._get_aggregator()
         return agg.quote_all(amount_in, path)
 
     @staticmethod
@@ -1351,27 +1470,21 @@ class MarketDataProvider:
         amount_in_units = int(amount_in_decimal * (10 ** dec_in))
         label = self._norm_symbol_label(label_symbol or (tokens[0] if tokens else None))
 
-        agg = build_aggregator_from_env()
+        agg = self._get_aggregator()
         supports_reserve = any(getattr(p, "supports_reserve_math", False) for p in getattr(agg, "providers", []))
 
         def _record(stage: str, elapsed: float, outcome: str) -> None:
             self._record_latency(label, stage, elapsed, outcome)
             self._record_counter("marketdata_price_source_total", {"symbol": label, "source": stage, "outcome": outcome})
 
-        quote = None
+        quote: Optional[Any] = None
         used_route = plan
 
-        start = time.perf_counter()
         try:
-            quote = agg.best_quote(amount_in_units, plan)
+            quote, _ = self._dex_best_quote(agg, plan, amount_in_units, "dex_primary", _record)
         except Exception:
-            elapsed = time.perf_counter() - start
-            _record("dex_primary", elapsed, "error")
             raise
         else:
-            elapsed = time.perf_counter() - start
-            outcome = "ok" if quote is not None else "empty"
-            _record("dex_primary", elapsed, outcome)
             if quote is not None:
                 used_route = quote.route
                 self._record_counter("marketdata_price_provider_total", {"symbol": label, "provider": str(quote.provider)})
@@ -1380,17 +1493,11 @@ class MarketDataProvider:
             bridge = self._bridge_token_address()
             if bridge and bridge.lower() not in {tokens[0].lower(), tokens[-1].lower()}:
                 alt_route = make_route([tokens[0], bridge, tokens[-1]])
-                start_bridge = time.perf_counter()
                 try:
-                    quote = agg.best_quote(amount_in_units, alt_route)
+                    quote, _ = self._dex_best_quote(agg, alt_route, amount_in_units, "dex_bridge", _record)
                 except Exception:
-                    elapsed = time.perf_counter() - start_bridge
-                    _record("dex_bridge", elapsed, "error")
                     quote = None
                 else:
-                    elapsed = time.perf_counter() - start_bridge
-                    outcome = "ok" if quote is not None else "empty"
-                    _record("dex_bridge", elapsed, outcome)
                     if quote is not None:
                         used_route = quote.route
                         self._record_counter("marketdata_price_provider_total", {"symbol": label, "provider": str(quote.provider)})

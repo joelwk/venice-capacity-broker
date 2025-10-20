@@ -33,6 +33,22 @@ else:
     # module is re-imported after sys.modules entries are purged.
     if hasattr(SQLModel, "metadata") and getattr(SQLModel.metadata, "tables", None):
         SQLModel.metadata.clear()
+    # SQLModel also keeps a declarative registry that surfaces SAWarnings when
+    # classes are redefined under new module names (common in importlib tests).
+    # Disposing resets the class lookup table so repeated imports remain clean.
+    try:
+        registry = getattr(SQLModel, "_sa_registry")  # type: ignore[attr-defined]
+    except AttributeError:
+        registry = None
+    if registry is not None:
+        try:
+            registry.dispose()
+        except Exception:
+            # Fall back to clearing the internal class map when dispose is unavailable.
+            try:
+                registry._class_registry.clear()  # type: ignore[attr-defined]
+            except Exception:
+                pass
 
 
 def _utcnow() -> datetime:

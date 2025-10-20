@@ -47,8 +47,23 @@ def _module_argv(uv_bin: Optional[str], module: str, *parts: str) -> List[str]:
     return [sys.executable, "-m", module, *parts]
 
 
-def build_command_specs() -> List[CommandSpec]:
-    uv_bin = _detect_uv()
+def _refresh_pool_catalog(uv_bin: Optional[str]) -> None:
+    if not _truthy("MARKET_POOLS_REFRESH", True):
+        print(f"[stack] skipping pool catalog refresh (MARKET_POOLS_REFRESH={os.getenv('MARKET_POOLS_REFRESH', '0')})", flush=True)
+        return
+    argv = _python_argv(uv_bin, "apps/cli/main.py", "market:pools:watch", "--once")
+    print(f"[stack] refreshing pool catalog -> {' '.join(argv)}", flush=True)
+    try:
+        subprocess.check_call(argv)
+    except subprocess.CalledProcessError as exc:
+        print(f"[stack] pool catalog refresh failed (exit={exc.returncode}); continuing startup", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[stack] pool catalog refresh raised {exc}; continuing startup", flush=True)
+
+
+def build_command_specs(uv_bin: Optional[str] | None = None) -> List[CommandSpec]:
+    if uv_bin is None:
+        uv_bin = _detect_uv()
     specs: List[CommandSpec] = []
 
     if _truthy("AUTOSTART_BROKER_API", True):
@@ -162,6 +177,8 @@ def main() -> None:
         print(f"[stack] {exc}", flush=True)
         sys.exit(2)
 
+    uv_bin = _detect_uv()
+    _refresh_pool_catalog(uv_bin)
     specs = build_command_specs()
     if not specs:
         print("[stack] no processes configured. Enable AUTOSTART_* env vars to launch components.")

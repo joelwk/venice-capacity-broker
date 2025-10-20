@@ -13,6 +13,15 @@ if ! python -m alembic upgrade head; then
   log "Alembic migration failed; continuing without blocking startup"
 fi
 
+if [ "${MARKET_POOLS_REFRESH:-1}" != "0" ]; then
+  log "Refreshing DEX pool catalog (market:pools:watch --once)"
+  if ! python apps/cli/main.py market:pools:watch --once; then
+    log "Pool catalog refresh failed; continuing without blocking startup"
+  fi
+else
+  log "Skipping pool catalog refresh (MARKET_POOLS_REFRESH=${MARKET_POOLS_REFRESH})"
+fi
+
 ORIGINAL_REDIS_URL="${REDIS_URL-}"
 ORIGINAL_KV_REDIS_URL="${KV_REDIS_URL-}"
 ORIGINAL_SKIP_REDIS_TESTS="${SKIP_REDIS_TESTS-}"

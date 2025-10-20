@@ -59,9 +59,6 @@ services:
       - ./logs:/app/logs
 
   orchestrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: venice-broker:latest
     depends_on:
       broker:
@@ -84,9 +81,6 @@ services:
       - ./logs:/app/logs
 
   token-watcher:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: venice-broker:latest
     depends_on:
       broker:
@@ -107,9 +101,6 @@ services:
       - ./logs:/app/logs
 
   tests:
-    build:
-      context: .
-      dockerfile: Dockerfile
     image: venice-broker:latest
     depends_on:
       postgres:

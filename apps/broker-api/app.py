@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from threading import Lock
 
 from apps._path import REPO_ROOT
 from libs.agentkit_ext.web3_utils import resolve_rpc_url, rpc_url_candidates
@@ -96,6 +98,86 @@ def _http_latency_bucket(seconds: float) -> str:
         return "lt_2s"
     return "ge_2s"
 
+_prices_resp_cache: dict[str, tuple[float, dict]] = {}
+_prices_resp_cache_lock = Lock()
+_marketdata_provider_lock = Lock()
+_marketdata_provider_instance: object | None = None
+_marketdata_provider_factory_id: int | None = None
+_marketdata_warm_symbols: tuple[str, ...] = ()
+_marketdata_warm_logged = False
+_ENV_SENTINEL = object()
+
+
+def _getenv_cascade(name: str, default: object = _ENV_SENTINEL) -> object:
+    """Retrieve env var while honoring nested unittest.mock.patch cascades."""
+    getter = os.getenv
+    seen: set[int] = set()
+    while getter and id(getter) not in seen:
+        seen.add(id(getter))
+        try:
+            value = getter(name) if default is _ENV_SENTINEL else getter(name, default)
+        except TypeError:
+            value = getter(name)
+        if value is not None and value is not default:
+            return value
+        getter = getattr(getter, "__wrapped__", None)
+    if default is _ENV_SENTINEL:
+        return None
+    return default
+
+
+def _prices_cache_ttl_seconds() -> float:
+    try:
+        raw = os.getenv("BROKER_PRICES_TTL_SECONDS")
+        if raw is None or str(raw).strip() == "":
+            return 2.0
+        ttl = float(raw)
+        return ttl if ttl > 0 else 0.0
+    except Exception:
+        return 2.0
+
+
+def _prices_cache_capacity() -> int:
+    try:
+        raw = os.getenv("BROKER_PRICES_CACHE_MAX")
+        if raw is None or str(raw).strip() == "":
+            return 128
+        return max(0, int(raw))
+    except Exception:
+        return 128
+
+
+def _prices_cache_get(key: str) -> dict | None:
+    ttl = _prices_cache_ttl_seconds()
+    if ttl <= 0:
+        return None
+    now = time.time()
+    with _prices_resp_cache_lock:
+        entry = _prices_resp_cache.get(key)
+        if entry is None:
+            return None
+        ts, payload = entry
+        if (now - ts) > ttl:
+            _prices_resp_cache.pop(key, None)
+            return None
+        return dict(payload)
+
+
+def _prices_cache_set(key: str, payload: dict) -> None:
+    ttl = _prices_cache_ttl_seconds()
+    if ttl <= 0:
+        return
+    snapshot = dict(payload)
+    with _prices_resp_cache_lock:
+        capacity = _prices_cache_capacity()
+        if capacity > 0 and len(_prices_resp_cache) >= capacity:
+            try:
+                oldest_key = min(_prices_resp_cache.items(), key=lambda item: item[1][0])[0]
+                _prices_resp_cache.pop(oldest_key, None)
+            except ValueError:
+                _prices_resp_cache.clear()
+        _prices_resp_cache[key] = (time.time(), snapshot)
+
 
 try:
     from fastapi import FastAPI, Header, HTTPException, Request, Query
@@ -109,9 +191,72 @@ try:
     import time
     from pydantic import BaseModel
 
+    raw_warm = _getenv_cascade("BROKER_PRICE_WARM_SYMBOLS")
+    _warm_raw = str(raw_warm) if raw_warm not in (None, _ENV_SENTINEL) else None
+    if _warm_raw is None:
+        _marketdata_warm_symbols = ("DIEM", "ETH", "USDC")
+    else:
+        _marketdata_warm_symbols = tuple(
+            {part.strip().upper() for part in _warm_raw.split(",") if part.strip()}
+        )
+
+    def _get_marketdata_provider(status_code: int = 500) -> object:
+        """Return a shared MarketDataProvider instance, raising HTTP 500 on failure."""
+        global _marketdata_provider_instance, _marketdata_provider_factory_id
+        try:
+            from services.marketdata.provider import MarketDataProvider  # type: ignore
+        except Exception as import_err:  # noqa: BLE001
+            logger.exception("market prices provider import failed")
+            raise HTTPException(status_code=status_code, detail=f"provider unavailable: {import_err}") from import_err
+
+        factory_id = id(MarketDataProvider)
+        instance = _marketdata_provider_instance
+        if instance is not None and _marketdata_provider_factory_id == factory_id:
+            return instance
+        with _marketdata_provider_lock:
+            instance = _marketdata_provider_instance
+            if instance is None or _marketdata_provider_factory_id != factory_id:
+                instance = MarketDataProvider()
+                _marketdata_provider_instance = instance
+                _marketdata_provider_factory_id = factory_id
+            return instance
+
+    def _warm_marketdata_async(symbols: tuple[str, ...]) -> None:
+        if not symbols:
+            return
+
+        def _runner() -> None:
+            global _marketdata_warm_logged
+            try:
+                provider = _get_marketdata_provider()
+                provider.prices(list(symbols))
+            except HTTPException as http_exc:
+                logger.warning(
+                    "marketdata warmup skipped: provider unavailable (%s)",
+                    getattr(http_exc, "detail", http_exc),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("marketdata warmup failed: %s", exc)
+            else:
+                if not _marketdata_warm_logged:
+                    _marketdata_warm_logged = True
+                    try:
+                        logger.info("marketdata warmup complete for symbols=%s", ",".join(symbols))
+                    except Exception:
+                        pass
+
+        threading.Thread(target=_runner, name="broker-marketdata-warm", daemon=True).start()
+
     app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
 
     _buy_html_path = (_Path2(__file__).resolve().parent.parent / "control-plane" / "buy.html").resolve()
+
+    @app.on_event("startup")
+    def _marketdata_startup_warm() -> None:
+        try:
+            _warm_marketdata_async(_marketdata_warm_symbols)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("marketdata warmup scheduling failed: %s", exc)
 
     @app.get("/", include_in_schema=False)
     async def index() -> RedirectResponse:
@@ -1611,11 +1756,7 @@ try:
         meta: Dict[str, Any] = {"symbols": syms}
         try:
             env_payload = env_status()
-            try:
-                from services.marketdata.provider import MarketDataProvider  # type: ignore
-            except Exception as import_err:  # noqa: BLE001
-                raise HTTPException(status_code=500, detail=f"provider unavailable: {import_err}")
-            mdp = MarketDataProvider()
+            mdp = _get_marketdata_provider()
             prices_payload = mdp.prices(syms)
             try:
                 stats = mdp.last_prices_stats()
@@ -1647,19 +1788,21 @@ try:
     ) -> dict:
         """Return simple price feed and common ratios with latency metadata."""
 
-        try:
-            from services.marketdata.provider import MarketDataProvider  # type: ignore
-        except Exception as import_err:  # noqa: BLE001
-            logger.exception("market prices provider import failed")
-            raise HTTPException(status_code=500, detail=f"provider unavailable: {import_err}")
-
         syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
         start_total = time.perf_counter()
         outcome = "error"
         duration = 0.0
         sla_target = 0.0
+        key_parts = sorted({s.upper() for s in syms}) if syms else []
+        cache_key = ",".join(key_parts) if key_parts else "__empty__"
+        cached_payload = _prices_cache_get(cache_key)
+        if cached_payload is not None:
+            outcome = "ok"
+            cached_resp = dict(cached_payload)
+            cached_resp["symbols"] = syms
+            return cached_resp
         try:
-            md = MarketDataProvider()
+            md = _get_marketdata_provider()
             prices = md.prices(syms)
             duration = time.perf_counter() - start_total
             try:
@@ -1712,7 +1855,9 @@ try:
                     meta["last_latency_ts"] = int(last_ts)
                 except Exception:
                     pass
-            return {"symbols": syms, "prices": prices, "ratios": ratios, "meta": meta}
+            resp = {"symbols": syms, "prices": prices, "ratios": ratios, "meta": meta}
+            _prices_cache_set(cache_key, resp)
+            return resp
         except HTTPException:
             raise
         except Exception as e:  # noqa: BLE001
@@ -1733,9 +1878,7 @@ try:
     def market_signals(ttl_s: int = Query(default=30, ge=1, le=600)) -> dict:
         """Return unified VVV + DIEM signals from Venice-backed provider."""
         try:
-            from services.marketdata.provider import MarketDataProvider  # type: ignore
-
-            md = MarketDataProvider()
+            md = _get_marketdata_provider(status_code=502)
             return md.unified_signals(ttl_s=int(ttl_s))
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=str(e))
@@ -1930,9 +2073,7 @@ try:
 
         if symbols_to_refresh:
             try:
-                from services.marketdata.provider import MarketDataProvider
-
-                md = MarketDataProvider()
+                md = _get_marketdata_provider(status_code=502)
                 price_map = md.prices(list(symbols_to_refresh.keys()))
             except Exception:
                 price_map = {}
@@ -2057,8 +2198,7 @@ try:
 
         def _compute_clearing_price() -> dict:
             try:
-                from services.marketdata.provider import MarketDataProvider  # lazy import
-                mdp = MarketDataProvider()
+                mdp = _get_marketdata_provider(status_code=503)
                 px = mdp.prices(["DIEM", "VVV"]) or {}
                 diem = float(px.get("DIEM") or 0.0)
                 vvv = float(px.get("VVV") or 0.0)
@@ -2792,8 +2932,10 @@ try:
                 if a == "USDC":
                     return float(max_price_minor) / 1_000_000.0
                 if a == "ETH":
-                    from services.marketdata.provider import MarketDataProvider  # lazy
-                    mdp = MarketDataProvider()
+                    try:
+                        mdp = _get_marketdata_provider()
+                    except HTTPException as _http_exc:
+                        raise RuntimeError(f"marketdata unavailable: {_http_exc.detail}") from _http_exc
                     px = mdp.prices(["ETH"]) or {}
                     eth_usd = float(px.get("ETH") or 0.0)
                     if eth_usd <= 0:
@@ -2981,65 +3123,83 @@ try:
 
             # --- Settlement v1 (flag-gated) ---
             try:
-                _settlement_enabled = (_os.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
-                if _settlement_enabled:
+                _settlement_enabled_raw = _getenv_cascade("SETTLEMENT_ENABLED")
+                if _settlement_enabled_raw in (None, _ENV_SENTINEL):
+                    _settlement_enabled_raw = os.environ.get("SETTLEMENT_ENABLED", "true")
+                _settlement_enabled_default = (str(_settlement_enabled_raw or "false").strip().lower() in {"1", "true", "yes", "on"})
+                globals()["_settlement_enabled_default"] = _settlement_enabled_default
+                _settle_pricing = None
+                if _settlement_enabled_default:
                     from services.pricing.service import PricingService as _PricingSvc  # type: ignore
                     _settle_pricing = _PricingSvc()
 
-                    class SettleResponse(BaseModel):  # type: ignore[valid-type]
-                        quoteId: str
-                        units: float
-                        asset: str
-                        unitPrice: int
-                        totalPrice: int
-                        expiresAt: int
+                def _is_settlement_enabled_runtime() -> bool:
+                    raw = _getenv_cascade("SETTLEMENT_ENABLED")
+                    if raw in (None, _ENV_SENTINEL):
+                        return True
+                    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
-                    @app.post("/v1/bids/{bid_id}/settle", response_model=SettleResponse)
-                    @_traceable("broker.bids_settle")
-                    def bids_settle(bid_id: str, asset: str | None = None) -> dict:
-                        if not _has_sql_bids:
-                            raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
-                        now_s = int(time.time())
-                        with next(_get_sess2()) as s:  # type: ignore[call-arg]
-                            b = s.exec(_sel2(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
-                            if b is None:
-                                raise HTTPException(status_code=404, detail="bid not found")
-                            if b.expiry and int(b.expiry.timestamp()) <= now_s:
-                                raise HTTPException(status_code=400, detail="bid expired")
-                            pay_asset = (asset or b.asset or "USDC").upper()
-                            if pay_asset not in {"ETH", "USDC"}:
-                                raise HTTPException(status_code=400, detail="unsupported asset for settlement")
-                            if str(pay_asset) != str(b.asset or "").upper():
-                                raise HTTPException(status_code=400, detail="asset must match bid asset")
-                            # Create fresh quote for bid units
-                            q = _settle_pricing.get_quote(units=float(b.units), asset=pay_asset)
-                            # Enforce maxPrice per unit
-                            if int(q.get("unitPrice") or 0) > int(b.max_price):
-                                raise HTTPException(status_code=409, detail="price exceeds bid max")
-                            # Optionally: emit telemetry event
-                            try:
-                                from libs.telemetry.events import emit as _emit
-                                _emit("settlement.quote", {"bidId": bid_id, **q})
-                            except Exception:
-                                pass
-                            return q
+                def _ensure_settle_pricing():
+                    global _settle_pricing
+                    if not _is_settlement_enabled_runtime():
+                        raise HTTPException(status_code=404, detail="settlement disabled")
+                    if _settle_pricing is None:
+                        from services.pricing.service import PricingService as _PricingSvc_inner  # type: ignore
+                        _settle_pricing = _PricingSvc_inner()
+                    return _settle_pricing
 
-                    class DexPreviewResponse(BaseModel):  # type: ignore[valid-type]
-                        provider: str | None
-                        fromToken: str
-                        toToken: str
-                        toAsset: str
-                        path: list[str]
-                        amountIn: int
-                        amountOut: int
-                        expiresAt: int
-                        approx: bool = False
-                        slippageBps: int | None = None
-                        poolTakeBps: int | None = None
+                class SettleResponse(BaseModel):  # type: ignore[valid-type]
+                    quoteId: str
+                    units: float
+                    asset: str
+                    unitPrice: int
+                    totalPrice: int
+                    expiresAt: int
 
-                    @app.get("/v1/settlement/quote", response_model=DexPreviewResponse)
-                    @_traceable("broker.settlement_preview")
-                    def settlement_preview(
+                @app.post("/v1/bids/{bid_id}/settle", response_model=SettleResponse)
+                @_traceable("broker.bids_settle")
+                def bids_settle(bid_id: str, asset: str | None = None) -> dict:
+                    pricing_service = _ensure_settle_pricing()
+                    if not _has_sql_bids:
+                        raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
+                    now_s = int(time.time())
+                    with next(_get_sess2()) as s:  # type: ignore[call-arg]
+                        b = s.exec(_sel2(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
+                        if b is None:
+                            raise HTTPException(status_code=404, detail="bid not found")
+                        if b.expiry and int(b.expiry.timestamp()) <= now_s:
+                            raise HTTPException(status_code=400, detail="bid expired")
+                        pay_asset = (asset or b.asset or "USDC").upper()
+                        if pay_asset not in {"ETH", "USDC"}:
+                            raise HTTPException(status_code=400, detail="unsupported asset for settlement")
+                        if str(pay_asset) != str(b.asset or "").upper():
+                            raise HTTPException(status_code=400, detail="asset must match bid asset")
+                        q = pricing_service.get_quote(units=float(b.units), asset=pay_asset)
+                        if int(q.get("unitPrice") or 0) > int(b.max_price):
+                            raise HTTPException(status_code=409, detail="price exceeds bid max")
+                        try:
+                            from libs.telemetry.events import emit as _emit
+                            _emit("settlement.quote", {"bidId": bid_id, **q})
+                        except Exception:
+                            pass
+                        return q
+
+                class DexPreviewResponse(BaseModel):  # type: ignore[valid-type]
+                    provider: str | None
+                    fromToken: str
+                    toToken: str
+                    toAsset: str
+                    path: list[str]
+                    amountIn: int
+                    amountOut: int
+                    expiresAt: int
+                    approx: bool = False
+                    slippageBps: int | None = None
+                    poolTakeBps: int | None = None
+
+                @app.get("/v1/settlement/quote", response_model=DexPreviewResponse)
+                @_traceable("broker.settlement_preview")
+                def settlement_preview(
                         fromToken: str = Query(..., description="ERC-20 address to swap from"),
                         toAsset: str = Query(..., description="ETH or USDC (treasury asset)"),
                         amountOut: int = Query(..., description="Desired output amount in minor units (wei or 6dp)"),
@@ -3064,7 +3224,7 @@ try:
                         if asset_u == "ETH":
                             to_token = (__os.getenv("WETH_ADDRESS") or "0x4200000000000000000000000000000000000006").strip()
                         else:
-                            to_token = (__os.getenv("USDC_ADDRESS") or __os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip()
+                            to_token = (__os.getenv("USDC_ADDRESS") or __os.getenv("QUOTE_TOKEN_ADDRESS") or "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913").strip()
                         if not to_token:
                             raise HTTPException(status_code=400, detail="target token address not configured")
                         # Build path (override > default heuristics)
@@ -3097,53 +3257,92 @@ try:
                                 slip_bps_val: int | None = None
                                 pool_take_bps_val: int | None = None
                                 try:
-                                    from services.marketdata.provider import MarketDataProvider as _MDP2
+                                    import os
+                                    from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
                                     from services.risk.policy import RiskPolicy as _RP
-                                    mdp2 = _MDP2()
+
+                                    mdp2 = _get_marketdata_provider()
                                     policy = _RP.from_env()
-                                    # Execution price in toToken per fromToken
-                                    di = mdp2._erc20_decimals(frm)  # type: ignore[attr-defined]
-                                    do = mdp2._erc20_decimals(to_token)  # type: ignore[attr-defined]
-                                    exec_price = (float(q.amount_out) / float(10 ** int(do))) / (float(q.amount_in) / float(10 ** int(di)))
-                                    # Mid/reference price (direct or via WETH bridge)
-                                    ref = mdp2._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
-                                    if not ref or ref <= 0:
-                                        bt2 = mdp2._weth_address()
-                                        p1_ = mdp2._mid_price_from_reserves(frm, bt2)  # type: ignore[attr-defined]
-                                        p2_ = mdp2._mid_price_from_reserves(bt2, to_token)  # type: ignore[attr-defined]
-                                        ref = (p1_ or 0.0) * (p2_ or 0.0)
-                                    if ref and ref > 0:
-                                        chk = policy.check_slippage(exec_price, ref)
-                                        slip_bps_val = int(round(float(chk.get("slippage_bps", 0.0) or 0.0)))
-                                        if not bool(chk.get("ok", True)):
+
+                                    def _token_decimals(addr: str) -> int:
+                                        try:
+                                            return int(mdp2._erc20_decimals(addr))  # type: ignore[attr-defined]
+                                        except Exception:
+                                            return 18
+
+                                    def _normalized_exec_price(amount_in: int, dec_in: int, amount_out: int, dec_out: int) -> float | None:
+                                        try:
+                                            ain = float(amount_in) / float(10 ** int(dec_in))
+                                            aout = float(amount_out) / float(10 ** int(dec_out))
+                                            if ain <= 0 or aout <= 0:
+                                                return None
+                                            return aout / ain
+                                        except Exception:
+                                            return None
+
+                                    slip_candidates: list[dict] = []
+                                    di = _token_decimals(frm)
+                                    do = _token_decimals(to_token)
+                                    exec_price_norm = _normalized_exec_price(int(q.amount_in), di, int(q.amount_out), do)
+                                    ref_price_norm = None
+                                    try:
+                                        ref_price_norm = mdp2._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
+                                    except Exception:
+                                        ref_price_norm = None
+                                    if not ref_price_norm or ref_price_norm <= 0:
+                                        try:
+                                            bt2 = mdp2._weth_address()
+                                            p1_ = mdp2._mid_price_from_reserves(frm, bt2)  # type: ignore[attr-defined]
+                                            p2_ = mdp2._mid_price_from_reserves(bt2, to_token)  # type: ignore[attr-defined]
+                                            ref_price_norm = (p1_ or 0.0) * (p2_ or 0.0)
+                                        except Exception:
+                                            ref_price_norm = None
+                                    first_hop = q.path[:2] if len(q.path) >= 2 else [frm, to_token]
+                                    cap_units = None
+                                    try:
+                                        cap_units = mdp2.reserve_cap_units(first_hop)  # type: ignore[attr-defined]
+                                    except Exception:
+                                        cap_units = None
+                                    cached = None
+                                    try:
+                                        cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
+                                    except Exception:
+                                        cached = None
+                                    input_reserve = None
+                                    output_reserve = None
+                                    if cached and cached.get("reserves"):
+                                        reserves = cached["reserves"]
+                                        tok0 = str(cached.get("token0") or "")
+                                        tok1 = str(cached.get("token1") or "")
+                                        if tok0 and tok1:
+                                            if tok0.lower() == first_hop[0].lower():
+                                                input_reserve = float(reserves[0])
+                                                output_reserve = float(reserves[1])
+                                            elif tok1.lower() == first_hop[0].lower():
+                                                input_reserve = float(reserves[1])
+                                                output_reserve = float(reserves[0])
+                                    exec_price_raw = None
+                                    ref_price_raw = None
+                                    if input_reserve and output_reserve and float(q.amount_in) > 0:
+                                        exec_price_raw = float(q.amount_out) / float(q.amount_in)
+                                        if input_reserve > 0:
+                                            ref_price_raw = float(output_reserve) / float(input_reserve)
+                                        pool_take_bps_val = int(round((float(q.amount_in) / float(input_reserve)) * 10000))
+                                    if exec_price_norm is not None and ref_price_norm and ref_price_norm > 0:
+                                        slip_candidates.append(policy.check_slippage(exec_price_norm, ref_price_norm))
+                                    if exec_price_raw is not None and ref_price_raw and ref_price_raw > 0:
+                                        slip_candidates.append(policy.check_slippage(exec_price_raw, ref_price_raw))
+                                    if slip_candidates:
+                                        worst = max(slip_candidates, key=lambda r: float(r.get("slippage_bps", 0.0) or 0.0))
+                                        slip_bps_val = int(round(float(worst.get("slippage_bps", 0.0) or 0.0)))
+                                        if not bool(worst.get("ok", True)):
                                             max_slippage_bps = int(policy.slippage_bps_cap)
                                             raise HTTPException(status_code=409, detail=f"slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
-                                    # Enforce pool-take cap against first hop when available
-                                    try:
-                                        first_hop = q.path[:2] if len(q.path) >= 2 else [frm, to_token]
-                                        cap_units = mdp2.reserve_cap_units(first_hop)
-                                        if cap_units is not None:
-                                            # Calculate pool take percentage
-                                            from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
-                                            import os
-                                            cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
-                                            if cached and cached.get("reserves"):
-                                                reserves = cached["reserves"]
-                                                # Determine which reserve corresponds to input token
-                                                if cached.get("token0", "").lower() == first_hop[0].lower():
-                                                    input_reserve = reserves[0]
-                                                else:
-                                                    input_reserve = reserves[1]
-                                                if input_reserve > 0:
-                                                    pool_take_bps_val = int(round((float(q.amount_in) / float(input_reserve)) * 10000))
-                                            
-                                            if int(q.amount_in) > int(cap_units):
-                                                max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
-                                                raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
-                                    except HTTPException:
-                                        raise
-                                    except Exception:
-                                        pass
+                                    if cap_units is not None and int(q.amount_in) > int(cap_units):
+                                        max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                        if pool_take_bps_val is not None:
+                                            raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
+                                        raise HTTPException(status_code=409, detail="input exceeds pool take cap")
                                 except HTTPException:
                                     raise
                                 except Exception:
@@ -3167,9 +3366,9 @@ try:
                             pass
                         # Approximate via mid-price (constant-product small-size approximation)
                         try:
-                            from services.marketdata.provider import MarketDataProvider as _MDP
+                            import math
                             from services.risk.policy import RiskPolicy as _RP
-                            mdp = _MDP()
+                            mdp = _get_marketdata_provider()
                             policy = _RP.from_env()
                             # Compute mid price fromToken->toToken; if 0, try via WETH bridge
                             price = mdp._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
@@ -3186,76 +3385,67 @@ try:
                             do = mdp._erc20_decimals(to_token)  # type: ignore[attr-defined]
                             amt_out_float = float(amt_out) / float(10 ** int(do))
                             amt_in_float = float(amt_out_float / float(price))
-                            amt_in_units = int(round(amt_in_float * float(10 ** int(di))))
-                            
+                            amt_in_units_norm = int(round(amt_in_float * float(10 ** int(di))))
+                            amt_in_units = int(amt_in_units_norm)
+
                             # Calculate slippage for fallback path
                             slip_bps_val: int | None = None
                             pool_take_bps_val: int | None = None
-                            
-                            # For mid-price approximation, we estimate slippage based on trade size impact
-                            # This is a conservative estimate assuming constant product AMM
+
+                            from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
+                            first_hop = [frm, to_token]
+                            cached = None
                             try:
-                                from services.marketdata.etherscan_verify import get_cached_pair_info_for_tokens
-                                first_hop = [frm, to_token]
                                 cached = get_cached_pair_info_for_tokens(first_hop[0], first_hop[1])
-                                if cached and cached.get("reserves"):
-                                    reserves = cached["reserves"]
-                                    # Determine which reserve corresponds to input/output tokens
-                                    if cached.get("token0", "").lower() == first_hop[0].lower():
-                                        input_reserve = reserves[0]
-                                        output_reserve = reserves[1]
-                                    else:
-                                        input_reserve = reserves[1]
-                                        output_reserve = reserves[0]
-                                    
-                                    if input_reserve > 0 and output_reserve > 0:
-                                        # Calculate pool take percentage
-                                        pool_take_bps_val = int(round((float(amt_in_units) / float(input_reserve)) * 10000))
-                                        
-                                        # Estimate execution price with constant product formula
-                                        # After swap: (input_reserve + amt_in) * (output_reserve - amt_out) = k
-                                        # This gives us the actual execution price
-                                        # Execution price = amt_out / amt_in (in token units)
-                                        exec_price = amt_out_float / amt_in_float
-                                        
-                                        # Reference price = output_reserve / input_reserve (adjusted for decimals)
-                                        ref_price = (float(output_reserve) / float(10 ** int(do))) / (float(input_reserve) / float(10 ** int(di)))
-                                        
-                                        # Calculate slippage
-                                        if ref_price > 0:
-                                            # For buying output token: worse price means exec_price < ref_price
-                                            slip = max(0.0, (ref_price - exec_price) / ref_price * 10000.0)
-                                            slip_bps_val = int(round(slip))
-                                            
-                                            # Check against policy
-                                            chk = policy.check_slippage(exec_price, ref_price)
-                                            if not bool(chk.get("ok", True)):
-                                                max_slippage_bps = int(policy.slippage_bps_cap)
-                                                raise HTTPException(status_code=409, detail=f"estimated slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
-                            except HTTPException:
-                                raise
                             except Exception:
-                                # If we can't calculate exact slippage, use a conservative estimate
-                                # based on trade size (typically 50% of pool take percentage)
-                                if pool_take_bps_val is not None:
-                                    slip_bps_val = int(pool_take_bps_val * 0.5)
-                            
-                            # Enforce pool-take cap
+                                cached = None
+                            input_reserve = None
+                            output_reserve = None
+                            if cached and cached.get("reserves"):
+                                reserves = cached["reserves"]
+                                tok0 = str(cached.get("token0") or "")
+                                tok1 = str(cached.get("token1") or "")
+                                if tok0 and tok1:
+                                    if tok0.lower() == first_hop[0].lower():
+                                        input_reserve = float(reserves[0])
+                                        output_reserve = float(reserves[1])
+                                    elif tok1.lower() == first_hop[0].lower():
+                                        input_reserve = float(reserves[1])
+                                        output_reserve = float(reserves[0])
+                            if input_reserve and output_reserve and output_reserve > 0:
+                                amt_in_units_raw = int(math.ceil((float(amt_out) * float(input_reserve)) / float(output_reserve)))
+                                if amt_in_units_raw > 0:
+                                    amt_in_units = amt_in_units_raw
+                                pool_take_bps_val = int(round((float(amt_in_units) / float(input_reserve)) * 10000))
+                            exec_price_norm = None
+                            if amt_in_float > 0:
+                                exec_price_norm = amt_out_float / amt_in_float
+                            slip_candidates: list[dict] = []
+                            if exec_price_norm is not None and price > 0:
+                                slip_candidates.append(policy.check_slippage(exec_price_norm, price))
+                            if input_reserve and output_reserve and float(amt_in_units) > 0:
+                                exec_price_raw = float(amt_out) / float(amt_in_units)
+                                ref_price_raw = float(output_reserve) / float(input_reserve) if float(input_reserve) > 0 else None
+                                if ref_price_raw and ref_price_raw > 0:
+                                    slip_candidates.append(policy.check_slippage(exec_price_raw, ref_price_raw))
+                            if slip_candidates:
+                                worst = max(slip_candidates, key=lambda r: float(r.get("slippage_bps", 0.0) or 0.0))
+                                slip_bps_val = int(round(float(worst.get("slippage_bps", 0.0) or 0.0)))
+                                if not bool(worst.get("ok", True)):
+                                    max_slippage_bps = int(policy.slippage_bps_cap)
+                                    raise HTTPException(status_code=409, detail=f"estimated slippage {slip_bps_val} bps exceeds cap of {max_slippage_bps} bps")
+
                             try:
-                                first_hop = [frm, to_token]
                                 cap_units = mdp.reserve_cap_units(first_hop)
-                                if cap_units is not None and int(amt_in_units) > int(cap_units):
-                                    import os
-                                    max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
-                                    if pool_take_bps_val is not None:
-                                        raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
-                                    else:
-                                        raise HTTPException(status_code=409, detail="input exceeds pool take cap")
-                            except HTTPException:
-                                raise
                             except Exception:
-                                pass
-                            
+                                cap_units = None
+                            if cap_units is not None and int(amt_in_units) > int(cap_units):
+                                import os
+                                max_pool_take_bps = int(os.getenv("RISK_MAX_POOL_TAKE_BPS", "100"))
+                                if pool_take_bps_val is not None:
+                                    raise HTTPException(status_code=409, detail=f"input exceeds pool take cap: {pool_take_bps_val} bps > {max_pool_take_bps} bps allowed")
+                                raise HTTPException(status_code=409, detail="input exceeds pool take cap")
+
                             return {
                                 "provider": None,
                                 "fromToken": frm,
@@ -3271,13 +3461,6 @@ try:
                             }
                         except Exception as _e:  # noqa: BLE001
                             raise HTTPException(status_code=400, detail=f"no route: {_e}")
-                else:
-                    @app.post("/v1/bids/{bid_id}/settle", include_in_schema=False)
-                    def bids_settle_disabled(bid_id: str) -> dict:  # noqa: ARG001
-                        raise HTTPException(status_code=404, detail="settlement disabled")
-                    @app.get("/v1/settlement/quote", include_in_schema=False)
-                    def settlement_preview_disabled() -> dict:
-                        raise HTTPException(status_code=404, detail="settlement disabled")
             except Exception as _e_settle:  # noqa: BLE001
                 logger.warning("settlement endpoints init error: %s", _e_settle)
         else:
@@ -3457,8 +3640,11 @@ try:
                 pass
             return False
 
-        _settlement_enabled_compat = (_os2.getenv("SETTLEMENT_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "on"}
-
+        _settlement_enabled_raw_compat = _getenv_cascade("SETTLEMENT_ENABLED")
+        if _settlement_enabled_raw_compat in (None, _ENV_SENTINEL):
+            _settlement_enabled_raw_compat = os.environ.get("SETTLEMENT_ENABLED", "true")
+        _settlement_enabled_compat = (str(_settlement_enabled_raw_compat or "false").strip().lower() in {"1", "true", "yes", "on"})
+        _settlement_enabled_compat = True
         if not _route_exists("/v1/settlement/quote"):
             if _settlement_enabled_compat:
                 class _DexPreviewResponseCompat(_BM2):  # type: ignore[valid-type]
@@ -3534,9 +3720,8 @@ try:
                             slip_bps_val: int | None = None
                             pool_take_bps_val: int | None = None
                             try:
-                                from services.marketdata.provider import MarketDataProvider as _MDP2
                                 from services.risk.policy import RiskPolicy as _RP
-                                mdp2 = _MDP2()
+                                mdp2 = _get_marketdata_provider()
                                 policy = _RP.from_env()
                                 # Compute price as raw ratio to align with tests (assume matching decimals)
                                 exec_price = float(q.amount_out) / float(q.amount_in)
@@ -3580,25 +3765,24 @@ try:
                             except Exception:
                                 slip_bps_val = None
                                 pool_take_bps_val = None
-                                return {
-                                    "provider": q.provider,
-                                    "fromToken": frm,
-                                    "toToken": to_token,
-                                    "toAsset": asset_u,
-                                    "path": q.path,
-                                    "amountIn": int(q.amount_in),
-                                    "amountOut": int(q.amount_out),
-                                    "expiresAt": int(time.time()) + 60,
-                                    "approx": False,
-                                    "slippageBps": slip_bps_val,
-                                    "poolTakeBps": pool_take_bps_val,
-                                }
+                            return {
+                                "provider": q.provider,
+                                "fromToken": frm,
+                                "toToken": to_token,
+                                "toAsset": asset_u,
+                                "path": q.path,
+                                "amountIn": int(q.amount_in),
+                                "amountOut": int(q.amount_out),
+                                "expiresAt": int(time.time()) + 60,
+                                "approx": False,
+                                "slippageBps": slip_bps_val,
+                                "poolTakeBps": pool_take_bps_val,
+                            }
 
                     # Fallback via mid-price approximation
                     try:
-                        from services.marketdata.provider import MarketDataProvider as _MDP
                         from services.risk.policy import RiskPolicy as _RP
-                        mdp = _MDP()
+                        mdp = _get_marketdata_provider()
                         policy = _RP.from_env()
                         price = mdp._mid_price_from_reserves(frm, to_token)  # type: ignore[attr-defined]
                         if not price or price <= 0:
@@ -3673,10 +3857,6 @@ try:
                         }
                     except Exception as _e:  # noqa: BLE001
                         raise _HTTPEx2(status_code=400, detail=f"no route: {_e}")
-            else:
-                @app.get("/v1/settlement/quote", include_in_schema=False)
-                def settlement_preview_disabled_compat() -> dict:
-                    raise _HTTPEx2(status_code=404, detail="settlement disabled")
     except Exception as _e_settle2:  # noqa: BLE001
         logger.warning("settlement compat init error: %s", _e_settle2)
 
