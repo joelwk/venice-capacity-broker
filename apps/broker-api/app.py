@@ -3642,7 +3642,7 @@ try:
 
         _settlement_enabled_raw_compat = _getenv_cascade("SETTLEMENT_ENABLED")
         if _settlement_enabled_raw_compat in (None, _ENV_SENTINEL):
-            _settlement_enabled_raw_compat = os.environ.get("SETTLEMENT_ENABLED", "true")
+            _settlement_enabled_raw_compat = _os2.environ.get("SETTLEMENT_ENABLED", "true")
         _settlement_enabled_compat = (str(_settlement_enabled_raw_compat or "false").strip().lower() in {"1", "true", "yes", "on"})
         _settlement_enabled_compat = True
         if not _route_exists("/v1/settlement/quote"):
