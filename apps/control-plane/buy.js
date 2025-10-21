@@ -41,6 +41,17 @@ const PRICING_SKELETON_HTML = [
 ].join('');
 const JSON_GET_HEADERS = { Accept: "application/json" };
 const JSON_POST_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
+const INIT_WATCHDOG_MS = 4000;
+let initWatchdog = setTimeout(() => {
+  const empty = document.getElementById("pricing-empty");
+  if (empty && (!state.prices || Object.keys(state.prices).length === 0)) {
+    empty.textContent = "Market data unavailable.";
+  }
+}, INIT_WATCHDOG_MS);
+
+function supportsEventSource() {
+  return typeof window !== "undefined" && typeof window.EventSource === "function";
+}
 
 function $(id) {
   return document.getElementById(id);
@@ -707,14 +718,41 @@ function formatExpiry(expiresAt) {
 
 async function pollPurchaseUntilReady(purchaseId) {
   const keyStatus = $("key-status");
-  const maxAttempts = 20;
-  let attempt = 0;
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const streamUrl = `${PURCHASE_ENDPOINT}/${encodeURIComponent(purchaseId)}/stream`;
+  if (supportsEventSource()) {
+    try {
+      const source = new EventSource(streamUrl);
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data || "{}");
+          if (payload.subkey) {
+            showKey({ subkey: payload.subkey, expiresAt: payload.expiresAt });
+            clearAlert(keyStatus);
+            showAlert(keyStatus, "success", "API key issued. Store it in a safe place.");
+            source.close();
+          } else {
+            showAlert(keyStatus, "info", `Issuing key... status=${payload.status || "pending"}`);
+          }
+        } catch {
+          showAlert(keyStatus, "info", "Issuing key...");
+        }
+      };
+      source.onerror = () => {
+        showAlert(keyStatus, "error", "Status stream interrupted. Refresh this page and keep your purchase id.");
+        source.close();
+      };
+      return;
+    } catch (err) {
+      showAlert(keyStatus, "error", err instanceof Error ? err.message : String(err));
+    }
+  }
 
-  while (attempt < maxAttempts) {
+  let attempt = 0;
+  const maxAttempts = 20;
+
+  const poll = async () => {
     attempt += 1;
     try {
-      await delay(3000);
       const res = await fetch(`${PURCHASE_ENDPOINT}/${encodeURIComponent(purchaseId)}`, { headers: JSON_GET_HEADERS });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -731,8 +769,15 @@ async function pollPurchaseUntilReady(purchaseId) {
       showAlert(keyStatus, "error", err instanceof Error ? err.message : String(err));
       return;
     }
-  }
-  showAlert(keyStatus, "info", "Still waiting for key issuance. Keep your purchase id handy and try again later.");
+
+    if (attempt < maxAttempts) {
+      setTimeout(poll, 3000);
+    } else {
+      showAlert(keyStatus, "info", "Still waiting for key issuance. Keep your purchase id handy and try again later.");
+    }
+  };
+
+  setTimeout(poll, 3000);
 }
 
 async function copyToClipboard(value, successMessage, alertEl) {
@@ -1153,6 +1198,7 @@ function initDefaults() {
 }
 
 async function init() {
+  clearTimeout(initWatchdog);
   initDefaults();
   setupEventHandlers();
   enableStep2(false);

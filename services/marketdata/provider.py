@@ -676,6 +676,14 @@ class MarketDataProvider:
         self._ensure_warm_thread()
         self._validate_trade_paths()
         self._check_wbtc_configuration()
+        # Best-effort warm for core ETH pricing path (WETH -> QUOTE)
+        try:
+            weth = self._weth_address()
+            quote = self._quote_token_address()
+            if weth and quote and weth.strip().lower() != quote.strip().lower():
+                self._warm_route_liquidity([weth, quote])
+        except Exception:
+            pass
 
     def _norm_symbol_label(self, symbol: object) -> str:
         try:
@@ -2140,6 +2148,14 @@ class MarketDataProvider:
                             return self._apply_price_sanity("WBTC", combo)
                 except Exception:
                     pass
+                # As a last resort, use external reference before returning 0.0
+                try:
+                    ext_px = self._external_price("WBTC")
+                except Exception:
+                    ext_px = None
+                if self._valid_price(ext_px):
+                    type(self)._record_price_source("WBTC", "external_fallback", {"valid": True, "source": "external_reference"})
+                    return self._apply_price_sanity("WBTC", float(ext_px))
                 return self._apply_price_sanity("WBTC", 0.0)
             except Exception:
                 return self._apply_price_sanity("WBTC", 0.0)
@@ -2147,21 +2163,136 @@ class MarketDataProvider:
             try:
                 weth = self._weth_address()
                 quote = self._quote_token_address()
-                self._stat_increment("dex_calls")
-                bp = self.best_price(make_route([weth, quote]), amount_in_decimal=1.0, label_symbol=su)
-                price = float(bp.get("price") or 0.0)
-                if self._valid_price(price):
-                    return self._apply_price_sanity("ETH", price)
             except Exception:
-                pass
+                return self._apply_price_sanity("ETH", 0.0)
+
+            # Prefer the path engine so we reuse scored routes and guardrails.
+            path_result = None
             try:
-                weth = self._weth_address()
-                quote = self._quote_token_address()
+                path_result = self._quote_via_path_engine(weth, quote, amount_in_decimal=1.0)
+            except Exception:
+                path_result = None
+            if path_result and self._valid_price(path_result.price):
+                metadata = path_result.metadata if isinstance(path_result.metadata, dict) else {}
+                detail_payload = {
+                    "valid": True,
+                    "provider": path_result.provider,
+                    "path": list(path_result.route.tokens) if path_result.route else metadata.get("path"),
+                    "source": path_result.source,
+                    "score": path_result.score,
+                    "policy_penalty": metadata.get("policy_penalty"),
+                    "guardrail_penalty": metadata.get("guardrail_penalty"),
+                }
+                type(self)._record_price_source("ETH", path_result.source or "path_engine", detail_payload)
+                return self._apply_price_sanity("ETH", float(path_result.price))
+
+            routes_to_try: List[RoutePlan] = []
+            seen_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+            override = self._route_optional_from_env("ETH_PRICE_PATH")
+            if override:
+                seen_keys.add((tuple(override.tokens), tuple(hop.fee for hop in override.hops)))
+                routes_to_try.append(override)
+
+            try:
+                trade_route = self._route_from_env()
+            except Exception:
+                trade_route = None
+            if trade_route:
+                tokens = list(trade_route.tokens)
+                hops = list(trade_route.hops)
+                for idx in range(len(tokens) - 1):
+                    a = str(tokens[idx]).strip()
+                    b = str(tokens[idx + 1]).strip()
+                    if a.lower() != weth.lower() or b.lower() != quote.lower():
+                        continue
+                    fee = None
+                    if idx < len(hops):
+                        fee = hops[idx].fee
+                    try:
+                        candidate = make_route([a, b], [fee] if fee is not None else None)
+                    except Exception:
+                        continue
+                    key = (tuple(candidate.tokens), tuple(hop.fee for hop in candidate.hops))
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    routes_to_try.append(candidate)
+
+            try:
+                fallback_route = make_route([weth, quote])
+            except Exception:
+                fallback_route = None
+            if fallback_route is not None:
+                key = (tuple(fallback_route.tokens), tuple(hop.fee for hop in fallback_route.hops))
+                if key not in seen_keys:
+                    routes_to_try.append(fallback_route)
+
+            for route in routes_to_try:
+                try:
+                    self._stat_increment("dex_calls")
+                    bp = self.best_price(route, amount_in_decimal=1.0, label_symbol=su)
+                except Exception:
+                    continue
+                price = float(bp.get("price") or 0.0)
+                if not self._valid_price(price):
+                    continue
+                type(self)._record_price_source(
+                    "ETH",
+                    "aggregator",
+                    {
+                        "valid": True,
+                        "provider": bp.get("provider"),
+                        "path": list(bp.get("path") or route.tokens),
+                        "source": "best_price",
+                    },
+                )
+                return self._apply_price_sanity("ETH", price)
+
+            # Fallback: scan decreasing sizes on the simplest WETH->QUOTE route
+            try:
+                route_to_scan = make_route([weth, quote])
+            except Exception:
+                route_to_scan = None
+            if route_to_scan is not None:
+                try:
+                    scan_price = self._best_price_scan(route_to_scan, start=1.0, min_amount=1e-12, factor=10.0)
+                except Exception:
+                    scan_price = None
+                if self._valid_price(scan_price):
+                    type(self)._record_price_source(
+                        "ETH",
+                        "aggregator_scan",
+                        {"valid": True, "path": list(route_to_scan.tokens), "source": "scan"},
+                    )
+                    return self._apply_price_sanity("ETH", float(scan_price))
+
+            try:
                 px = self._mid_price_from_reserves(weth, quote)
                 if self._valid_price(px):
+                    type(self)._record_price_source(
+                        "ETH",
+                        "reserves",
+                        {"valid": True, "path": [weth, quote], "source": "mid_price"},
+                    )
                     return self._apply_price_sanity("ETH", float(px))
             except Exception:
                 pass
+
+            ext_price = None
+            try:
+                ext_price = self._external_price("ETH")
+            except Exception:
+                ext_price = None
+            if self._valid_price(ext_price):
+                type(self)._record_price_source(
+                    "ETH",
+                    "external_fallback",
+                    {"valid": True, "source": "external_reference"},
+                )
+                return self._apply_price_sanity("ETH", float(ext_price))
+
+            type(self)._record_price_source("ETH", "missing", {"valid": False})
             return self._apply_price_sanity("ETH", 0.0)
         return 0.0
 

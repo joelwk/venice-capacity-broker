@@ -168,6 +168,8 @@ class PathQuoteEngine:
             mapping[config.vvv_token.strip().lower()] = "VVV"
         if config.quote_token:
             mapping[config.quote_token.strip().lower()] = os.getenv("QUOTE_TOKEN_SYMBOL", "QUOTE").upper()
+        if config.bridge_token:
+            mapping[config.bridge_token.strip().lower()] = os.getenv("BRIDGE_TOKEN_SYMBOL", "ETH").upper()
         return mapping.get(norm)
 
     # ------------------------------------------------------------------

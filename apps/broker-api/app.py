@@ -190,11 +190,12 @@ try:
     import threading
     import time
     from pydantic import BaseModel
+    from contextlib import asynccontextmanager
 
     raw_warm = _getenv_cascade("BROKER_PRICE_WARM_SYMBOLS")
     _warm_raw = str(raw_warm) if raw_warm not in (None, _ENV_SENTINEL) else None
     if _warm_raw is None:
-        _marketdata_warm_symbols = ("DIEM", "ETH", "USDC")
+        _marketdata_warm_symbols = ("DIEM", "ETH", "USDC", "WBTC")
     else:
         _marketdata_warm_symbols = tuple(
             {part.strip().upper() for part in _warm_raw.split(",") if part.strip()}
@@ -247,16 +248,24 @@ try:
 
         threading.Thread(target=_runner, name="broker-marketdata-warm", daemon=True).start()
 
-    app = FastAPI(title="VVV Capacity Broker API", version="0.1.0")
-
-    _buy_html_path = (_Path2(__file__).resolve().parent.parent / "control-plane" / "buy.html").resolve()
-
-    @app.on_event("startup")
-    def _marketdata_startup_warm() -> None:
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
         try:
             _warm_marketdata_async(_marketdata_warm_symbols)
         except Exception as exc:  # noqa: BLE001
             logger.debug("marketdata warmup scheduling failed: %s", exc)
+        yield
+
+    app = FastAPI(
+        title="VVV Capacity Broker API",
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
+        lifespan=_lifespan,
+    )
+
+    _buy_html_path = (_Path2(__file__).resolve().parent.parent / "control-plane" / "buy.html").resolve()
 
     @app.get("/", include_in_schema=False)
     async def index() -> RedirectResponse:
@@ -2619,7 +2628,7 @@ try:
                         expires_at = _dt.utcfromtimestamp(int(time.time()) + 24 * 3600)
                         parent_key = (_os.getenv("VENICE_PARENT_KEY") or _os.getenv("VENICE_API_KEY") or "").strip()
                         if not parent_key:
-                            raise RuntimeError("Venice parent key not configured")
+                            raise HTTPException(status_code=503, detail="venice parent key not configured")
                         sub = keys.issue_scoped_key(
                             parent_key,
                             label=f"Buyer {buyer_norm[2:8]}...",
