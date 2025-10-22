@@ -11,6 +11,16 @@ from urllib.parse import urlencode
 import requests
 import time
 
+try:
+    from web3 import Web3  # type: ignore
+except Exception:  # pragma: no cover - optional dependency in tests
+    Web3 = None  # type: ignore[assignment]
+
+try:
+    from libs.agentkit_ext.web3_utils import get_web3  # type: ignore
+except Exception:  # pragma: no cover - optional dependency in tests
+    get_web3 = None  # type: ignore[assignment]
+
 
 ETHERSCAN_API_URL_DEFAULT = "https://api.etherscan.io/v2/api"
 
@@ -143,6 +153,25 @@ def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
     return data  # type: ignore[no-any-return]
 
 
+def _eth_call_fallback(to: str, data: str) -> Optional[str]:
+    if get_web3 is None or Web3 is None:
+        return None
+    try:
+        w3 = get_web3()
+        call = {
+            "to": Web3.to_checksum_address(to),
+            "data": data,
+        }
+        out = w3.eth.call(call)  # type: ignore[attr-defined]
+    except Exception:
+        return None
+    if isinstance(out, bytes):
+        return "0x" + out.hex()
+    if isinstance(out, str):
+        return out
+    return None
+
+
 def eth_call(to: str, data: str) -> Optional[str]:
     try:
         j = _es_get(
@@ -154,9 +183,12 @@ def eth_call(to: str, data: str) -> Optional[str]:
                 "tag": "latest",
             }
         )
-        return str(j.get("result")) if j and j.get("result") else None
+        result = j.get("result") if isinstance(j, dict) else None
+        if isinstance(result, str) and result.startswith("0x"):
+            return result
     except Exception:
-        return None
+        pass
+    return _eth_call_fallback(to, data)
 
 
 def get_pair(factory_addr: str, token_a: str, token_b: str) -> Optional[str]:
