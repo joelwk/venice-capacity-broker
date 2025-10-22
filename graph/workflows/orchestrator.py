@@ -721,16 +721,20 @@ class SingleLoopOrchestrator:
         status_ok = (stake or {}).get("status") == "ok"
         allow_missing = _env_flag("STAKEMASTER_PROGRESSIVE_ALLOW_NO_HEARTBEAT", False)
         tolerate_error = heartbeat_error in {"venice_client_unavailable"}
-        treat_as_success = heartbeat_sent and status_ok
-        if not treat_as_success and status_ok and forced_heartbeat and allow_missing and tolerate_error:
-            treat_as_success = True
-            try:
-                logger.info(
-                    "progressive heartbeat bypass",
-                    extra={"reason": heartbeat_error, "counter": int(state.get("counter", 0)) + 1},
-                )
-            except Exception:
-                pass
+
+        treat_as_success = False
+        if status_ok:
+            if heartbeat_sent or not forced_heartbeat:
+                treat_as_success = True
+            elif forced_heartbeat and allow_missing and tolerate_error:
+                treat_as_success = True
+                try:
+                    logger.info(
+                        "progressive heartbeat bypass",
+                        extra={"reason": heartbeat_error, "counter": int(state.get("counter", 0)) + 1},
+                    )
+                except Exception:
+                    pass
         if treat_as_success:
             state["counter"] = int(state.get("counter", 0)) + 1
         else:
