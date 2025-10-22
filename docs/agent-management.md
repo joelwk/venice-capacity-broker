@@ -104,28 +104,29 @@ This guide catalogs the production agents that operate the Venice Capacity Broke
 - CLI: `uv run python apps/cli/main.py run:loop --sleep 15 --max-cycles 0` (add `--enable-live`).
 - Automation: `make run-stack` (default dry-run) with `AUTOSTART_ORCHESTRATOR_LIVE=1` to enable on-chain actions.
 
-## Quorum Coordinator (Staged)
+## Quorum Coordinator
 
-**Role**: Aggregates votes from Yield, Arbitrage, Risk, Demand, and Treasury models to govern higher-risk actions.
+**Role**: Aggregates votes from Yield, Arbitrage, Risk, Demand, and Treasury models before ArbiDiem can execute live trades.
 
 **Expected value**
 - Adds a policy layer above ArbiDiem and future agents to prevent unilateral risky decisions.
 - Enables adaptive listen intervals (shorten during volatility, lengthen during calm conditions).
 
-**Core functionality** *(targeted for post-v1 enhancement)*
+**Core functionality**
 - Collects weighted votes from model agents; defaults to hold when support is insufficient.
-- Provides vetoes when `RiskModel` signals hazards.
-- Exposes hooks that the single-loop orchestrator can call before executing live actions.
+- Provides vetoes when `RiskModel` signals hazards by pushing `reflex` and price guard alerts into the vote.
+- Exposes hooks that the single-loop orchestrator now calls before executing live actions (`agents.quorum.coordinator.QuorumCoordinator`).
 
 **Configuration requirements**
-- Model registration (Yield/Arb/Risk/Demand/Treasury) with assigned weights.
-- Threshold definitions per action type.
-- Optional escalation hooks for human-in-the-loop overrides.
+- `QUORUM_ENABLE` toggles the coordinator inside `apps/cli/main.py run:loop`.
+- Adjust weights and thresholds via `QUORUM_THRESHOLD`, `QUORUM_WEIGHT_*`, `QUORUM_INCLUDE_TREASURY`, and model-specific envs (`QUORUM_ARB_MIN_PREMIUM`, `QUORUM_RISK_MAX_VOL_BPS`, etc.).
+- Optional escalation hooks for human-in-the-loop overrides remain future work.
 
 **Current status**
-- `agents/quorum/core.py` implements foundational quorum voting logic; integration into the live loop is slated for Sprint 4 per `implementation-plan-agents.md`.
+- `build_default_coordinator()` wires the coordinator into the single-loop orchestrator with context updates for price, premium, reflex reasons, capacity usage, and inventory telemetry.
+- Risk vetoes now carry heavier weight (default 2.0) so `ReflexGuardian` halts propagate through the vote.
 
-## AI Treasurer (Staged)
+## AI Treasurer
 
 **Role**: Manages treasury allocations of VVV and DIEM to buffer demand and optimize surplus deployment.
 
@@ -133,10 +134,10 @@ This guide catalogs the production agents that operate the Venice Capacity Broke
 - Ensures the broker maintains ~1.5× daily DIEM coverage for tenant workloads.
 - Automates conversions between treasury assets and DIEM rentals once guardrails are in place.
 
-**Core functionality** *(targeted for post-v1 enhancement)*
-- Calculates required delta between current holdings and target buffer (`agents/ai_treasurer/agent.py`).
-- Plans buy/sell flows to top up or offload inventory.
-- Coordinates with CapacityBroker for DIEM rental strategies.
+**Core functionality**
+- Calculates the required delta between current holdings and the buffer target via `agents/ai_treasurer/agent.py`.
+- Produces acquire/hold/release guidance that the orchestrator records per cycle (`treasury` block in `run_cycle` output).
+- Coordinates with CapacityBroker for DIEM rental strategies once execution hooks are authorised.
 
 **Configuration requirements**
 - Treasury policy parameters (buffer days, min/max holdings).
@@ -144,7 +145,8 @@ This guide catalogs the production agents that operate the Venice Capacity Broke
 - Safeguards for human approval before executing large treasury moves.
 
 **Current status**
-- Analytics-only helper in v1; execution paths and guardrails will arrive with Sprint 4 per the implementation plan.
+- Live in analytics mode: guidance is logged each cycle and feeds reflection/memory without triggering on-chain moves.
+- Execution paths and guardrails will arrive after treasury risk reviews conclude.
 
 ---
 

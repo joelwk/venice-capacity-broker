@@ -24,6 +24,15 @@ class StakingService:
     def claim(self) -> Dict[str, Any]:
         return self.actions.claim()
 
+    def estimate_claim_cost(self) -> Optional[Dict[str, Any]]:
+        estimator = getattr(self.actions, "estimate_claim_cost", None)
+        if estimator is None:
+            return None
+        try:
+            return estimator()
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"claim_cost_estimate_failed:{exc}") from exc
+
     def unstake(self, amount: int) -> Dict[str, Any]:
         return self.actions.unstake(amount)
 

@@ -240,7 +240,7 @@ Follow the sprint plan outlined in the implementation document:
 
 ## Next actions
 
-- Finalise quorum coordinator integration while preserving the single-loop default.
+- Monitor quorum vote telemetry and tune weights now that the coordinator is embedded in the single-loop default.
 
 - Backfill unit tests for the new guardian heuristics and key revocation flows.
 

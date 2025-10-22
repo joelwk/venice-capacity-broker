@@ -474,9 +474,15 @@ def cmd_run_stakemaster(args: argparse.Namespace) -> None:
     from services.staking.client import StakingService
     from libs.agentkit_ext.actions import VVVActions
     from agents.stake_master.agent import StakeMaster
+    from services.marketdata.provider import MarketDataProvider
 
     stake = StakingService(VVVActions())
-    agent = StakeMaster(stake)
+    try:
+        market = MarketDataProvider()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Market data unavailable for StakeMaster valuation: {exc}")
+        market = None
+    agent = StakeMaster(stake, market=market)
     agent.run_once(live=getattr(args, "enable_live", False))
 
 
@@ -498,6 +504,8 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     from services.venice_keys.manager import KeyManager
     from libs.venice_sdk.client import VeniceClient
     from agents.capacity_broker.agent import CapacityBroker
+    from agents.ai_treasurer.agent import AITreasurer
+    from agents.quorum import build_default_coordinator
     from services.memory import MemoryStore, ReflectionEngine
     from agents.reflex.guardian import ReflexGuardian
     from graph.workflows.orchestrator import SingleLoopOrchestrator
@@ -517,17 +525,19 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         if missing_env:
             raise SystemExit(2)
 
+    market = MarketDataProvider()
     try:
-        stake_agent = StakeMaster(StakingService(VVVActions()))
+        stake_agent = StakeMaster(StakingService(VVVActions()), market=market)
     except (EnvironmentError, RuntimeError) as exc:
         logger.error(f"StakeMaster startup failed: {exc}")
         raise SystemExit(2) from exc
     aggregator = build_aggregator_from_env() if live_target else None
-    market = MarketDataProvider()
     diem_service = DIEMService(aggregator, market_data=market)
     arbi_agent = ArbiDiem(diem_service, market=market)
     key_manager = KeyManager(VeniceClient())
     capacity_agent = CapacityBroker(key_manager)
+    ai_treasurer = AITreasurer()
+    quorum = build_default_coordinator() if _env_flag("QUORUM_ENABLE", True) else None
 
     memory_store = MemoryStore()
     reflection = ReflectionEngine()
@@ -541,6 +551,8 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         arbi=arbi_agent,
         capacity_broker=capacity_agent,
         market=market,
+        quorum=quorum,
+        ai_treasurer=ai_treasurer,
         parent_key=os.getenv("VENICE_API_KEY"),
         memory_store=memory_store,
         reflection=reflection,

@@ -217,25 +217,29 @@ uv run python apps/cli/main.py venice:keys:cleanup --prefix T1 --dry-run
 
 This is the **inventory failsafe** documented in the implementation plan.
 
-### 4) Quorum coordinator *(post-v1 wiring, optional in v1 loop)*
+### 4) Quorum coordinator *(active in v1 loop)*
 
-Aggregate votes from YieldModel, ArbModel, RiskModel, and DemandModel.
+Aggregate votes from YieldModel, ArbModel, RiskModel, DemandModel, and optional TreasuryModel before ArbiDiem executes live trades.
 
-Weight signals and act only when a confidence threshold is cleared; otherwise hold.
+Feed premium, volatility, utilization, reflex status, and prior capacity usage into the quorum so risk vetoes propagate through the single-loop orchestrator.
 
-Shorten listen interval during high volatility or strong signals.
+Default weights ship via `build_default_coordinator()` and can be tuned with `QUORUM_ENABLE`, `QUORUM_THRESHOLD`, and `QUORUM_WEIGHT_*`.
 
-### 5) AI Treasurer *(placeholder for later phase)*
+RiskModel carries weight 2.0 by default and flips the decision when `ReflexGuardian` halts or price guards trip.
 
-Hold VVV/DIEM to guarantee compute for apps, keep ~1.5x average daily Diem as buffer, and reallocate surplus into rentals or DIEM sales.
+### 5) AI Treasurer *(analytics mode wired into loop)*
 
-Trigger purchases of VVV/DIEM on demand spikes and sell or rent excess when slack persists.
+Hold VVV/DIEM to guarantee compute for apps, keep ~1.5× average daily Diem as buffer, and reallocate surplus into rentals or DIEM sales.
+
+Single-loop orchestrator logs each cycle's acquire/hold/release guidance without auto-executing trades so operators can review before action.
+
+Future phases attach swap and mint hooks once treasury risk sign-off lands.
 
 ## Orchestrator loop (v1)
 
-The **single-loop orchestrator** initializes wallet, staking, keys, market-data, then runs: StakeMaster -> ArbiDiem -> CapacityBroker.
+The **single-loop orchestrator** initializes wallet, staking, keys, market-data, then runs: StakeMaster -> quorum-gated ArbiDiem -> CapacityBroker -> AI Treasurer guidance.
 
-Design the loop so a quorum coordinator can drop in later with minimal changes.
+Quorum coordinator now updates before any live ArbiDiem call, and the treasury block is recorded every cycle for downstream prompts.
 
 `agents/reflex/guardian.py` evaluates each cycle before ArbiDiem runs in live mode and halts execution when price drawdowns, volatility spikes, or inactive staking heartbeats show up.
 

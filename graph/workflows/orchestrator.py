@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from agents.quorum.models import QuorumContext
 from libs.telemetry.logger import get_logger
 from libs.telemetry.tracing import annotate_span
 
@@ -313,6 +314,7 @@ class SingleLoopOrchestrator:
 
     def __post_init__(self) -> None:
         self._last_listen_interval: Optional[float] = None
+        self._last_capacity_usage: Optional[Dict[str, Any]] = None
 
     def _dynamic_listen_enabled(self) -> bool:
         return _env_flag("ORCHESTRATOR_DYNAMIC_LISTEN", True)
@@ -354,6 +356,76 @@ class SingleLoopOrchestrator:
         interval = max(min_interval, min(max_interval, interval))
         self._last_listen_interval = interval
         return interval
+
+    def _update_quorum_context(
+        self,
+        *,
+        price: float,
+        mint_rate: float,
+        utilization_ratio: Optional[float],
+        vol_bps: Optional[float],
+        stake_result: Any,
+        rationale: Any,
+        reflex: Optional[Dict[str, Any]],
+        price_guard: Optional[Dict[str, Any]],
+        inventory_usd: Optional[float],
+        dry_run: bool,
+        live_mode: bool,
+        simulate_decision: bool,
+    ) -> None:
+        if self.quorum is None or not hasattr(self.quorum, "update"):
+            return
+        try:
+            premium: Optional[float] = None
+            suggested: Optional[int] = None
+            if isinstance(rationale, dict):
+                raw_premium = rationale.get("premium")
+                try:
+                    premium = float(raw_premium) if raw_premium is not None else None
+                except Exception:
+                    premium = None
+                raw_suggested = rationale.get("suggested_units")
+                try:
+                    suggested = int(raw_suggested) if raw_suggested is not None else None
+                except Exception:
+                    suggested = None
+            ctx = QuorumContext(
+                price=float(price),
+                mint_rate=float(mint_rate),
+                premium=premium,
+                suggested_units=suggested,
+                utilization_ratio=utilization_ratio,
+                vol_bps=vol_bps,
+                inventory_usd=inventory_usd,
+                stake=stake_result if isinstance(stake_result, dict) else None,
+                rationale=rationale if isinstance(rationale, dict) else None,
+                reflex=reflex if isinstance(reflex, dict) else reflex,
+                price_guard=price_guard if isinstance(price_guard, dict) else None,
+                capacity_usage=self._last_capacity_usage if isinstance(self._last_capacity_usage, dict) else None,
+                dry_run=dry_run,
+                live_mode=live_mode,
+                simulate_decision=bool(simulate_decision),
+            )
+            self.quorum.update(ctx)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            try:
+                logger.debug(f"Quorum context update failed: {exc}")
+            except Exception:
+                pass
+
+    def _capture_capacity_usage(self, summary: Any) -> None:
+        if not isinstance(summary, dict):
+            return
+        usage = summary.get("usage")
+        if isinstance(usage, dict):
+            self._last_capacity_usage = usage
+        elif usage is None:
+            return
+        else:
+            try:
+                self._last_capacity_usage = {"data": usage}
+            except Exception:
+                self._last_capacity_usage = None
 
     def _summarize_capacity(self, cap_summary: Any) -> Dict[str, Any]:
         if not isinstance(cap_summary, dict):
@@ -983,6 +1055,22 @@ class SingleLoopOrchestrator:
                 execution_summary = {"status": "reflex_halt", "executed": False}
         else:
             if skip_due_to_price:
+                guard_rationale = getattr(self.arbi, "_last_rationale", None)
+                guard_payload = price_guard_why if isinstance(price_guard_why, dict) else {"status": "price_guard"}
+                self._update_quorum_context(
+                    price=px,
+                    mint_rate=effective_mint_rate,
+                    utilization_ratio=utilization_ratio,
+                    vol_bps=vol_bps,
+                    stake_result=stake_result,
+                    rationale=guard_rationale,
+                    reflex=reflex_info,
+                    price_guard=guard_payload,
+                    inventory_usd=current_inventory_usd,
+                    dry_run=dry_run,
+                    live_mode=live_mode,
+                    simulate_decision=signal_decision,
+                )
                 execution_summary = {"status": "price_guard", "executed": False}
                 signal_decision = False
                 executed_decision = False
@@ -1001,8 +1089,23 @@ class SingleLoopOrchestrator:
                 except Exception:
                     sim_result = px > 0
                 signal_decision = bool(sim_result)
+                arbi_rationale = getattr(self.arbi, "_last_rationale", None)
 
                 if signal_decision and live_mode:
+                    self._update_quorum_context(
+                        price=px,
+                        mint_rate=effective_mint_rate,
+                        utilization_ratio=utilization_ratio,
+                        vol_bps=vol_bps,
+                        stake_result=stake_result,
+                        rationale=arbi_rationale,
+                        reflex=reflex_info,
+                        price_guard=None,
+                        inventory_usd=current_inventory_usd,
+                        dry_run=dry_run,
+                        live_mode=live_mode,
+                        simulate_decision=signal_decision,
+                    )
                     quorum_allowed = True
                     if self.quorum is not None:
                         try:
@@ -1040,6 +1143,20 @@ class SingleLoopOrchestrator:
                         execution_summary = {"status": quorum_info.get("status", "blocked"), "executed": False}
                         executed_decision = False
                 elif signal_decision:
+                    self._update_quorum_context(
+                        price=px,
+                        mint_rate=effective_mint_rate,
+                        utilization_ratio=utilization_ratio,
+                        vol_bps=vol_bps,
+                        stake_result=stake_result,
+                        rationale=arbi_rationale,
+                        reflex=reflex_info,
+                        price_guard=None,
+                        inventory_usd=current_inventory_usd,
+                        dry_run=dry_run,
+                        live_mode=live_mode,
+                        simulate_decision=signal_decision,
+                    )
                     execution_summary = {"status": "dry_run", "executed": False}
 
         if reflex_blocked:
@@ -1119,6 +1236,7 @@ class SingleLoopOrchestrator:
             cap_summary = self.capacity_broker.run_once(parent_key=self.parent_key)
         except Exception as exc:  # noqa: BLE001
             cap_summary = {"status": "error", "error": str(exc)}
+        self._capture_capacity_usage(cap_summary)
 
         treasury_plan = None
         if isinstance(cap_summary, dict):

@@ -130,13 +130,93 @@ class VVVActions:
         return {"status": "sent", "action": "stake", "tx_hash": tx_hash}
 
     def claim(self) -> Dict[str, Any]:
-        data = encode_contract_call(
-            self.staking,
-            os.getenv("VVV_CLAIM_FN", "claim"),
-            [],
-        )
+        fn_name = os.getenv("VVV_CLAIM_FN", "claim")
+        data = encode_contract_call(self.staking, fn_name, [])
         tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
         return {"status": "sent", "action": "claim", "tx_hash": tx_hash}
+
+    def estimate_claim_cost(self) -> Dict[str, int]:
+        fn_name = os.getenv("VVV_CLAIM_FN", "claim")
+        data = encode_contract_call(self.staking, fn_name, [])
+        wallet = Web3.to_checksum_address(get_address())
+        tx = {
+            "from": wallet,
+            "to": Web3.to_checksum_address(self.staking_addr),
+            "data": data,
+        }
+
+        try:
+            gas = int(self.w3.eth.estimate_gas(tx))
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"claim_gas_estimate_failed:{exc}") from exc
+
+        def _env_int(name: str) -> int | None:
+            raw = os.getenv(name)
+            if raw is None or str(raw).strip() == "":
+                return None
+            try:
+                return int(str(raw), 0)
+            except Exception:
+                try:
+                    return int(float(str(raw)))
+                except Exception:
+                    return None
+
+        base_fee = None
+        try:
+            block = self.w3.eth.get_block("latest")
+            candidate = block.get("baseFeePerGas") if isinstance(block, dict) else getattr(block, "baseFeePerGas", None)
+            if candidate is not None:
+                base_fee = int(candidate)
+        except Exception:  # noqa: BLE001
+            base_fee = None
+
+        priority_fee = _env_int("STAKEMASTER_PRIORITY_FEE_WEI")
+        if priority_fee is None:
+            try:
+                priority_fee_attr = getattr(self.w3.eth, "max_priority_fee", None)
+                if priority_fee_attr is not None:
+                    priority_fee = int(priority_fee_attr)
+            except Exception:
+                priority_fee = None
+        if priority_fee is None:
+            try:
+                priority_fee = int(Web3.to_wei(1, "gwei"))
+            except Exception:
+                priority_fee = int(1_000_000_000)
+
+        effective_price = None
+        if base_fee is not None and priority_fee is not None:
+            effective_price = base_fee + priority_fee
+        try:
+            gas_price = int(self.w3.eth.gas_price)
+        except Exception:
+            gas_price = None
+        if effective_price is None:
+            effective_price = gas_price
+        elif gas_price is not None:
+            effective_price = max(effective_price, gas_price)
+
+        max_fee_per_gas = None
+        if base_fee is not None and priority_fee is not None:
+            max_fee_per_gas = base_fee * 2 + priority_fee
+
+        fee_wei = None
+        if effective_price is not None:
+            fee_wei = int(effective_price) * gas if gas else None
+
+        estimate: Dict[str, int] = {"gas": gas}
+        if effective_price is not None:
+            estimate["effective_gas_price"] = int(effective_price)
+        if fee_wei is not None:
+            estimate["fee_wei"] = int(fee_wei)
+        if base_fee is not None:
+            estimate["base_fee_per_gas"] = int(base_fee)
+        if priority_fee is not None:
+            estimate["priority_fee_per_gas"] = int(priority_fee)
+        if max_fee_per_gas is not None:
+            estimate["max_fee_per_gas"] = int(max_fee_per_gas)
+        return estimate
 
     def unstake(self, amount: int) -> Dict[str, Any]:
         fn = os.getenv("VVV_UNSTAKE_FN", "initiateUnstake")
