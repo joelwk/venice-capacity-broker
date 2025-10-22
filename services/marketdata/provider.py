@@ -322,6 +322,31 @@ class MarketDataProvider:
         with self._external_price_lock:
             self._external_price_cache.pop(key, None)
 
+    def _price_sanity_prefer_internal(
+        self,
+        symbol: str,
+        price: Optional[float],
+        external_price: float,
+        diff: float,
+    ) -> bool:
+        """Allow operators to force internal pricing when clamps fire."""
+        flag = os.getenv("MARKETDATA_SANITY_CLAMP_INTERNAL")
+        if flag:
+            flag_norm = str(flag).strip().lower()
+            if flag_norm in {"1", "true", "yes", "on"}:
+                return True
+            if flag_norm in {"0", "false", "no", "off"}:
+                return False
+        symbol_whitelist = os.getenv("MARKETDATA_SANITY_CLAMP_INTERNAL_SYMBOLS")
+        if symbol_whitelist:
+            try:
+                symbols = {token.strip().upper() for token in symbol_whitelist.split(",") if token.strip()}
+            except Exception:
+                symbols = set()
+            if symbols:
+                return (symbol or "").upper() in symbols
+        return False
+
     def _price_sanity_threshold(self) -> float:
         try:
             raw_candidates = (
@@ -502,17 +527,16 @@ class MarketDataProvider:
             evt = _store_event("drift", diff, threshold)
             _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
             breakdown = self._price_breakdown(label)
-            fallback_price = None
             fallback_source = "external"
-            if self._valid_price(price):
+            fallback_price = float(ext_price)
+            prefer_internal = self._price_sanity_prefer_internal(label, price, ext_price, diff)
+            if prefer_internal and self._valid_price(price):
                 try:
                     fallback_price = float(price)
                     fallback_source = "internal"
                 except Exception:
-                    fallback_price = None
-            if fallback_price is None:
-                fallback_price = float(ext_price)
-                fallback_source = "external"
+                    fallback_price = float(ext_price)
+                    fallback_source = "external"
             if breakdown:
                 path_str = self._format_path(breakdown.get("path"))
                 try:
