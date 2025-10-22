@@ -549,7 +549,8 @@ class MarketDataProvider:
             except Exception:
                 _logger.debug("trade path warm attempt failed", exc_info=True)
             try:
-                report = self.discover_trade_path(list(adjusted_plan.tokens))
+                fees: List[Optional[int]] = [hop.fee for hop in getattr(adjusted_plan, "hops", [])]
+                report = self.discover_trade_path(list(adjusted_plan.tokens), fees)
             except Exception:
                 _logger.debug("trade path verification failed", extra={"path": list(adjusted_plan.tokens)}, exc_info=True)
             else:
@@ -2549,14 +2550,14 @@ class MarketDataProvider:
         }
 
     # --- Etherscan v2 discovery helpers ---
-    def discover_trade_path(self, path: List[str]) -> Dict[str, Any]:
+    def discover_trade_path(self, path: List[str], fees: Optional[List[Optional[int]]] = None) -> Dict[str, Any]:
         """Return discovery report for the path using Etherscan v2 helpers.
 
         Wraps services.marketdata.etherscan_verify.verify_trade_path.
         """
         from services.marketdata.etherscan_verify import verify_trade_path  # lazy import
 
-        return verify_trade_path(path)
+        return verify_trade_path(path, fees)
 
     def reserve_cap_units(self, path: RouteLike, take_bps: Optional[int] = None) -> Optional[int]:
         """Estimate a conservative max input units based on pool reserves.

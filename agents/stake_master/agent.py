@@ -88,7 +88,30 @@ class StakeMaster:
                 stake_action["required"] = int(min_active_units)
             except Exception:
                 stake_action["required"] = min_active_units
-            if available_units is not None and int(available_units) < int(min_active_units):
+            if available_units is None:
+                try:
+                    logger.warning("Auto-stake skipped: unable to determine VVV balance")
+                except Exception:
+                    pass
+                stake_action.update({
+                    "attempted": False,
+                    "executed": False,
+                    "reason": "balance_unknown",
+                })
+                try:
+                    _emit_event(
+                        "staking.auto_stake",
+                        {
+                            "status": "skipped",
+                            "units": int(min_active_units),
+                            "reason": "balance_unknown",
+                        },
+                    )
+                except Exception:
+                    pass
+                self._auto_stake_attempted = True
+                self._auto_stake_attempts = max_attempts
+            elif int(available_units) < int(min_active_units):
                 available_int = int(available_units)
                 required_int = int(min_active_units)
                 logger.warning(
@@ -206,6 +229,12 @@ class StakeMaster:
                             message_lower = str(exc).lower()
                         except Exception:
                             message_lower = ""
+                        if "stake_estimate_failed" in message_lower or "panic error 0x11" in message_lower:
+                            attempt_reason = "insufficient_balance"
+                            stake_action["reason"] = attempt_reason
+                            stake_action["followup"] = "balance_shortfall"
+                            self._auto_stake_attempted = True
+                            self._auto_stake_attempts = max_attempts
                         if any(term in message_lower for term in ["nonce too low", "replacement transaction underpriced"]):
                             nonce_details = nonce_state or self._nonce_state()
                             if nonce_details:

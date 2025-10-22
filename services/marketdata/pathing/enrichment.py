@@ -239,8 +239,12 @@ def enrich_route(
                 exec_price = 0.0
             if exec_price > 0:
                 diff = abs(exec_price - approx_price) / approx_price
-                evaluation.quote["slippage_bps"] = diff * 10_000.0
+                diff_bps = diff * 10_000.0
+                evaluation.quote["slippage_bps"] = diff_bps
                 evaluation.quote["approx_price"] = approx_price
+                if diff > 0.05:
+                    evaluation.errors.append("aggregator_price_outlier")
+                    evaluation.quote = None
 
     # Build hop telemetry (verify path lazily)
     tokens = list(plan.tokens)
