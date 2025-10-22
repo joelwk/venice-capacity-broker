@@ -70,6 +70,10 @@ It supersedes prior drafts where details conflict, but **v1 scope and stop-lines
 
     Leave off in production unless chasing a data drift incident.
 
+* Price sanity clamps treat external DIEM spikes above five percent as drift and keep the internal quote.
+
+  Override that guard with `MARKETDATA_PRICE_SANITY_MAX_DRIFT` or `MARKETDATA_SANITY_THRESHOLD` when you must widen the window.
+
 
 
 ### DIEM & Risk configuration
@@ -166,7 +170,9 @@ Schedule unlocks respecting contract cooldown and stagger exits to avoid lumped 
 uv run python apps/cli/main.py run:stakemaster --enable-live
 ```
 
-**Notes** - Send emissions/cooldown telemetry and perform configurable heartbeat using `STAKEMASTER_HEARTBEAT_*` envs.
+**Notes** - Send heartbeat telemetry with `STAKEMASTER_HEARTBEAT_*` envs.
+
+Retries nonce conflicts by replaying the stake with bumped EIP-1559 fees via `STAKEMASTER_PRIORITY_FEE_WEI`, `STAKEMASTER_PRIORITY_FEE_BUMP_MULT`, `STAKEMASTER_PRIORITY_FEE_MIN_WEI`, and optional `STAKEMASTER_STAKE_GAS_LIMIT`.
 
 ### 2) ArbiDiem
 
@@ -189,6 +195,9 @@ uv run python apps/cli/main.py diem:burn <amountBaseUnits> [--dry-run]
 **Guards** - Slippage caps, pool-take caps, and reserved buyback budget limit short DIEM exposure when selling minted supply.
 
 Lock/unlock hooks are configurable via DIEM_* envs.
+
+Exact-out previews now report the hop venues so `trade path verification empty` points at a real liquidity gap rather than missing instrumentation.
+
 
 ### 3) CapacityBroker
 

@@ -96,7 +96,27 @@ def get_agentkit_wallet() -> Tuple[object, str]:
     return EthAccountWalletProvider(cfg), "eth"
 
 
-def send_tx(to: str, data: Optional[bytes] = None, value: int = 0) -> str:
+def _normalize_gas_overrides(overrides: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not overrides:
+        return {}
+    normalized: dict[str, Any] = {}
+    for key, raw_value in overrides.items():
+        if raw_value is None:
+            continue
+        try:
+            normalized[key] = int(raw_value)
+        except Exception:
+            normalized[key] = raw_value
+    return normalized
+
+
+def send_tx(
+    to: str,
+    data: Optional[bytes] = None,
+    value: int = 0,
+    *,
+    gas_overrides: Optional[dict[str, Any]] = None,
+) -> str:
     """Send a transaction via the active AgentKit wallet provider.
 
     Returns a transaction hash hex string.
@@ -106,6 +126,9 @@ def send_tx(to: str, data: Optional[bytes] = None, value: int = 0) -> str:
     if data:
         # web3.py provider expects hex str or bytes; AgentKit SmartWallet expects bytes/hex
         tx["data"] = data
+    overrides = _normalize_gas_overrides(gas_overrides)
+    if overrides:
+        tx.update(overrides)
     # coinbase-agentkit providers expose send_transaction
     return provider.send_transaction(tx)  # type: ignore[attr-defined]
 

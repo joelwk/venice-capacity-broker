@@ -96,6 +96,9 @@ class MarketDataProvider:
     _warm_thread_lock = Lock()
     _warm_thread_started: bool = False
     _warm_thread_logged: bool = False
+    _warm_thread_ref: Optional[weakref.ReferenceType[Thread]] = None
+    _warm_thread_pid: Optional[int] = None
+    _warm_thread_log_pid: Optional[int] = None
     _warm_symbols: Tuple[str, ...] = ()
     _warm_interval_seconds: float = 0.0
     _last_prices_latency: float = 0.0
@@ -314,6 +317,11 @@ class MarketDataProvider:
         except Exception:
             return 30.0
 
+    def _purge_external_price(self, symbol: str) -> None:
+        key = self._price_cache_key(symbol)
+        with self._external_price_lock:
+            self._external_price_cache.pop(key, None)
+
     def _price_sanity_threshold(self) -> float:
         try:
             raw_candidates = (
@@ -321,7 +329,7 @@ class MarketDataProvider:
                 os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT"),
                 os.getenv("MARKETDATA_PRICE_SANITY_MAX_DRIFT_PCT"),
             )
-            default_threshold = 0.15
+            default_threshold = 0.05
             val: Optional[float] = None
             for raw in raw_candidates:
                 if raw is None or str(raw).strip() == "":
@@ -494,6 +502,17 @@ class MarketDataProvider:
             evt = _store_event("drift", diff, threshold)
             _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
             breakdown = self._price_breakdown(label)
+            fallback_price = None
+            fallback_source = "external"
+            if self._valid_price(price):
+                try:
+                    fallback_price = float(price)
+                    fallback_source = "internal"
+                except Exception:
+                    fallback_price = None
+            if fallback_price is None:
+                fallback_price = float(ext_price)
+                fallback_source = "external"
             if breakdown:
                 path_str = self._format_path(breakdown.get("path"))
                 try:
@@ -509,7 +528,9 @@ class MarketDataProvider:
                     pass
                 evt["price_source"] = breakdown
             if _debug_sanity_enabled():
-                _logger.info("price sanity debug clamp symbol=%s event=%s", label, evt)
+                _logger.info("price sanity debug clamp symbol=%s event=%s fallback=%s", label, evt, fallback_source)
+            if fallback_source == "internal":
+                self._purge_external_price(symbol)
             type(self)._record_price_clamp(
                 label,
                 "drift",
@@ -518,10 +539,11 @@ class MarketDataProvider:
                     "threshold": float(threshold),
                     "external_price": float(ext_price),
                     "internal_price": float(price),
+                    "fallback": fallback_source,
                 },
             )
-            type(self)._record_price_source(label, "external_clamp", {"valid": True})
-            return float(ext_price)
+            type(self)._record_price_source(label, "external_clamp", {"valid": True, "fallback": fallback_source})
+            return float(fallback_price)
         return float(price)
 
     def _validate_trade_paths(self) -> None:
@@ -556,18 +578,32 @@ class MarketDataProvider:
             else:
                 if isinstance(report, dict):
                     hops = report.get("hops") or []
-                    pairs = []
+                    venues: List[str] = []
                     for hop in hops:
-                        uv2 = (hop or {}).get("uniswap_v2") or {}
+                        hop_map = hop or {}
+                        uv2 = hop_map.get("uniswap_v2") or {}
                         pair_addr = uv2.get("pair")
                         if pair_addr:
-                            pairs.append(str(pair_addr))
-                    if pairs:
-                        _logger.info("trade path verified", extra={"path": list(adjusted_plan.tokens), "pairs": pairs})
+                            venues.append(f"uniswap_v2:{pair_addr}")
+                        for venue_key in ("aerodrome_vol", "aerodrome_stable"):
+                            venue = hop_map.get(venue_key) or {}
+                            venue_pair = venue.get("pair")
+                            if venue_pair:
+                                venues.append(f"{venue_key}:{venue_pair}")
+                        uv3 = hop_map.get("uniswap_v3") or {}
+                        pool_addr = uv3.get("pool")
+                        if pool_addr:
+                            fee = uv3.get("fee")
+                            venues.append(f"uniswap_v3:{pool_addr}@{fee}" if fee is not None else f"uniswap_v3:{pool_addr}")
+                    if venues:
+                        _logger.info("trade path verified", extra={"path": list(adjusted_plan.tokens), "venues": venues})
                     else:
-                        _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens)})
+                        _logger.warning(
+                            "trade path verification empty",
+                            extra={"path": list(adjusted_plan.tokens), "report": report},
+                        )
                 else:
-                    _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens)})
+                    _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens), "report": report})
 
     def _check_wbtc_configuration(self) -> None:
         try:
@@ -939,8 +975,13 @@ class MarketDataProvider:
         if interval < 0:
             interval = 0.0
         with cls._warm_thread_lock:
+            current_pid = os.getpid()
             if cls._warm_thread_started:
-                return
+                existing_thread = cls._warm_thread_ref() if cls._warm_thread_ref else None  # type: ignore[arg-type]
+                if existing_thread is not None and existing_thread.is_alive():
+                    return
+                cls._warm_thread_started = False
+                cls._warm_thread_ref = None
             cls._warm_thread_started = True
             cls._warm_symbols = symbols
             cls._warm_interval_seconds = interval
@@ -958,12 +999,16 @@ class MarketDataProvider:
                     _logger.warning("marketdata warm loop failed", exc_info=True)
             thread = Thread(target=_runner, name="marketdata-warm-cache", daemon=True)
             thread.start()
-            if not cls._warm_thread_logged:
-                try:
-                    _logger.info("marketdata warm cache thread started", extra={"symbols": list(symbols), "interval": interval})
-                except Exception:
-                    pass
-                cls._warm_thread_logged = True
+            cls._warm_thread_ref = weakref.ref(thread)
+            cls._warm_thread_pid = current_pid
+            restart = bool(cls._warm_thread_logged and cls._warm_thread_log_pid == current_pid)
+            cls._warm_thread_logged = True
+            cls._warm_thread_log_pid = current_pid
+            log_message = "marketdata warm cache thread restarted" if restart else "marketdata warm cache thread started"
+            try:
+                _logger.info(log_message, extra={"symbols": list(symbols), "interval": interval, "pid": current_pid})
+            except Exception:
+                pass
 
     def _warm_loop(self) -> None:
         cls = type(self)

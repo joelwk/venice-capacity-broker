@@ -122,11 +122,11 @@ class VVVActions:
             return [int(amount)]
         return args
 
-    def stake(self, amount: int) -> Dict[str, Any]:
+    def stake(self, amount: int, *, gas_overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
         fn_name = os.getenv("VVV_STAKE_FN", "stake")
         args = self._build_staking_args(fn_name, amount)
         data = self._encode_staking_transaction(fn_name, args)
-        tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]))
+        tx_hash = send_tx(self.staking_addr, bytes.fromhex(data[2:]), gas_overrides=gas_overrides)
         return {"status": "sent", "action": "stake", "tx_hash": tx_hash}
 
     def claim(self) -> Dict[str, Any]:

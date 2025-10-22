@@ -229,33 +229,79 @@ class StakeMaster:
                             message_lower = str(exc).lower()
                         except Exception:
                             message_lower = ""
+                        recovery_tx: Optional[Dict[str, Any]] = None
+                        recovery_error: Optional[Exception] = None
+                        nonce_details: Optional[Dict[str, int]] = None
                         if "stake_estimate_failed" in message_lower or "panic error 0x11" in message_lower:
                             attempt_reason = "insufficient_balance"
                             stake_action["reason"] = attempt_reason
                             stake_action["followup"] = "balance_shortfall"
                             self._auto_stake_attempted = True
                             self._auto_stake_attempts = max_attempts
-                        if any(term in message_lower for term in ["nonce too low", "replacement transaction underpriced"]):
+                        nonce_issue = any(term in message_lower for term in ["nonce too low", "replacement transaction underpriced"])
+                        if nonce_issue:
                             nonce_details = nonce_state or self._nonce_state()
                             if nonce_details:
                                 stake_action["nonce"] = nonce_details
-                            stake_action["followup"] = "nonce_conflict"
-                            self._auto_stake_attempted = True
-                            self._auto_stake_attempts = max_attempts
-                        _emit_event(
-                            "staking.auto_stake",
-                            {
-                                "status": "error",
-                                "units": int(min_active_units),
-                                "error": str(exc),
-                                "attempt": self._auto_stake_attempts,
-                                "max_attempts": max_attempts,
-                            },
-                        )
-                        if self._auto_stake_attempts >= max_attempts:
-                            self._auto_stake_attempted = True
-                        else:
-                            self._auto_stake_attempted = False
+                            try:
+                                recovery_tx = self._retry_stake_with_gas_bump(int(min_active_units), nonce_state=nonce_details)
+                            except Exception as retry_exc:  # noqa: BLE001
+                                recovery_error = retry_exc
+                                recovery_tx = None
+                            if recovery_tx:
+                                stake_action.update({
+                                    "executed": True,
+                                    "tx": recovery_tx,
+                                    "reason": "auto_stake_retry",
+                                    "followup": "nonce_recovered",
+                                    "attempts": self._auto_stake_attempts,
+                                })
+                                self._auto_stake_attempted = True
+                                self._auto_stake_attempts = max_attempts
+                                try:
+                                    logger.info(
+                                        "Auto-stake nonce recovery succeeded",
+                                        extra={
+                                            "nonce_latest": (nonce_details or {}).get("latest") if nonce_details else None,
+                                            "nonce_pending": (nonce_details or {}).get("pending") if nonce_details else None,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
+                                try:
+                                    _emit_event(
+                                        "staking.auto_stake",
+                                        {
+                                            "status": "recovered",
+                                            "units": int(min_active_units),
+                                            "nonce": nonce_details,
+                                        },
+                                    )
+                                except Exception:
+                                    pass
+                                status = self.staking.status()
+                                staked_units = int(status.get("staked", staked_units))
+                            else:
+                                stake_action["followup"] = "nonce_conflict"
+                                self._auto_stake_attempted = True
+                                self._auto_stake_attempts = max_attempts
+                                if recovery_error is not None:
+                                    stake_action["retry_error"] = str(recovery_error)
+                        if recovery_tx is None:
+                            _emit_event(
+                                "staking.auto_stake",
+                                {
+                                    "status": "error",
+                                    "units": int(min_active_units),
+                                    "error": str(exc),
+                                    "attempt": self._auto_stake_attempts,
+                                    "max_attempts": max_attempts,
+                                },
+                            )
+                            if self._auto_stake_attempts >= max_attempts:
+                                self._auto_stake_attempted = True
+                            else:
+                                self._auto_stake_attempted = False
 
         elif live and progressive_env and staked_units <= 0 and min_active_units > 0:
             stake_action.update({
@@ -596,6 +642,105 @@ class StakeMaster:
             except Exception:
                 pass
             return None
+
+    def _priority_fee_target(self, w3) -> int:
+        env_value = os.getenv("STAKEMASTER_PRIORITY_FEE_WEI")
+        candidate: Optional[int] = None
+        if env_value and env_value.strip():
+            try:
+                candidate = int(env_value, 0)
+            except Exception:
+                try:
+                    candidate = int(float(env_value))
+                except Exception:
+                    candidate = None
+        if candidate is None:
+            try:
+                priority_attr = getattr(w3.eth, "max_priority_fee", None)
+                if priority_attr is not None:
+                    candidate = int(priority_attr)
+            except Exception:
+                candidate = None
+        if candidate is None:
+            try:
+                candidate = int(w3.to_wei(1, "gwei"))
+            except Exception:
+                candidate = 1_000_000_000
+        multiplier = 1.5
+        bump_env = os.getenv("STAKEMASTER_PRIORITY_FEE_BUMP_MULT")
+        if bump_env:
+            try:
+                mul = float(bump_env)
+                if mul > 1.0:
+                    multiplier = mul
+            except Exception:
+                pass
+        min_env = os.getenv("STAKEMASTER_PRIORITY_FEE_MIN_WEI")
+        min_priority = None
+        if min_env and min_env.strip():
+            try:
+                min_priority = int(min_env, 0)
+            except Exception:
+                try:
+                    min_priority = int(float(min_env))
+                except Exception:
+                    min_priority = None
+        bumped = int(candidate * multiplier)
+        if bumped <= candidate:
+            bumped = candidate + 1_000_000_000
+        if min_priority is not None and bumped < min_priority:
+            bumped = int(min_priority)
+        return max(candidate, bumped)
+
+    def _build_gas_overrides(self, w3, nonce: int) -> Dict[str, int]:
+        overrides: Dict[str, int] = {"nonce": int(nonce)}
+        base_fee = None
+        try:
+            block = w3.eth.get_block("latest")
+            base_fee = block.get("baseFeePerGas") if isinstance(block, dict) else getattr(block, "baseFeePerGas", None)
+            if base_fee is not None:
+                base_fee = int(base_fee)
+        except Exception:
+            base_fee = None
+        priority_fee = self._priority_fee_target(w3)
+        overrides["maxPriorityFeePerGas"] = int(priority_fee)
+        if base_fee is not None:
+            max_fee = int(base_fee) * 2 + int(priority_fee)
+        else:
+            max_fee = int(priority_fee) * 2
+        overrides["maxFeePerGas"] = max_fee
+        gas_limit_env = os.getenv("STAKEMASTER_STAKE_GAS_LIMIT")
+        if gas_limit_env:
+            try:
+                overrides["gas"] = int(gas_limit_env, 0)
+            except Exception:
+                try:
+                    overrides["gas"] = int(float(gas_limit_env))
+                except Exception:
+                    pass
+        overrides["type"] = 2
+        return overrides
+
+    def _retry_stake_with_gas_bump(
+        self,
+        units: int,
+        *,
+        nonce_state: Optional[Dict[str, int]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        actions = getattr(self.staking, "actions", None)
+        if actions is None:
+            return None
+        w3 = getattr(actions, "w3", None)
+        if w3 is None:
+            return None
+        state = nonce_state or self._nonce_state()
+        if not state:
+            return None
+        latest = int(state.get("latest", 0))
+        pending = int(state.get("pending", latest))
+        nonce = max(latest, pending)
+        overrides = self._build_gas_overrides(w3, nonce)
+        return self.staking.stake(int(units), gas_overrides=overrides)
 
     def _nonce_state(self) -> Optional[Dict[str, int]]:
         actions = getattr(self.staking, "actions", None)

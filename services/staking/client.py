@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Sequence, Tuple
+from threading import Lock
 
 from libs.agentkit_ext.actions import VVVActions
 from libs.agentkit_ext.agentkit_wallet import get_address
@@ -19,12 +20,13 @@ class StakingService:
     """Wrapper around staking actions (replace with on-chain calls)."""
 
     actions: VVVActions
+    _status_lock: Lock = field(default_factory=Lock, init=False, repr=False)
 
     def approve(self, amount: int) -> Dict[str, Any]:
         return self.actions.approve(amount)
 
-    def stake(self, amount: int) -> Dict[str, Any]:
-        return self.actions.stake(amount)
+    def stake(self, amount: int, *, gas_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self.actions.stake(amount, gas_overrides=gas_overrides)
 
     def claim(self) -> Dict[str, Any]:
         return self.actions.claim()
@@ -52,59 +54,60 @@ class StakingService:
         if Web3 is None:
             raise RuntimeError("web3 library not available; staking status requires web3")
 
-        w3 = self.actions.w3
-        staking_addr = Web3.to_checksum_address(self.actions.staking.address)  # type: ignore[attr-defined]
-        wallet = Web3.to_checksum_address(get_address())
+        with self._status_lock:
+            w3 = self.actions.w3
+            staking_addr = Web3.to_checksum_address(self.actions.staking.address)  # type: ignore[attr-defined]
+            wallet = Web3.to_checksum_address(get_address())
 
-        addr_arg = bytes.fromhex(wallet[2:])
+            addr_arg = bytes.fromhex(wallet[2:])
 
-        staked, staked_meta = self._staked_amount(wallet, staking_addr, addr_arg)
-        rewards = self._reward_amount(wallet, staking_addr, addr_arg)
+            staked, staked_meta = self._staked_amount(wallet, staking_addr, addr_arg)
+            rewards = self._reward_amount(wallet, staking_addr, addr_arg)
 
-        cooldown_seconds = int(os.getenv("VVV_COOLDOWN_SECONDS", str(7 * 24 * 60 * 60)))
+            cooldown_seconds = int(os.getenv("VVV_COOLDOWN_SECONDS", str(7 * 24 * 60 * 60)))
 
-        def _call_timestamp(signatures: list[str]) -> Optional[int]:
-            for sig in signatures:
-                try:
-                    ts = self._call_raw_uint(staking_addr, wallet, addr_arg, sig)
-                    if ts and ts > 0:
-                        # Guard against obviously invalid outputs (e.g., struct packing)
-                        # Accept values that look like unix timestamps within +/- 10 years.
-                        if 0 < ts < 10_000_000_000:
-                            return ts
-                except Exception:
-                    continue
-            return None
+            def _call_timestamp(signatures: list[str]) -> Optional[int]:
+                for sig in signatures:
+                    try:
+                        ts = self._call_raw_uint(staking_addr, wallet, addr_arg, sig)
+                        if ts and ts > 0:
+                            # Guard against obviously invalid outputs (e.g., struct packing)
+                            # Accept values that look like unix timestamps within +/- 10 years.
+                            if 0 < ts < 10_000_000_000:
+                                return ts
+                    except Exception:
+                        continue
+                return None
 
-        cooldown_end = _call_timestamp([
-            "cooldownEndsAt(address)",
-            "withdrawableTimestamp(address)",
-            "cooldowns(address)",
-        ])
-        now = int(time.time())
-        cooldown_remaining = None
-        if cooldown_end and cooldown_end > now:
-            cooldown_remaining = cooldown_end - now
+            cooldown_end = _call_timestamp([
+                "cooldownEndsAt(address)",
+                "withdrawableTimestamp(address)",
+                "cooldowns(address)",
+            ])
+            now = int(time.time())
+            cooldown_remaining = None
+            if cooldown_end and cooldown_end > now:
+                cooldown_remaining = cooldown_end - now
 
-        min_active = int(os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
-        active_staker = bool(staked > max(0, min_active))
+            min_active = int(os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
+            active_staker = bool(staked > max(0, min_active))
 
-        return {
-            "status": "ok",
-            "chain_id": w3.eth.chain_id,
-            "wallet": wallet,
-            "staking_contract": staking_addr,
-            "staked": staked,
-            "staked_source": staked_meta if staked_meta else None,
-            "rewards": rewards,
-            "active_staker": active_staker,
-            "min_active_stake": min_active,
-            "cooldown": {
-                "configured_seconds": cooldown_seconds,
-                "ends_at": cooldown_end,
-                "seconds_remaining": cooldown_remaining,
-            },
-        }
+            return {
+                "status": "ok",
+                "chain_id": w3.eth.chain_id,
+                "wallet": wallet,
+                "staking_contract": staking_addr,
+                "staked": staked,
+                "staked_source": staked_meta if staked_meta else None,
+                "rewards": rewards,
+                "active_staker": active_staker,
+                "min_active_stake": min_active,
+                "cooldown": {
+                    "configured_seconds": cooldown_seconds,
+                    "ends_at": cooldown_end,
+                    "seconds_remaining": cooldown_remaining,
+                },
+            }
 
     def is_active_staker(self, status: Optional[Dict[str, Any]] = None) -> bool:
         """Return True when staking position qualifies as active for Venice rewards."""
