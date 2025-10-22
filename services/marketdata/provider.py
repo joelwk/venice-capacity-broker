@@ -4,6 +4,7 @@ import json
 import math
 import os
 import time
+import types
 import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -1564,6 +1565,18 @@ class MarketDataProvider:
         _record("dex_final", 0.0, "error")
         raise RuntimeError("No quotes available for provided route")
 
+    _best_price_default = best_price
+
+    def _best_price_uses_default(self) -> bool:
+        """True when the current best_price implementation is the built-in version."""
+        default_impl = getattr(type(self), "_best_price_default", None)
+        current_impl = getattr(self, "best_price", None)
+        if default_impl is None or current_impl is None:
+            return True
+        if isinstance(current_impl, types.MethodType):
+            return current_impl.__func__ is default_impl
+        return False
+
     def _best_price_scan(
         self,
         route: RouteLike,
@@ -2168,10 +2181,11 @@ class MarketDataProvider:
 
             # Prefer the path engine so we reuse scored routes and guardrails.
             path_result = None
-            try:
-                path_result = self._quote_via_path_engine(weth, quote, amount_in_decimal=1.0)
-            except Exception:
-                path_result = None
+            if self._best_price_uses_default():
+                try:
+                    path_result = self._quote_via_path_engine(weth, quote, amount_in_decimal=1.0)
+                except Exception:
+                    path_result = None
             if path_result and self._valid_price(path_result.price):
                 metadata = path_result.metadata if isinstance(path_result.metadata, dict) else {}
                 detail_payload = {
