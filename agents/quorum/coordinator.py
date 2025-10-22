@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Optional
+from typing import Dict, Optional
 
 from agents.quorum.core import Quorum, QuorumMember
 from agents.quorum.models import (
