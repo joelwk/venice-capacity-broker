@@ -66,3 +66,44 @@ def test_reflex_guardian_warns_high_utilization():
     )
     assert result["halt"] is False
     assert "utilization_hot" in result["warnings"]
+
+
+def test_reflex_guardian_requires_active_stake():
+    guardian = ReflexGuardian(max_drawdown=None, max_vol_bps=None, max_utilization=None, require_active_stake=True)
+    result = guardian.evaluate(
+        price=1.0,
+        utilization=0.5,
+        vol_bps=10.0,
+        stake={"status": "ok", "snapshot": {"active_staker": False}},
+        dry_run=False,
+        enable_live=True,
+        last_cycle=None,
+    )
+    assert result["halt"] is True
+    assert "stake_inactive" in result["reasons"]
+
+
+def test_reflex_guardian_apply_in_dry_run_flag():
+    guardian_skip = ReflexGuardian(apply_in_dry_run=False, max_drawdown=None, max_vol_bps=None, max_utilization=None)
+    result_skip = guardian_skip.evaluate(
+        price=None,
+        utilization=None,
+        vol_bps=None,
+        stake={"status": "ok", "snapshot": {"active_staker": True}},
+        dry_run=True,
+        enable_live=False,
+        last_cycle=None,
+    )
+    assert result_skip["halt"] is False
+    guardian_apply = ReflexGuardian(apply_in_dry_run=True, max_drawdown=None, max_vol_bps=None, max_utilization=None)
+    result_apply = guardian_apply.evaluate(
+        price=None,
+        utilization=None,
+        vol_bps=None,
+        stake={"status": "ok", "snapshot": {"active_staker": True}},
+        dry_run=True,
+        enable_live=True,
+        last_cycle=None,
+    )
+    assert result_apply["halt"] is True
+    assert "price_unavailable" in result_apply["reasons"]

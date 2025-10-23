@@ -49,14 +49,15 @@ STAGES: Dict[str, str] = {
 
 STAGE_NOTES: Dict[str, List[str]] = {
     "orchestrator_dry_run": [
-        "Quorum coordinator remains staged for post-v1; current loop runs StakeMaster -> ArbiDiem -> CapacityBroker.",
+        "Default loop now runs StakeMaster -> quorum-gated ArbiDiem -> CapacityBroker -> AI Treasurer guidance. Disable quorum by setting QUORUM_ENABLE=0.",
     ],
     "orchestrator_live": [
         "Progressive-live gating (STAKEMASTER_PROGRESSIVE_ENABLE) is expected before enabling live trades.",
+        "ArbiDiem guardrails still need calibration; review RISK_* thresholds before relying on unattended live execution.",
     ],
     "token_watcher": [
-        "Helper runs under docker compose profile 'helpers'; enable with `docker compose --profile helpers up` when needed.",
-        "Watcher is optional in v1; leave disabled if orchestrator already covers your telemetry requirements.",
+        "Watcher auto-starts in stack runs when AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=1; set AUTOSTART_TOKEN_WATCHER=0 to skip.",
+        "Telemetry overlap is acceptable in v1; disable if another watcher already publishes the same signals.",
     ],
 }
 

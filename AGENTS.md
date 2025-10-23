@@ -96,6 +96,8 @@ It supersedes prior drafts where details conflict, but **v1 scope and stop-lines
 
   * `RISK_MAX_VOLATILITY_BPS` to cap units when realized vol is high.
 
+  * `DIEM_PREMIUM_THRESHOLD` and `DIEM_DISCOUNT_THRESHOLD` gate mint/sell versus buy/burn triggers, and `RISK_MAX_SLIPPAGE_BPS` plus `RISK_MAX_POOL_TAKE_BPS` bound execution previews.
+
 ### StakeMaster heartbeat
 
 * `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48).
@@ -142,7 +144,7 @@ It supersedes prior drafts where details conflict, but **v1 scope and stop-lines
 
 We run a **single-loop orchestrator** in v1 for simplicity.
 
-StakeMaster, ArbiDiem, and CapacityBroker execute sequentially with shared state, while a quorum coordinator and Treasurer are staged for post-v1 upgrades.
+StakeMaster, ArbiDiem, and CapacityBroker execute sequentially with shared state while the quorum coordinator gates ArbiDiem and the AI Treasurer logs guidance for operators.
 
 > **Design note**
 > The manager-and-tools pattern (single agent with tools) is the simplest start.
@@ -391,11 +393,15 @@ We begin with **prompted, simple agents** and expand later.
 
 * v1 uses a **single orchestrator loop**.
 
-  The multi-agent quorum will ship post-v1 without breaking current contracts.
+  Quorum gating now runs by default; disable it only for debugging with `QUORUM_ENABLE=0`.
 
 * Capacity-aware **dynamic pricing and DIEM rentals** remain post-v1.
 
   We only issue and meter sub-keys in v1.
+
+* AI Treasurer automation is still staged.
+
+  The Treasurer records guidance each cycle but does not submit swaps or mints automatically until risk sign-off.
 
 * Exact-out swaps on Aerodrome remain disabled; revisit once ABI/routers support reliable previews.
 

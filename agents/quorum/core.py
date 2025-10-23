@@ -8,6 +8,12 @@ from libs.telemetry.logger import get_logger
 
 logger = get_logger("agent.quorum")
 
+try:
+    from libs.telemetry.metrics import inc as _metrics_inc
+except Exception:  # pragma: no cover - optional metrics backend
+    def _metrics_inc(name: str, value: int = 1, labels: dict | None = None) -> None:  # type: ignore
+        return
+
 
 @dataclass
 class QuorumMember:
@@ -51,6 +57,16 @@ class Quorum:
             total += effective_weight
             if normalized.approve:
                 approved += effective_weight
+            try:
+                _metrics_inc(
+                    "quorum_vote_events_total",
+                    labels={
+                        "member": str(member.name),
+                        "approve": "true" if normalized.approve else "false",
+                    },
+                )
+            except Exception:
+                pass
             breakdown.append(
                 {
                     "name": member.name,
@@ -77,6 +93,13 @@ class Quorum:
             ratio,
             float(self.threshold),
         )
+        try:
+            _metrics_inc(
+                "quorum_decisions_total",
+                labels={"decision": "approved" if decision else "blocked"},
+            )
+        except Exception:
+            pass
         self._last_info = info
         self._last_decision = decision
         return decision, info

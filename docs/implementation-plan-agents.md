@@ -24,11 +24,11 @@ Agents must respect protocol constraints such as the seven-day unstake cooldown 
 
 - StakeMaster, key issuance, and wallet services are live in the repo. Dry-run them with `uv run python apps/cli/main.py run:stakemaster --enable-live` before changing prompts.
 
-- ArbiDiem mint and trade loop is merged but guardrails need another calibration pass. Capture premium thresholds and slippage caps in `services/risk`.
+- ArbiDiem mint and trade loop is merged, but guardrails still need another calibration pass. Capture premium thresholds and slippage caps in `services/risk` and keep live runs supervised until that work lands.
 
 - CapacityBroker API already serves pilot tenants. Expand analytics and abuse heuristics next.
 
-- Quorum coordinator and AI Treasurer wiring remain behind a flag. Resume here to finish the single-loop handoff and reflection gating.
+- The single-loop orchestrator now enables the quorum coordinator by default and appends AI Treasurer guidance each cycle. The Treasurer remains advisory-only; full automation and guardrails are still outstanding.
 
 ---
 
@@ -164,6 +164,8 @@ Resell unused Diem capacity by issuing scoped API keys and adjusting supply dyna
 
 ### AI Treasurer (future)
 
+Current loop records AI Treasurer guidance only; trades remain manual until guardrails and automated hooks land.
+
 Manage VVV/DIEM holdings at the treasury level to support application or DAO compute requirements:
 
 - Hold roughly 150% of average daily Diem usage in reserve.
@@ -175,6 +177,8 @@ Manage VVV/DIEM holdings at the treasury level to support application or DAO com
 ## Quorum coordinator
 
 Aggregate signals from five models and coordinate execution:
+
+The coordinator is enabled by default inside `run:loop`; set `QUORUM_ENABLE=0` for debugging when you need the legacy single-agent flow.
 
 - **YieldModel** — staking/unstaking based on APR, emissions decay, and utilisation.
 - **ArbModel** — mint‑sell, hold, or buy‑back based on price premiums.
@@ -221,6 +225,8 @@ Follow the sprint plan outlined in the implementation document:
 ## Operational guardrails
 
 - Keep `DIEM_DEBUG_ROUTES` and `MARKETDATA_DEBUG_SANITY` disabled in production. Toggle them only when investigating incidents.
+
+- Calibrate the ArbiDiem guardrails in `services/risk` (premium bands, slippage, pool-take) before expanding unattended live runs.
 
 - Enforce `consumptionLimit` and `expiresAt` on every sub-key. Revoke suspicious keys fast and rotate daily.
 

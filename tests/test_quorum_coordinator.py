@@ -45,3 +45,20 @@ def test_quorum_coordinator_blocks_on_reflex_halt():
     risk_vote = next(entry for entry in details["breakdown"] if entry["name"] == "risk")
     assert risk_vote["approve"] is False
     assert risk_vote["confidence"] == 1.0
+
+
+def test_quorum_metrics_emit(monkeypatch):
+    from libs.telemetry import metrics as telemetry_metrics
+
+    telemetry_metrics._counters.clear()  # type: ignore[attr-defined]
+    models = build_default_models(include_treasury=False)
+    coordinator = QuorumCoordinator(models=models, threshold=0.55)
+    ctx = _make_base_context()
+    coordinator.update(ctx)
+    decision, _ = coordinator.decide_with_details()
+    assert decision is True
+    counters = telemetry_metrics._counters  # type: ignore[attr-defined]
+    vote_keys = [key for key in counters if key[0] == "quorum_vote_events_total"]
+    decision_keys = [key for key in counters if key[0] == "quorum_decisions_total"]
+    assert vote_keys, "expected quorum_vote_events_total metric"
+    assert decision_keys, "expected quorum_decisions_total metric"

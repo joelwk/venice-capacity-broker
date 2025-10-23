@@ -50,9 +50,11 @@ It runs through `agents/stake_master/agent.py` together with `services/staking/c
 
 ArbiDiem uses `services/marketdata/provider.py`, `services/risk/policy.py`, and the configured DEX aggregator to size DIEM mints, sells, buys, and burns.
 
+Thresholds come from environment knobs such as `DIEM_PREMIUM_THRESHOLD`, `DIEM_DISCOUNT_THRESHOLD`, `RISK_MAX_SLIPPAGE_BPS`, and `RISK_MAX_POOL_TAKE_BPS`.
+
 Every decision stores rationale so you can inspect `self._last_rationale` in telemetry.
 
-`graph/workflows/orchestrator.py` now ships a `SingleLoopOrchestrator` that runs StakeMaster → ArbiDiem → CapacityBroker each cycle, logging a consolidated record and persisting decisions when SQL is available.
+`graph/workflows/orchestrator.py` now ships a `SingleLoopOrchestrator` that runs StakeMaster -> quorum-gated ArbiDiem -> CapacityBroker each cycle, logging a consolidated record and persisting decisions when SQL is available.
 
 CapacityBroker reuses `services/venice_keys/manager.py` to mint scoped Venice sub-keys for tenants through the Broker API.
 
@@ -148,17 +150,17 @@ LangGraph support lives in `graph/langgraph/graph.py`, yet the sequential fallba
 
 ## Implementation Plan Alignment
 
-The v1 scope keeps the single-agent orchestrator instead of the quorum-based topology that the plan described.
+The v1 scope ships a single-loop orchestrator with quorum gating baked in; we still treat the LangGraph graph as optional while risk thresholds harden.
 
-`graph/workflows/orchestrator.py` owns the end-to-end DIEM decision and now exposes a combined StakeMaster → ArbiDiem → CapacityBroker loop; quorum and additional agents are still future work.
+`graph/workflows/orchestrator.py` owns the end-to-end DIEM decision and now runs StakeMaster -> quorum-gated ArbiDiem -> CapacityBroker each cycle.
 
-`agents/ai_treasurer/agent.py` remains a lightweight helper that returns a delta without executing treasury transactions, so the richer treasury automation from the plan is still pending.
+`agents/ai_treasurer/agent.py` records guidance only, so automated treasury swaps and mints remain on the roadmap.
 
-LangGraph execution is optional and falls back to the sequential runner in `graph/langgraph/graph.py`, so true LangGraph-native graph orchestration will require additional work before it matches the plan.
+LangGraph execution is still optional and falls back to the sequential runner in `graph/langgraph/graph.py` until the full multi-agent graph matches the plan.
 
 Capacity resale is limited to scoped sub-key issuance.
 
-Dynamic DIEM rentals, marketplace pricing strategies, and quorum-governed allocation changes are out of scope for this v1 cut even though the plan earmarked them for later sprints.
+Dynamic DIEM rentals, marketplace pricing strategies, and quorum-governed allocation changes stay outside this v1 cut even though the plan earmarked them for later sprints.
 
 
 ## Quickstart

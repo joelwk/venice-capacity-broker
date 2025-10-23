@@ -333,11 +333,21 @@ class ArbiDiem:
         fair = fair_value_per_diem(self.discount_rate_apy) * mint_rate / 365.0
         logger.info(f"Market px={market_price:.4f}, fair/day={fair:.4f}")
         threshold_mult = 1.05
+        discount_mult = 1.05
+        try:
+            threshold_mult = float(self.risk.premium_trigger())
+        except Exception:
+            threshold_mult = 1.05
+        try:
+            discount_mult = float(self.risk.discount_trigger())
+        except Exception:
+            discount_mult = threshold_mult
         # Initialize rationale holder
         rationale = {
             "market_price": float(market_price),
             "fair_per_day": float(fair),
             "threshold_mult": float(threshold_mult),
+            "discount_mult": float(discount_mult),
             "premium": (float(market_price / fair) if fair > 0 else None),
             "mint_rate": float(mint_rate),
             "desired_units": None,
@@ -359,9 +369,9 @@ class ArbiDiem:
                 routes = self._trade_routes()
                 path = routes[0] if routes else None
                 try:
-                    pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+                    pool_take_bps = int(self.risk.pool_take_cap_bps())
                 except Exception:
-                    pool_take_bps = 100
+                    pool_take_bps = 25
                 reserve_cap = md.reserve_cap_units(path, take_bps=pool_take_bps) if path else None
             except Exception:
                 reserve_cap = None
@@ -429,7 +439,7 @@ class ArbiDiem:
             setattr(self, "_last_rationale", rationale)
             return True
         # Discount branch: consider buy and burn when price is sufficiently below fair
-        if fair > 0 and market_price < (fair / threshold_mult):
+        if fair > 0 and market_price < (fair / discount_mult):
             # Require exact-out support from aggregator to enable buy/burn in v1
             try:
                 if (self.diem.aggregator is None) or (not hasattr(self.diem.aggregator, "trade_best_exact_out")):
@@ -450,9 +460,9 @@ class ArbiDiem:
                 routes = self._trade_routes()
                 path_buy = routes[0].reversed() if routes else None
                 try:
-                    pool_take_bps = int((__import__("os").getenv("RISK_MAX_POOL_TAKE_BPS") or "100").strip() or 100)
+                    pool_take_bps = int(self.risk.pool_take_cap_bps())
                 except Exception:
-                    pool_take_bps = 100
+                    pool_take_bps = 25
                 reserve_cap = md.reserve_cap_units(path_buy, take_bps=pool_take_bps) if path_buy else None
             except Exception:
                 reserve_cap = None

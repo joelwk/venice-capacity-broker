@@ -20,6 +20,9 @@ class RiskPolicy:
     max_inventory_usd: float = 100_000.0
     max_trade_units: int = 0
     slippage_bps_cap: int = 150  # 1.5% default cap
+    premium_threshold: float = 1.05
+    discount_threshold: float = 1.05
+    pool_take_bps_cap: int = 25
     _diem_decimals_cache: Optional[int] = None
     max_stake_usd: Optional[float] = None
 
@@ -43,11 +46,21 @@ class RiskPolicy:
             except Exception:
                 return default
 
+        premium = _f("DIEM_PREMIUM_THRESHOLD", 1.05)
+        if premium <= 1.0:
+            premium = 1.05
+        discount = _f("DIEM_DISCOUNT_THRESHOLD", 0.0)
+        if discount <= 1.0:
+            discount = premium
+
         return cls(
             max_trade_usd=_f("RISK_MAX_DIEM_TRADE_USD", 10_000.0),
             max_inventory_usd=_f("RISK_MAX_DIEM_INVENTORY_USD", 100_000.0),
             max_trade_units=_i("RISK_MAX_DIEM_TRADE_UNITS", 0),
             slippage_bps_cap=_i("RISK_MAX_SLIPPAGE_BPS", 150),
+            premium_threshold=premium,
+            discount_threshold=discount,
+            pool_take_bps_cap=_i("RISK_MAX_POOL_TAKE_BPS", 25),
             max_stake_usd=_f("RISK_MAX_STAKE_USD", 0.0) or None,
         )
 
@@ -298,3 +311,33 @@ class RiskPolicy:
             except Exception:
                 pass
         return max(0, int(sized2))
+
+    # --- guardrail thresholds ---
+    @staticmethod
+    def _coerce_threshold(value: Optional[float], default: float) -> float:
+        try:
+            val = float(value) if value is not None else float(default)
+        except Exception:
+            return float(default)
+        if not (val > 1.0):
+            return float(default)
+        return float(val)
+
+    def premium_trigger(self, default: float = 1.05) -> float:
+        """Env-driven premium multiple to trigger mint/sell."""
+        return self._coerce_threshold(self.premium_threshold, default)
+
+    def discount_trigger(self, default: float | None = None) -> float:
+        """Env-driven discount multiple to trigger buy/burn."""
+        base = self.premium_trigger(default or 1.05)
+        return self._coerce_threshold(self.discount_threshold, base)
+
+    def pool_take_cap_bps(self, default: int = 25) -> int:
+        """Max pool take in basis points for venue reserve caps."""
+        try:
+            cap = int(self.pool_take_bps_cap)
+        except Exception:
+            cap = int(default)
+        if cap <= 0:
+            return int(default)
+        return cap
