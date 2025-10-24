@@ -4,7 +4,12 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 if TYPE_CHECKING:  # pragma: no cover - import-time optional
     from web3 import Web3  # type: ignore
@@ -12,6 +17,68 @@ if TYPE_CHECKING:  # pragma: no cover - import-time optional
 
 
 ABI_DIR = Path(__file__).resolve().parents[2] / "abi"
+
+_RPC_LOCK = Lock()
+_RPC_INDEX = 0
+_RPC_SESSION_CACHE: Dict[str, requests.Session] = {}
+
+def _rpc_timeout_seconds() -> float:
+    raw = os.getenv("RPC_REQUEST_TIMEOUT_SECONDS") or os.getenv("BASE_RPC_TIMEOUT_SECONDS")
+    try:
+        if raw:
+            val = float(raw)
+            return val if val > 0 else 10.0
+    except Exception:
+        pass
+    return 10.0
+
+
+def _build_retrying_session(rpc_url: str) -> requests.Session:
+    with _RPC_LOCK:
+        cached = _RPC_SESSION_CACHE.get(rpc_url)
+        if cached is not None:
+            return cached
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            status_forcelist=[429, 500, 502, 503, 504],
+            backoff_factor=0.3,
+            respect_retry_after_header=True,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        _RPC_SESSION_CACHE[rpc_url] = session
+        return session
+
+
+def _ordered_candidates(candidates: List[str]) -> List[tuple[int, str]]:
+    if not candidates:
+        return []
+    with _RPC_LOCK:
+        global _RPC_INDEX
+        start = _RPC_INDEX % len(candidates)
+    ordered: List[tuple[int, str]] = []
+    for offset in range(len(candidates)):
+        idx = (start + offset) % len(candidates)
+        ordered.append((idx, candidates[idx]))
+    return ordered
+
+
+def _advance_index(success_idx: int, size: int) -> None:
+    if size <= 0:
+        return
+    with _RPC_LOCK:
+        global _RPC_INDEX
+        _RPC_INDEX = (success_idx + 1) % size
+
+
+def _build_web3_for_rpc(rpc: str) -> "Web3":
+    from web3 import Web3  # type: ignore
+
+    session = _build_retrying_session(rpc)
+    provider = Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": _rpc_timeout_seconds()})
+    return Web3(provider)
 
 
 def load_abi(name: str) -> List[Dict[str, Any]]:
@@ -58,19 +125,24 @@ def resolve_rpc_url(validate: bool = False) -> str:
     """Return the first usable RPC URL, optionally validating connectivity."""
 
     candidates = rpc_url_candidates()
+    if not candidates:
+        raise EnvironmentError("RPC_URL or BASE_RPC_URL (or *_URLS) is required for Web3 operations")
+    ordered = _ordered_candidates(candidates)
+    if not ordered:
+        raise EnvironmentError("No RPC candidates available")
     if not validate:
-        return candidates[0]
+        idx, rpc = ordered[0]
+        _advance_index(idx, len(candidates))
+        return rpc
     errors: list[str] = []
-    from web3 import Web3  # type: ignore
-
-    for rpc in candidates:
-        provider = Web3.HTTPProvider(rpc)
-        w3 = Web3(provider)
+    for idx, rpc in ordered:
         try:
+            w3 = _build_web3_for_rpc(rpc)
             if not w3.is_connected():
                 raise ConnectionError("not reachable")
             # Access a cheap RPC to ensure the node responds correctly
             _ = w3.eth.chain_id
+            _advance_index(idx, len(candidates))
             return rpc
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{rpc}: {exc}")
@@ -79,11 +151,8 @@ def resolve_rpc_url(validate: bool = False) -> str:
 
 
 def get_web3() -> 'Web3':
-    from web3 import Web3  # type: ignore
-
     rpc = resolve_rpc_url(validate=True)
-    provider = Web3.HTTPProvider(rpc)
-    w3 = Web3(provider)
+    w3 = _build_web3_for_rpc(rpc)
     # resolve_rpc_url already verified connectivity, but keep a safeguard
     if not w3.is_connected():
         raise ConnectionError(f"Failed to connect to RPC: {rpc}")

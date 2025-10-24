@@ -6,12 +6,74 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
 import inspect
 
 from libs.agentkit_ext.agentkit_wallet import get_address, send_tx
 from libs.agentkit_ext.web3_utils import encode_contract_call, get_contract, get_web3
 from libs.dex.routes import RouteLike, RoutePlan, as_route_plan, make_route
+
+T = TypeVar("T")
+
+
+def _looks_like_rate_limit(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and status_code == 429:
+        return True
+    code = getattr(exc, "status", None)
+    if isinstance(code, int) and code == 429:
+        return True
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and code == 429:
+        return True
+    messages: List[str] = []
+    for arg in getattr(exc, "args", ()):
+        if isinstance(arg, dict):
+            dict_code = arg.get("code")
+            if isinstance(dict_code, int) and dict_code == 429:
+                return True
+            dict_msg = arg.get("message")
+            if isinstance(dict_msg, str):
+                messages.append(dict_msg)
+        elif isinstance(arg, (bytes, bytearray)):
+            try:
+                decoded = arg.decode("utf-8", "ignore")
+            except Exception:
+                decoded = ""
+            if decoded:
+                messages.append(decoded)
+        elif isinstance(arg, str):
+            messages.append(arg)
+    messages.append(str(exc))
+    combined = " ".join(messages).lower()
+    if "429" in combined or "too many requests" in combined or "rate limit" in combined or "rate-limited" in combined:
+        return True
+    return False
+
+
+def _record_rate_limit(provider: str, operation: str) -> None:
+    try:
+        _metrics_inc("dex_rpc_rate_limit_total", labels={"provider": provider, "operation": operation})
+    except Exception:
+        pass
+
+
+def _call_with_rpc_retry(provider: str, operation: str, refresh: Callable[[], None], fn: Callable[[], T]) -> T:
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if _looks_like_rate_limit(exc) and attempt == 0:
+                _record_rate_limit(provider, operation)
+                refresh()
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{operation} failed without explicit error")
 
 try:
     from libs.telemetry.logger import get_logger  # type: ignore
@@ -129,10 +191,16 @@ class UniswapV2DexProvider(DexProvider):
     def __init__(self, router_address: Address) -> None:
         from web3 import Web3  # type: ignore
 
-        self.w3 = get_web3()
         self.router_addr = Web3.to_checksum_address(router_address)
-        self.router = get_contract(self.w3, self.router_addr, "uniswap_v2_router.json")
+        self._router_abi = "uniswap_v2_router.json"
+        self._rpc_lock = Lock()
+        self._refresh_provider()
         self.recipient: Optional[str] = None
+
+    def _refresh_provider(self) -> None:
+        with self._rpc_lock:
+            self.w3 = get_web3()
+            self.router = get_contract(self.w3, self.router_addr, self._router_abi)
 
     @staticmethod
     def _latency_bucket_name(seconds: float) -> str:
@@ -163,39 +231,51 @@ class UniswapV2DexProvider(DexProvider):
         return send_tx(token, bytes.fromhex(approve_data[2:]))
 
     def quote(self, amount_in: int, route: RoutePlan) -> Optional[Quote]:
-
-        t0 = time.perf_counter()
-        try:
-            checksum_path = route.to_uniswap_v2_path(checksum=True)
-            amounts = self.router.functions.getAmountsOut(amount_in, checksum_path).call()
-            out_amt = int(amounts[-1]) if amounts else 0
-            if out_amt <= 0:
-                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+        for attempt in range(2):
+            t0 = time.perf_counter()
+            try:
+                checksum_path = route.to_uniswap_v2_path(checksum=True)
+                amounts = self.router.functions.getAmountsOut(amount_in, checksum_path).call()
+                out_amt = int(amounts[-1]) if amounts else 0
+                if out_amt <= 0:
+                    _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+                    return None
+                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
+                _metrics_inc(
+                    "dex_quote_latency_bucket_total",
+                    labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
+                )
+                return Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, route=route)
+            except Exception as exc:  # noqa: BLE001
+                if _looks_like_rate_limit(exc) and attempt == 0:
+                    _record_rate_limit(self.name, "quote")
+                    self._refresh_provider()
+                    continue
+                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
                 return None
-            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
-            _metrics_inc(
-                "dex_quote_latency_bucket_total",
-                labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
-            )
-            return Quote(provider=self.name, amount_in=amount_in, amount_out=out_amt, route=route)
-        except Exception:
-            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
-            return None
+        _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
+        return None
 
     def quote_exact_out(self, amount_out: int, route: RoutePlan) -> Optional[Quote]:
-
-        try:
-            checksum_path = route.to_uniswap_v2_path(checksum=True)
-            amounts = self.router.functions.getAmountsIn(amount_out, checksum_path).call()
-            in_amt = int(amounts[0]) if amounts else 0
-            if in_amt <= 0:
-                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+        for attempt in range(2):
+            try:
+                checksum_path = route.to_uniswap_v2_path(checksum=True)
+                amounts = self.router.functions.getAmountsIn(amount_out, checksum_path).call()
+                in_amt = int(amounts[0]) if amounts else 0
+                if in_amt <= 0:
+                    _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
+                    return None
+                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
+                return Quote(provider=self.name, amount_in=in_amt, amount_out=amount_out, route=route)
+            except Exception as exc:  # noqa: BLE001
+                if _looks_like_rate_limit(exc) and attempt == 0:
+                    _record_rate_limit(self.name, "quote_exact_out")
+                    self._refresh_provider()
+                    continue
+                _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
                 return None
-            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "ok"})
-            return Quote(provider=self.name, amount_in=in_amt, amount_out=amount_out, route=route)
-        except Exception:
-            _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
-            return None
+        _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "err"})
+        return None
 
     def trade(self, amount_in: int, min_amount_out: int, route: RoutePlan) -> Dict[str, str]:
         from web3 import Web3 as _Web3  # type: ignore
@@ -205,43 +285,57 @@ class UniswapV2DexProvider(DexProvider):
         recipient = self.recipient or _Web3.to_checksum_address(get_address())
         approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, amount_in) or ""
         deadline = int(time.time()) + 20 * 60
-        t0 = time.perf_counter()
-        try:
-            fn = self.router.functions.swapExactTokensForTokens(amount_in, min_amount_out, checksum_path, recipient, deadline)
-            built = fn.build_transaction({})
-            tx_hash = send_tx(self.router_addr, built["data"])
-            _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "standard"})
-            _metrics_inc(
-                "dex_trade_latency_bucket_total",
-                labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
-            )
-            return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
-        except Exception:
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            t0 = time.perf_counter()
             try:
-                fn2 = self.router.functions.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-                    amount_in,
-                    min_amount_out,
-                    checksum_path,
-                    recipient,
-                    deadline,
-                )
-                built2 = fn2.build_transaction({})
-                tx_hash2 = send_tx(self.router_addr, built2["data"])
-                _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "fot"})
-                _metrics_inc("fot_fallback_total", labels={"provider": self.name})
+                fn = self.router.functions.swapExactTokensForTokens(amount_in, min_amount_out, checksum_path, recipient, deadline)
+                built = fn.build_transaction({})
+                tx_hash = send_tx(self.router_addr, built["data"])
+                _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "standard"})
                 _metrics_inc(
                     "dex_trade_latency_bucket_total",
                     labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
                 )
-                return {
-                    "provider": self.name,
-                    "tx_hash": tx_hash2,
-                    "approval_tx": approve_hash,
-                    "fot_fallback": "true",
-                }
-            except Exception as e:  # noqa: BLE001
-                _metrics_inc("dex_trade_errors_total", labels={"provider": self.name, "path": "fot"})
-                raise e
+                return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
+            except Exception as exc_main:  # noqa: BLE001
+                if _looks_like_rate_limit(exc_main) and attempt == 0:
+                    _record_rate_limit(self.name, "trade_exact_in")
+                    self._refresh_provider()
+                    continue
+                try:
+                    fn2 = self.router.functions.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                        amount_in,
+                        min_amount_out,
+                        checksum_path,
+                        recipient,
+                        deadline,
+                    )
+                    built2 = fn2.build_transaction({})
+                    tx_hash2 = send_tx(self.router_addr, built2["data"])
+                    _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "fot"})
+                    _metrics_inc("fot_fallback_total", labels={"provider": self.name})
+                    _metrics_inc(
+                        "dex_trade_latency_bucket_total",
+                        labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
+                    )
+                    return {
+                        "provider": self.name,
+                        "tx_hash": tx_hash2,
+                        "approval_tx": approve_hash,
+                        "fot_fallback": "true",
+                    }
+                except Exception as exc_fallback:  # noqa: BLE001
+                    last_error = exc_fallback
+                    if _looks_like_rate_limit(exc_fallback) and attempt == 0:
+                        _record_rate_limit(self.name, "trade_exact_in_fallback")
+                        self._refresh_provider()
+                        continue
+                    _metrics_inc("dex_trade_errors_total", labels={"provider": self.name, "path": "fot"})
+                    raise exc_fallback
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("swapExactTokensForTokens failed without explicit error")
 
     def trade_exact_out(self, amount_out: int, max_amount_in: int, route: RoutePlan) -> Dict[str, str]:
         from web3 import Web3 as _Web3  # type: ignore
@@ -251,20 +345,30 @@ class UniswapV2DexProvider(DexProvider):
         recipient = self.recipient or _Web3.to_checksum_address(get_address())
         approve_hash = self._ensure_allowance(token_in, recipient, self.router_addr, max_amount_in) or ""
         deadline = int(time.time()) + 20 * 60
-        t0 = time.perf_counter()
-        try:
-            fn = self.router.functions.swapTokensForExactTokens(amount_out, max_amount_in, checksum_path, recipient, deadline)
-            built = fn.build_transaction({})
-            tx_hash = send_tx(self.router_addr, built["data"])
-            _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "exact_out"})
-            _metrics_inc(
-                "dex_trade_latency_bucket_total",
-                labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
-            )
-            return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
-        except Exception as e:  # noqa: BLE001
-            _metrics_inc("dex_trade_errors_total", labels={"provider": self.name, "path": "exact_out"})
-            raise e
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            t0 = time.perf_counter()
+            try:
+                fn = self.router.functions.swapTokensForExactTokens(amount_out, max_amount_in, checksum_path, recipient, deadline)
+                built = fn.build_transaction({})
+                tx_hash = send_tx(self.router_addr, built["data"])
+                _metrics_inc("dex_trades_total", labels={"provider": self.name, "path": "exact_out"})
+                _metrics_inc(
+                    "dex_trade_latency_bucket_total",
+                    labels={"provider": self.name, "bucket": self._latency_bucket_name(time.perf_counter() - t0)},
+                )
+                return {"provider": self.name, "tx_hash": tx_hash, "approval_tx": approve_hash}
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if _looks_like_rate_limit(exc) and attempt == 0:
+                    _record_rate_limit(self.name, "trade_exact_out")
+                    self._refresh_provider()
+                    continue
+                _metrics_inc("dex_trade_errors_total", labels={"provider": self.name, "path": "exact_out"})
+                raise exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("swapTokensForExactTokens failed without explicit error")
 
 
 class AerodromeDexProvider(DexProvider):
@@ -273,11 +377,17 @@ class AerodromeDexProvider(DexProvider):
     def __init__(self, router_address: Address, stable: bool = True) -> None:
         from web3 import Web3  # type: ignore
 
-        self.w3 = get_web3()
         self.router_addr = Web3.to_checksum_address(router_address)
-        self.router = get_contract(self.w3, self.router_addr, "aerodrome_router.json")
+        self._router_abi = "aerodrome_router.json"
+        self._rpc_lock = Lock()
+        self._refresh_provider()
         self.recipient: Optional[str] = None
         self.stable = bool(stable)
+
+    def _refresh_provider(self) -> None:
+        with self._rpc_lock:
+            self.w3 = get_web3()
+            self.router = get_contract(self.w3, self.router_addr, self._router_abi)
 
     def _ensure_allowance(self, token: Address, owner: Address, spender: Address, required: int) -> Optional[str]:
         erc20 = get_contract(self.w3, token, "erc20.json")
@@ -313,7 +423,12 @@ class AerodromeDexProvider(DexProvider):
         t0 = time.perf_counter()
         try:
             routes = self._routes(route, stable=self.stable)
-            amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
+            amounts = _call_with_rpc_retry(
+                self.name,
+                "quote",
+                self._refresh_provider,
+                lambda: self.router.functions.getAmountsOut(amount_in, routes).call(),
+            )
             out_amt = int(amounts[-1]) if amounts else 0
             if out_amt <= 0:
                 return None
@@ -324,7 +439,12 @@ class AerodromeDexProvider(DexProvider):
             pass
         try:
             routes = self._routes(route, stable=not bool(self.stable))
-            amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
+            amounts = _call_with_rpc_retry(
+                self.name,
+                "quote_alt",
+                self._refresh_provider,
+                lambda: self.router.functions.getAmountsOut(amount_in, routes).call(),
+            )
             out_amt = int(amounts[-1]) if amounts else 0
             if out_amt <= 0:
                 return None
@@ -343,7 +463,12 @@ class AerodromeDexProvider(DexProvider):
                     mask = [bool((bits >> i) & 1) for i in range(hops)]
                     try:
                         routes = self._routes_with_mask(route, mask)
-                        amounts = self.router.functions.getAmountsOut(amount_in, routes).call()
+                        amounts = _call_with_rpc_retry(
+                            self.name,
+                            "quote_mask",
+                            self._refresh_provider,
+                            lambda: self.router.functions.getAmountsOut(amount_in, routes).call(),
+                        )
                         out_amt = int(amounts[-1]) if amounts else 0
                         if out_amt <= 0:
                             continue
@@ -409,11 +534,12 @@ class UniswapV3DexProvider(DexProvider):
     ) -> None:
         from web3 import Web3  # type: ignore
 
-        self.w3 = get_web3()
         self.router_addr = Web3.to_checksum_address(router_address)
         self.quoter_addr = Web3.to_checksum_address(quoter_address)
-        self.router = get_contract(self.w3, self.router_addr, "uniswap_v3_router.json")
-        self.quoter = get_contract(self.w3, self.quoter_addr, "uniswap_v3_quoter.json")
+        self._router_abi = "uniswap_v3_router.json"
+        self._quoter_abi = "uniswap_v3_quoter.json"
+        self._rpc_lock = Lock()
+        self._refresh_provider()
         self.recipient: Optional[str] = None
         self.default_fee = int(default_fee) if default_fee not in (None, "") else None
         if allowed_fee_tiers is None:
@@ -421,6 +547,12 @@ class UniswapV3DexProvider(DexProvider):
         else:
             tiers = sorted({int(f) for f in allowed_fee_tiers})
             self.allowed_fee_tiers = tuple(tiers)
+
+    def _refresh_provider(self) -> None:
+        with self._rpc_lock:
+            self.w3 = get_web3()
+            self.router = get_contract(self.w3, self.router_addr, self._router_abi)
+            self.quoter = get_contract(self.w3, self.quoter_addr, self._quoter_abi)
 
     def _ensure_route(self, route: RoutePlan) -> RoutePlan:
         filled = route
@@ -455,7 +587,12 @@ class UniswapV3DexProvider(DexProvider):
         try:
             effective_route = self._ensure_route(route)
             path_bytes = effective_route.to_uniswap_v3_path_bytes()
-            result = self.quoter.functions.quoteExactInput(path_bytes, amount_in).call()
+            result = _call_with_rpc_retry(
+                self.name,
+                "quote",
+                self._refresh_provider,
+                lambda: self.quoter.functions.quoteExactInput(path_bytes, amount_in).call(),
+            )
             out_amt = self._normalize_quote_result(result)
             if out_amt <= 0:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero"})
@@ -471,7 +608,12 @@ class UniswapV3DexProvider(DexProvider):
         try:
             effective_route = self._ensure_route(route)
             path_bytes = effective_route.to_uniswap_v3_path_bytes(reverse=True)
-            result = self.quoter.functions.quoteExactOutput(path_bytes, amount_out).call()
+            result = _call_with_rpc_retry(
+                self.name,
+                "quote_exact_out",
+                self._refresh_provider,
+                lambda: self.quoter.functions.quoteExactOutput(path_bytes, amount_out).call(),
+            )
             in_amt = self._normalize_quote_result(result)
             if in_amt <= 0:
                 _metrics_inc("dex_quotes_total", labels={"provider": self.name, "status": "zero", "mode": "exact_out"})

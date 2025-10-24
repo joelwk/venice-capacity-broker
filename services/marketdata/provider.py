@@ -112,13 +112,13 @@ CANONICAL_PRICE_PATHS: Dict[str, Sequence[Dict[str, Sequence[str] | Sequence[Opt
     ),
     "WBTC": (
         {"tokens": ("WBTC", "WETH", "USDC"), "fees": (3000, 500)},
-        {"tokens": ("WBTC", "WETH", "USDC"), "fees": (3000, None)},
+        {"tokens": ("WBTC", "WETH", "USDC"), "fees": None},
         {"tokens": ("WBTC", "WETH"), "fees": (3000,)},
         {"tokens": ("WBTC", "WETH"), "fees": None},
     ),
     "DIEM": (
         {"tokens": ("DIEM", "WETH", "USDC"), "fees": (3000, 500)},
-        {"tokens": ("DIEM", "WETH", "USDC"), "fees": (3000, None)},
+        {"tokens": ("DIEM", "WETH", "USDC"), "fees": None},
         {"tokens": ("DIEM", "USDC"), "fees": None},
     ),
 }

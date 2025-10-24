@@ -409,7 +409,24 @@ function resetStep3() {
 }
 
 function applyQuote(result) {
-  state.quote = result;
+  if (!result || typeof result !== "object") {
+    throw new Error("Quote response missing data.");
+  }
+  const resolvedAsset = String(result.asset || getSelectedAsset() || "").toUpperCase();
+  if (!resolvedAsset) {
+    throw new Error("Quote response missing payment asset.");
+  }
+  const totalMinorRaw = result.totalPrice ?? result.total_price;
+  if (totalMinorRaw === undefined || totalMinorRaw === null) {
+    throw new Error("Quote response missing total price.");
+  }
+  const unitsValue = Number(result.units ?? result.quantity ?? 0);
+  if (!Number.isFinite(unitsValue) || unitsValue <= 0) {
+    throw new Error("Quote response missing DIEM quantity.");
+  }
+  const sanitized = { ...result, asset: resolvedAsset, units: unitsValue };
+  const quoteData = sanitized;
+  state.quote = quoteData;
   computeQuoteMetrics();
   renderPricingTable();
   const details = $("quote-details");
@@ -427,20 +444,19 @@ function applyQuote(result) {
     return;
   }
 
-  const asset = String(result.asset || getSelectedAsset()).toUpperCase();
-  const formatted = formatAmount(asset, result.totalPrice ?? result.total_price ?? 0);
+  const formatted = formatAmount(resolvedAsset, totalMinorRaw);
   amountInput.value = formatted.text;
   addressInput.value = state.treasury;
   if (usdLine) {
-    const usdText = computeUsdEstimate(asset, result.totalPrice ?? result.total_price ?? 0, result.units);
+    const usdText = computeUsdEstimate(resolvedAsset, totalMinorRaw, unitsValue);
     usdLine.textContent = usdText || "";
   }
   if (discountLine) {
     discountLine.textContent = "";
     discountLine.classList.add("hidden");
-    const discountBps = Number(result.discountBps ?? result.discount?.totalBps);
+    const discountBps = Number(quoteData.discountBps ?? quoteData.discount?.totalBps);
     if (Number.isFinite(discountBps) && discountBps > 0) {
-      const baseBps = Number(result.discount?.baseBps ?? discountBps);
+      const baseBps = Number(quoteData.discount?.baseBps ?? discountBps);
       const reliefBps = Math.max(0, discountBps - baseBps);
       const totalPct = (discountBps / 100).toFixed(2);
       const basePct = (baseBps / 100).toFixed(2);
@@ -451,8 +467,8 @@ function applyQuote(result) {
         text += ` (base ${basePct}%)`;
       }
       text += ".";
-      const marketUsd = Number(result.discount?.marketUsdPerUnit);
-      const quoteUsd = Number(result.discount?.postDiscountUsdPerUnit);
+      const marketUsd = Number(quoteData.discount?.marketUsdPerUnit);
+      const quoteUsd = Number(quoteData.discount?.postDiscountUsdPerUnit);
       if (Number.isFinite(marketUsd) && marketUsd > 0 && Number.isFinite(quoteUsd) && quoteUsd > 0) {
         text += ` Market ${formatUsd(marketUsd)} → Quote ${formatUsd(quoteUsd)} per DIEM.`;
       }
@@ -528,6 +544,21 @@ async function requestQuote() {
 
   if (assetSelect) assetSelect.setAttribute("aria-invalid", "false");
 
+  const priceSnapshot = state.prices || {};
+  const hasPriceData = priceSnapshot && Object.keys(priceSnapshot).length > 0;
+  const diemPrice = Number(priceSnapshot.DIEM);
+  if (!hasPriceData || !Number.isFinite(diemPrice) || diemPrice <= 0) {
+    showAlert(status, "error", "Live market data is unavailable. Refresh the page and try again.");
+    return;
+  }
+  if (asset !== "USDC") {
+    const paymentPrice = Number(priceSnapshot[asset]);
+    if (!Number.isFinite(paymentPrice) || paymentPrice <= 0) {
+      showAlert(status, "error", `No current price for ${asset}. Refresh market data before requesting a quote.`);
+      return;
+    }
+  }
+
   try {
     if (btn) {
       btn.disabled = true;
@@ -551,7 +582,8 @@ async function requestQuote() {
     applyQuote(body);
     updateVerifyButtonState();
   } catch (err) {
-    showAlert(status, "error", err instanceof Error ? err.message : String(err));
+    console.error("[quote] request failed", err);
+    showAlert(status, "error", err instanceof Error && err.message ? err.message : "Quote request failed. Please try again.");
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -881,6 +913,7 @@ async function loadEnv() {
 
 async function loadEnvAndPrices() {
   state.pricesMeta = null;
+  state.pricesLoading = true;
   try {
     const res = await fetch(ENV_AND_PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
     if (!res.ok) {
@@ -896,14 +929,17 @@ async function loadEnvAndPrices() {
     applyEnvPayload(envPayload || {});
     state.prices = pricePayload || {};
     state.pricesMeta = body && body.meta ? body.meta : null;
-    state.pricesLoading = false;
     computeQuoteMetrics();
-    renderPricingTable();
+    clearAlert($("quote-status"));
     return true;
   } catch (err) {
     state.pricesMeta = null;
-    console.warn('Combined env/prices fetch failed', err);
+    console.warn("Combined env/prices fetch failed", err);
+    showAlert($("quote-status"), "error", "Unable to load market data. Please refresh in a few seconds.");
     return false;
+  } finally {
+    state.pricesLoading = false;
+    renderPricingTable();
   }
 }
 
@@ -936,9 +972,13 @@ async function fetchPrices() {
     }
     const body = await res.json();
     state.prices = (body && body.prices) || {};
+    clearAlert($("quote-status"));
   } catch (err) {
     if (err) {
       console.warn('Market price fetch failed', err);
+    }
+    if (!hadPrices) {
+      showAlert($("quote-status"), "error", "Unable to refresh market data. Trying again soon.");
     }
   } finally {
     state.pricesLoading = false;
