@@ -169,9 +169,6 @@ class MarketDataProvider:
     _decimals_cache_lock: Lock = Lock()
     _decimals_cache: Dict[str, int] = dict(_INITIAL_DECIMALS_CACHE)
 
-    def __init__(self) -> None:
-        self._ensure_required_env()
-
     def _ensure_required_env(self) -> None:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return
@@ -823,6 +820,7 @@ class MarketDataProvider:
         warm_cache_for_path(list(tokens))
 
     def __init__(self) -> None:
+        self._ensure_required_env()
         self._stats_lock = Lock()
         self._active_stats: Optional[Dict[str, Any]] = None
         self._last_prices_stats: Dict[str, Any] = {}
@@ -1544,6 +1542,7 @@ class MarketDataProvider:
             return None
         if token_in.lower() == token_out.lower():
             return 1.0
+        symbol_label = f"{token_in.upper()}->{token_out.upper()}"
 
         path_result = self._quote_via_path_engine(token_in, token_out, amount_in_decimal=1.0)
         if path_result and self._valid_price(path_result.price):
@@ -1559,7 +1558,7 @@ class MarketDataProvider:
                 "decimals": metadata.get("decimals"),
                 "fees": [hop.fee for hop in getattr(path_result.route, "hops", [])] if path_result.route else metadata.get("fees"),
             }
-            type(self)._record_price_source(symbol, path_result.source or "path_engine", detail_payload)
+            type(self)._record_price_source(symbol_label, path_result.source or "path_engine", detail_payload)
             return float(path_result.price)
 
         attempted: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()

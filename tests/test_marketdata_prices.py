@@ -63,7 +63,6 @@ def test_prices_normalized_without_heuristics(monkeypatch):
 
 def test_eth_price_canonical_route_avoids_vvv(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
-    from libs.dex.routes import as_route_plan, make_route
 
     diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
     vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
@@ -110,7 +109,6 @@ def test_eth_price_canonical_route_avoids_vvv(monkeypatch):
 
 def test_diem_price_canonical_path(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
-    from libs.dex.routes import make_route
 
     diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
     vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
@@ -147,6 +145,7 @@ def test_diem_price_canonical_path(monkeypatch):
     source = type(provider)._get_price_source("DIEM")
     assert source.get("path") == list(route.tokens)
     assert source.get("decimals") == {"in": 18, "out": 6}
+
 def test_price_health_tracks_clamp(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
 
