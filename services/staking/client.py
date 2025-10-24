@@ -1,9 +1,11 @@
+
 from __future__ import annotations
 
 import os
+from collections import deque
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, Optional, Sequence, Tuple
 from threading import Lock
 
 from libs.agentkit_ext.actions import VVVActions
@@ -21,6 +23,10 @@ class StakingService:
 
     actions: VVVActions
     _status_lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _recent_snapshots: Deque[Dict[str, Any]] = field(
+        default_factory=lambda: deque(maxlen=3), init=False, repr=False
+    )
+    _last_snapshot: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
 
     def approve(self, amount: int) -> Dict[str, Any]:
         return self.actions.approve(amount)
@@ -47,9 +53,9 @@ class StakingService:
         """Best-effort read of staking status without relying on full ABI.
 
         Tries common patterns:
-        - balanceOf(address) for staked balance
+        - balanceOf(address) / stakes(address) for staked balance
         - earned(address) / claimable(address) / pendingRewards(address) for rewards
-        Returns zeros if functions are unavailable.
+        Falls back to the last known-good snapshot when RPC reads fail.
         """
         if Web3 is None:
             raise RuntimeError("web3 library not available; staking status requires web3")
@@ -58,11 +64,27 @@ class StakingService:
             w3 = self.actions.w3
             staking_addr = Web3.to_checksum_address(self.actions.staking.address)  # type: ignore[attr-defined]
             wallet = Web3.to_checksum_address(get_address())
-
             addr_arg = bytes.fromhex(wallet[2:])
 
-            staked, staked_meta = self._staked_amount(wallet, staking_addr, addr_arg)
-            rewards = self._reward_amount(wallet, staking_addr, addr_arg)
+            status_label = "ok"
+            staked_meta: Optional[Dict[str, Any]] = None
+            fallback_used = False
+
+            try:
+                staked_value, staked_meta = self._staked_amount(wallet, staking_addr, addr_arg)
+                missing_stake = staked_meta is None and staked_value == 0
+                staked = None if missing_stake else int(staked_value)
+                if missing_stake:
+                    status_label = "unknown"
+            except Exception:
+                staked = None
+                staked_meta = None
+                status_label = "unknown"
+
+            try:
+                rewards_value = self._reward_amount(wallet, staking_addr, addr_arg)
+            except Exception:
+                rewards_value = None
 
             cooldown_seconds = int(os.getenv("VVV_COOLDOWN_SECONDS", str(7 * 24 * 60 * 60)))
 
@@ -70,44 +92,71 @@ class StakingService:
                 for sig in signatures:
                     try:
                         ts = self._call_raw_uint(staking_addr, wallet, addr_arg, sig)
-                        if ts and ts > 0:
-                            # Guard against obviously invalid outputs (e.g., struct packing)
-                            # Accept values that look like unix timestamps within +/- 10 years.
-                            if 0 < ts < 10_000_000_000:
-                                return ts
+                        if ts and 0 < ts < 10_000_000_000:
+                            return ts
                     except Exception:
                         continue
                 return None
 
-            cooldown_end = _call_timestamp([
-                "cooldownEndsAt(address)",
-                "withdrawableTimestamp(address)",
-                "cooldowns(address)",
-            ])
+            cooldown_end = _call_timestamp(
+                [
+                    "cooldownEndsAt(address)",
+                    "withdrawableTimestamp(address)",
+                    "cooldowns(address)",
+                ]
+            )
             now = int(time.time())
-            cooldown_remaining = None
-            if cooldown_end and cooldown_end > now:
-                cooldown_remaining = cooldown_end - now
+            cooldown_remaining = (cooldown_end - now) if cooldown_end and cooldown_end > now else None
 
             min_active = int(os.getenv("VVV_ACTIVE_MIN_STAKE_UNITS", "0") or 0)
-            active_staker = bool(staked > max(0, min_active))
 
-            return {
-                "status": "ok",
+            if staked is None:
+                last_snapshot = self._last_snapshot or {}
+                if last_snapshot:
+                    fallback_used = True
+                    staked = int(last_snapshot.get("staked") or 0)
+                    if rewards_value is None:
+                        rewards_value = int(last_snapshot.get("rewards") or 0)
+                else:
+                    staked = 0
+            rewards = int(rewards_value or 0)
+
+            active_staker = bool(staked > max(0, min_active))
+            if fallback_used and self._last_snapshot:
+                active_staker = bool(self._last_snapshot.get("active_staker", active_staker))
+
+            snapshot_source = "last_known" if fallback_used else "live"
+            snapshot_status = status_label if status_label != "ok" or fallback_used else "ok"
+            snapshot = {
+                "status": snapshot_status,
                 "chain_id": w3.eth.chain_id,
                 "wallet": wallet,
                 "staking_contract": staking_addr,
-                "staked": staked,
-                "staked_source": staked_meta if staked_meta else None,
+                "staked": int(staked),
+                "staked_source": staked_meta if staked_meta else ({"source": "last_known"} if fallback_used else None),
                 "rewards": rewards,
+                "unclaimed_rewards": rewards,
                 "active_staker": active_staker,
                 "min_active_stake": min_active,
+                "snapshot_source": snapshot_source,
                 "cooldown": {
                     "configured_seconds": cooldown_seconds,
                     "ends_at": cooldown_end,
                     "seconds_remaining": cooldown_remaining,
                 },
             }
+            self._record_snapshot(snapshot)
+            return snapshot
+
+    def _record_snapshot(self, snapshot: Dict[str, Any]) -> None:
+        try:
+            entry = dict(snapshot)
+        except Exception:
+            return
+        entry["ts"] = time.time()
+        self._recent_snapshots.append(entry)
+        if entry.get("status") == "ok":
+            self._last_snapshot = entry
 
     def is_active_staker(self, status: Optional[Dict[str, Any]] = None) -> bool:
         """Return True when staking position qualifies as active for Venice rewards."""
@@ -273,9 +322,9 @@ class StakingService:
             entries = [item.strip() for item in raw.split(",") if item.strip()]
         else:
             entries = (
-                "balanceOf(address)",
-                "staked(address)",
                 "stakes(address)|uint256,uint256|0",
+                "staked(address)",
+                "balanceOf(address)",
                 "userInfo(address)|uint256,uint256|0",
             )
         specs: list[Tuple[str, Sequence[str], int]] = []

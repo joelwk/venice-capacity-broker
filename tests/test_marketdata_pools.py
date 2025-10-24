@@ -37,7 +37,7 @@ def _reset_cache(monkeypatch):
     from services.marketdata import token_watcher
 
     monkeypatch.setenv("SQL_CREATE_ALL_ON_START", "true")
-    token_watcher._PRICE_PATH_CACHE.clear()  # type: ignore[attr-defined]
+    token_watcher._PRICE_PATH_CACHE.clear()  # type: ignore[attr-defined]\n    MarketDataProvider._cached_trade_paths = None
 
 
 def test_suggest_routes_for_tokens(tmp_path, monkeypatch):
@@ -161,6 +161,8 @@ def test_route_candidates_prioritize_manual(monkeypatch, tmp_path):
     token_c = _addr("23")
 
     monkeypatch.setenv("TRADE_PATH", f"{token_a},{token_c},{token_b}")
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", _addr("31"))
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", _addr("32"))
     monkeypatch.setenv("DEX_PROVIDERS", "[]")
     monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", token_b)
     monkeypatch.delenv("WBTC_TOKEN_ADDRESS", raising=False)
@@ -176,6 +178,8 @@ def test_route_candidates_prioritize_manual(monkeypatch, tmp_path):
          patch.object(MarketDataProvider, "_validate_trade_paths", lambda self: None), \
          patch.object(MarketDataProvider, "_check_wbtc_configuration", lambda self: None):
         provider = MarketDataProvider()
+        manual_paths = [tuple(route.tokens) for route in provider._collect_trade_paths()]
+        assert (token_a.lower(), token_c.lower(), token_b.lower()) in manual_paths
         routes = provider.route_candidates(token_a, token_b)
 
         assert routes, "expected at least one candidate route"

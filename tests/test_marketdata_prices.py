@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
-from libs.dex.routes import as_route_plan
+from libs.dex.routes import as_route_plan, make_route
 
 
 def test_prices_normalized_without_heuristics(monkeypatch):
@@ -59,8 +60,99 @@ def test_prices_normalized_without_heuristics(monkeypatch):
     assert math.isclose(prices["ETH"], 3200.0, rel_tol=1e-6)
     assert prices["USDC"] == 1.0
 
+
+def test_eth_price_canonical_route_avoids_vvv(monkeypatch):
+    from services.marketdata.provider import MarketDataProvider
+    from libs.dex.routes import as_route_plan, make_route
+
+    diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
+    vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
+    quote_addr = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    weth_addr = "0x4200000000000000000000000000000000000006"
+
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", diem_addr)
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", vvv_addr)
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", quote_addr)
+    monkeypatch.setenv("WETH_ADDRESS", weth_addr)
+
+    routes: list[tuple[str, ...]] = []
+
+    def fake_best_price(self, route, amount_in_decimal: float = 1.0, **kwargs):  # type: ignore[override]
+        plan = as_route_plan(route)
+        tokens = tuple(plan.tokens)
+        routes.append(tokens)
+        return {
+            "provider": "stub",
+            "amount_in": 1,
+            "amount_out": 3200,
+            "decimals": {"in": 18, "out": 6},
+            "price": 3200.0,
+            "path": list(plan.tokens),
+            "fees": [hop.fee for hop in plan.hops],
+        }
+
+    monkeypatch.setattr(MarketDataProvider, "best_price", fake_best_price, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_quote_via_path_engine", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_external_price", lambda self, symbol: None, raising=False)
+
+    MarketDataProvider._price_cache.clear()
+    provider = MarketDataProvider()
+    prices = provider.prices(["ETH"])
+
+    assert math.isclose(prices["ETH"], 3200.0)
+    assert routes, "expected at least one canonical route invocation"
+    first_route = routes[0]
+    assert first_route[0].lower() == weth_addr.lower()
+    assert first_route[-1].lower() == quote_addr.lower()
+    for recorded in routes:
+        assert vvv_addr.lower() not in [tok.lower() for tok in recorded]
+
+
+def test_diem_price_canonical_path(monkeypatch):
+    from services.marketdata.provider import MarketDataProvider
+    from libs.dex.routes import make_route
+
+    diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
+    vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
+    quote_addr = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    weth_addr = "0x4200000000000000000000000000000000000006"
+
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", diem_addr)
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", vvv_addr)
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", quote_addr)
+    monkeypatch.setenv("WETH_ADDRESS", weth_addr)
+
+    route = make_route([diem_addr, weth_addr, quote_addr], [3000, 500])
+    path_result = SimpleNamespace(
+        price=1.02,
+        provider="path_engine",
+        source="path_engine",
+        route=route,
+        metadata={
+            "path": list(route.tokens),
+            "decimals": {"in": 18, "out": 6},
+            "policy_penalty": None,
+            "guardrail_penalty": None,
+            "fees": [hop.fee for hop in route.hops],
+        },
+        score=1.0,
+    )
+
+    monkeypatch.setattr(MarketDataProvider, "_quote_via_path_engine", lambda *args, **kwargs: path_result, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_external_price", lambda self, symbol: None, raising=False)
+
+    provider = MarketDataProvider()
+    price = provider._price_for_symbol("DIEM")
+    assert math.isclose(price, 1.02, rel_tol=1e-6)
+    source = type(provider)._get_price_source("DIEM")
+    assert source.get("path") == list(route.tokens)
+    assert source.get("decimals") == {"in": 18, "out": 6}
 def test_price_health_tracks_clamp(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
+
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", "0xf4d97f2da56e8c3098f3a8d538db630a2606a024")
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf")
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
 
     provider = MarketDataProvider()
     type(provider)._last_price_sources.clear()
@@ -74,4 +166,5 @@ def test_price_health_tracks_clamp(monkeypatch):
     assert health["clamped"] is True
     assert str(health.get("source") or "").startswith("external")
     assert health.get("clamp_reason") == "drift"
+
 

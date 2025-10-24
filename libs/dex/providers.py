@@ -725,16 +725,41 @@ class DexAggregator:
         return self._collect_quotes(active, "quote_exact_out", route_plan, amount_out)
 
     def best_quote_exact_out(self, amount_out: int, route: RouteLike) -> Optional[Quote]:
-        quotes = self.quote_all_exact_out(amount_out, route)
-        if not quotes:
+        plan = as_route_plan(route)
+        quotes = self.quote_all_exact_out(amount_out, plan)
+        if quotes:
+            best = min(quotes, key=lambda q: q.amount_in)
+            _metrics_inc("dex_agg_selected_total", labels={"provider": best.provider, "mode": "exact_out"})
+            return best
+        fallback_plan: Optional[RoutePlan] = None
+        if plan.is_uniswap_v3():
+            try:
+                fallback_plan = make_route(plan.tokens)
+            except Exception:
+                fallback_plan = None
+        if fallback_plan is not None:
             if _debug_routes_enabled():
-                tokens = list(as_route_plan(route).tokens)
-                _logger.warning("dex aggregator no quotes route=%s amount_out=%s mode=exact_out", tokens, int(amount_out))
-            _metrics_inc("dex_agg_no_quotes_total", labels={"mode": "exact_out"})
-            return None
-        best = min(quotes, key=lambda q: q.amount_in)
-        _metrics_inc("dex_agg_selected_total", labels={"provider": best.provider, "mode": "exact_out"})
-        return best
+                _logger.warning(
+                    "dex aggregator exact-out retry using v2 route=%s amount_out=%s",
+                    list(fallback_plan.tokens),
+                    int(amount_out),
+                )
+            quotes = self.quote_all_exact_out(amount_out, fallback_plan)
+            if quotes:
+                best = min(quotes, key=lambda q: q.amount_in)
+                _metrics_inc(
+                    "dex_agg_selected_total",
+                    labels={"provider": best.provider, "mode": "exact_out", "fallback": "v2"},
+                )
+                return best
+        if _debug_routes_enabled():
+            _logger.warning(
+                "dex aggregator no quotes route=%s amount_out=%s mode=exact_out",
+                list(plan.tokens),
+                int(amount_out),
+            )
+        _metrics_inc("dex_agg_no_quotes_total", labels={"mode": "exact_out"})
+        return None
 
     def trade_best_exact_out(self, amount_out: int, max_in_bps: int, route: RouteLike | None = None, **kwargs) -> Dict[str, str]:
         route = kwargs.get("route", route)

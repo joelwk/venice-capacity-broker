@@ -34,6 +34,9 @@ def test_reserve_cap_units_direct_pair(monkeypatch):
     monkeypatch.setattr(es_mod, "get_token1", lambda addr: usdc, raising=True)
 
     monkeypatch.setenv("RISK_MAX_POOL_TAKE_BPS", "100")  # 1%
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", "0x" + "3" * 40)
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", "0x" + "4" * 40)
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", "0x" + "5" * 40)
 
     provider = md_mod.MarketDataProvider()
     cap = provider.reserve_cap_units([diem, usdc])

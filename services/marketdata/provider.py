@@ -81,6 +81,56 @@ DEFAULT_TOKEN_ADDRESSES = {
     "USDC": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
 }
 
+BASE_WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
+
+
+def _normalize_address(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if not lowered.startswith("0x"):
+        lowered = "0x" + lowered
+    return "0x" + lowered[2:]
+
+
+DEFAULT_TOKEN_DECIMALS: Dict[str, int] = {
+    "USDC": 6,
+    "DIEM": 18,
+    "VVV": 18,
+    "SVVV": 18,
+    "WETH": 18,
+    "ETH": 18,
+    "WBTC": 8,
+}
+
+CANONICAL_PRICE_PATHS: Dict[str, Sequence[Dict[str, Sequence[str] | Sequence[Optional[int]] | None]]] = {
+    "ETH": (
+        {"tokens": ("WETH", "USDC"), "fees": (500,)},
+        {"tokens": ("WETH", "USDC"), "fees": (3000,)},
+        {"tokens": ("WETH", "USDC"), "fees": None},
+    ),
+    "WBTC": (
+        {"tokens": ("WBTC", "WETH", "USDC"), "fees": (3000, 500)},
+        {"tokens": ("WBTC", "WETH", "USDC"), "fees": (3000, None)},
+        {"tokens": ("WBTC", "WETH"), "fees": (3000,)},
+        {"tokens": ("WBTC", "WETH"), "fees": None},
+    ),
+    "DIEM": (
+        {"tokens": ("DIEM", "WETH", "USDC"), "fees": (3000, 500)},
+        {"tokens": ("DIEM", "WETH", "USDC"), "fees": (3000, None)},
+        {"tokens": ("DIEM", "USDC"), "fees": None},
+    ),
+}
+
+_INITIAL_DECIMALS_CACHE: Dict[str, int] = {}
+for _sym, _addr in DEFAULT_TOKEN_ADDRESSES.items():
+    if _addr:
+        dec = DEFAULT_TOKEN_DECIMALS.get(_sym)
+        if dec is not None:
+            _INITIAL_DECIMALS_CACHE[_normalize_address(_addr)] = int(dec)
+_INITIAL_DECIMALS_CACHE[_normalize_address(BASE_WETH_ADDRESS)] = DEFAULT_TOKEN_DECIMALS["WETH"]
+
 
 class MarketDataProvider:
     """Market data via DEX aggregator + Venice endpoints.
@@ -116,10 +166,41 @@ class MarketDataProvider:
     _aggregator_signature: Optional[str] = None
     _route_quote_cache: Dict[str, Tuple[float, Any]] = {}
     _route_quote_cache_lock: Lock = Lock()
+    _decimals_cache_lock: Lock = Lock()
+    _decimals_cache: Dict[str, int] = dict(_INITIAL_DECIMALS_CACHE)
+
+    def __init__(self) -> None:
+        self._ensure_required_env()
+
+    def _ensure_required_env(self) -> None:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return
+        missing = [name for name in ("DIEM_TOKEN_ADDRESS", "QUOTE_TOKEN_ADDRESS") if not os.getenv(name)]
+        if not missing:
+            return
+        message = f"Missing required environment variable(s) for market data: {', '.join(missing)}"
+        try:
+            _logger.error(message)
+        except Exception:
+            pass
+        raise EnvironmentError(message)
 
 
     def _price_cache_key(self, symbol: str) -> str:
         return (symbol or "").upper()
+
+    def _remember_default_decimals(self, symbol: str, address: Optional[str]) -> None:
+        if not address:
+            return
+        norm = _normalize_address(address)
+        if not norm:
+            return
+        decimals = DEFAULT_TOKEN_DECIMALS.get(str(symbol or "").upper())
+        if decimals is None:
+            return
+        cls = type(self)
+        with cls._decimals_cache_lock:
+            cls._decimals_cache.setdefault(norm, int(decimals))
 
     def _price_cache_capacity(self) -> int:
         try:
@@ -464,6 +545,12 @@ class MarketDataProvider:
             "path": path,
             "source": detail.get("source"),
         }
+        if "fees" in detail:
+            breakdown["fees"] = detail.get("fees")
+        if "decimals" in detail:
+            breakdown["decimals"] = detail.get("decimals")
+        if "reserves" in detail:
+            breakdown["reserves"] = detail.get("reserves")
         return breakdown
 
     def _apply_price_sanity(self, symbol: str, price: Optional[float]) -> float:
@@ -499,11 +586,14 @@ class MarketDataProvider:
                 path_str = self._format_path(breakdown.get("path"))
                 try:
                     _logger.info(
-                        "price sanity breakdown symbol=%s provider=%s path=%s source=%s",
+                    "price sanity breakdown symbol=%s provider=%s path=%s source=%s fees=%s decimals=%s reserves=%s",
                         label,
                         breakdown.get("provider"),
                         path_str,
                         breakdown.get("source"),
+                        breakdown.get("fees"),
+                        breakdown.get("decimals"),
+                        breakdown.get("reserves"),
                     )
                 except Exception:
                     pass
@@ -514,8 +604,8 @@ class MarketDataProvider:
                 label,
                 "invalid_internal",
                 {
-                    "external_price": float(ext_price),
-                    "internal_price": float(price) if price is not None else None,
+                "external_price": float(ext_price),
+                "internal_price": float(price) if price is not None else None,
                 },
             )
             type(self)._record_price_source(label, "external_invalid", {"valid": True})
@@ -541,12 +631,15 @@ class MarketDataProvider:
                 path_str = self._format_path(breakdown.get("path"))
                 try:
                     _logger.info(
-                        "price sanity breakdown symbol=%s provider=%s path=%s source=%s diff=%.6f",
+                    "price sanity breakdown symbol=%s provider=%s path=%s source=%s diff=%.6f fees=%s decimals=%s reserves=%s",
                         label,
                         breakdown.get("provider"),
                         path_str,
                         breakdown.get("source"),
                         diff,
+                        breakdown.get("fees"),
+                        breakdown.get("decimals"),
+                        breakdown.get("reserves"),
                     )
                 except Exception:
                     pass
@@ -559,11 +652,11 @@ class MarketDataProvider:
                 label,
                 "drift",
                 {
-                    "diff": float(diff),
-                    "threshold": float(threshold),
-                    "external_price": float(ext_price),
-                    "internal_price": float(price),
-                    "fallback": fallback_source,
+                "diff": float(diff),
+                "threshold": float(threshold),
+                "external_price": float(ext_price),
+                "internal_price": float(price),
+                "fallback": fallback_source,
                 },
             )
             type(self)._record_price_source(label, "external_clamp", {"valid": True, "fallback": fallback_source})
@@ -623,9 +716,9 @@ class MarketDataProvider:
                         _logger.info("trade path verified", extra={"path": list(adjusted_plan.tokens), "venues": venues})
                     else:
                         _logger.warning(
-                            "trade path verification empty",
+                        "trade path verification empty",
                             extra={"path": list(adjusted_plan.tokens), "report": report},
-                        )
+                    )
                 else:
                     _logger.warning("trade path verification empty", extra={"path": list(adjusted_plan.tokens), "report": report})
 
@@ -1063,9 +1156,21 @@ class MarketDataProvider:
         from web3 import Web3  # lazy load
         from libs.agentkit_ext.web3_utils import get_contract, get_web3
 
+        norm = _normalize_address(address)
+        cls = type(self)
+        if norm:
+            with cls._decimals_cache_lock:
+                cached = cls._decimals_cache.get(norm)
+            if cached is not None and cached > 0:
+                return int(cached)
+
         w3 = get_web3()
         erc20 = get_contract(w3, Web3.to_checksum_address(address), "erc20.json")
-        return int(erc20.functions.decimals().call())
+        decimals = int(erc20.functions.decimals().call())
+        if norm and decimals > 0:
+            with cls._decimals_cache_lock:
+                cls._decimals_cache[norm] = int(decimals)
+        return decimals
 
     @staticmethod
     def _parse_route_spec(raw: str) -> RoutePlan:
@@ -1116,6 +1221,36 @@ class MarketDataProvider:
         if len(tokens) < 2:
             raise ValueError("route must include at least two addresses")
         return make_route(tokens, fees)
+
+    def _canonical_routes_for_symbol(self, symbol: str) -> List[RoutePlan]:
+        specs = CANONICAL_PRICE_PATHS.get(str(symbol or "").upper()) or ()
+        routes: List[RoutePlan] = []
+        for spec in specs:
+            tokens_spec = list(spec.get("tokens", ())) if isinstance(spec, dict) else []
+            if not tokens_spec or len(tokens_spec) < 2:
+                continue
+            addresses: List[str] = []
+            for token_symbol in tokens_spec:
+                token_key = str(token_symbol or "").upper()
+                if token_key == "ETH":
+                    token_key = "WETH"
+                addr = self._address_for_symbol(token_key)
+                if not addr:
+                    addresses = []
+                    break
+                addresses.append(addr)
+            if not addresses or len(addresses) < 2:
+                continue
+            fees_spec = spec.get("fees") if isinstance(spec, dict) else None
+            fees: Optional[List[Optional[int]]] = None
+            if fees_spec is not None:
+                fees = [int(fee) if fee is not None else None for fee in list(fees_spec)]  # type: ignore[list-item]
+            try:
+                plan = make_route(addresses, fees)
+            except Exception:
+                continue
+            routes.append(plan)
+        return routes
 
     @staticmethod
     def _coerce_route_entry(entry: Any) -> Optional[str]:  # noqa: ANN401
@@ -1184,19 +1319,30 @@ class MarketDataProvider:
         bt = self._bridge_token_address()
         if not bt:
             # Fallback to canonical Base WETH
-            return "0x4200000000000000000000000000000000000006"
-        return bt
+            addr = BASE_WETH_ADDRESS
+        else:
+            addr = bt
+        self._remember_default_decimals("WETH", addr)
+        self._remember_default_decimals("ETH", addr)
+        return addr
 
     def _address_for_symbol(self, symbol: str) -> Optional[str]:
-        import os
-
         s = symbol.upper()
         if s == "DIEM":
             value = (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip() or None
-            return value or DEFAULT_TOKEN_ADDRESSES.get("DIEM")
+            if not value:
+                value = DEFAULT_TOKEN_ADDRESSES.get("DIEM")
+            if value:
+                self._remember_default_decimals("DIEM", value)
+            return value
         if s == "VVV":
             value = (os.getenv("VVV_TOKEN_ADDRESS") or "").strip() or None
-            return value or DEFAULT_TOKEN_ADDRESSES.get("VVV")
+            if not value:
+                value = DEFAULT_TOKEN_ADDRESSES.get("VVV")
+            if value:
+                self._remember_default_decimals("VVV", value)
+                self._remember_default_decimals("SVVV", value)
+            return value
         if s in {"ETH", "WETH"}:
             try:
                 return self._weth_address()
@@ -1204,14 +1350,21 @@ class MarketDataProvider:
                 return None
         if s == "USDC":
             value = (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip() or None
-            return value or DEFAULT_TOKEN_ADDRESSES.get("USDC")
+            if not value:
+                value = DEFAULT_TOKEN_ADDRESSES.get("USDC")
+            if value:
+                self._remember_default_decimals("USDC", value)
+            return value
         if s == "WBTC":
-            return (
+            value = (
                 os.getenv("WBTC_TOKEN_ADDRESS")
                 or os.getenv("BTC_TOKEN_ADDRESS")
                 or os.getenv("CBBTC_TOKEN_ADDRESS")
                 or ""
             ).strip() or None
+            if value:
+                self._remember_default_decimals("WBTC", value)
+            return value
         return None
 
     @staticmethod
@@ -1237,6 +1390,12 @@ class MarketDataProvider:
             seen.add(key)
             paths.append(route)
 
+        try:
+            for plan in self._canonical_routes_for_symbol("DIEM"):
+                _add_route(plan)
+        except Exception:
+            pass
+
         raw_paths = os.getenv("TRADE_PATHS")
         if raw_paths:
             try:
@@ -1256,15 +1415,14 @@ class MarketDataProvider:
             except Exception:
                 _logger.warning("failed to parse TRADE_PATHS JSON", exc_info=True)
 
-        if not paths:
-            for key in ("TRADE_PATH", "TRADE_PATH_2"):
-                raw = os.getenv(key)
-                if not raw:
-                    continue
-                try:
-                    _add_route(self._parse_route_spec(raw))
-                except Exception:
-                    _logger.warning("invalid %s env route", key, exc_info=True)
+        for key in ("TRADE_PATH", "TRADE_PATH_2"):
+            raw = os.getenv(key)
+            if not raw:
+                continue
+            try:
+                _add_route(self._parse_route_spec(raw))
+            except Exception:
+                _logger.warning("invalid %s env route", key, exc_info=True)
 
         if self._env_flag("TRADE_PATHS_DYNAMIC", True):
             try:
@@ -1288,16 +1446,29 @@ class MarketDataProvider:
         dst_l = dst.lower()
         routes: List[RoutePlan] = []
         seen: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+        canonical_pairs: set[Tuple[str, str]] = set()
+        try:
+            for symbol in ("ETH", "WBTC"):
+                for plan in self._canonical_routes_for_symbol(symbol):
+                    tokens = getattr(plan, "tokens", [])
+                    if not tokens or len(tokens) < 2:
+                        continue
+                    canonical_pairs.add((tokens[0].lower(), tokens[-1].lower()))
+        except Exception:
+            canonical_pairs = set()
 
         def _key(route: RoutePlan) -> Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]:
             return (tuple(route.tokens), tuple(hop.fee for hop in route.hops))
 
-        def _add(route: RoutePlan) -> None:
+        def _add(route: RoutePlan, *, prefer: bool = False) -> None:
             key = _key(route)
             if key in seen:
                 return
             seen.add(key)
-            routes.append(route)
+            if prefer:
+                routes.insert(0, route)
+            else:
+                routes.append(route)
 
         try:
             manual = self._collect_trade_paths()
@@ -1309,7 +1480,7 @@ class MarketDataProvider:
             if not tokens:
                 continue
             if tokens[0].lower() == src_l and tokens[-1].lower() == dst_l:
-                _add(plan)
+                _add(plan, prefer=True)
 
         try:
             from services.marketdata import pools as _pools  # lazy import
@@ -1345,10 +1516,13 @@ class MarketDataProvider:
         if vvv_addr:
             vvv_l = vvv_addr.lower()
             if vvv_l not in {src_l, dst_l}:
-                try:
-                    _add(make_route([src, vvv_addr, dst]))
-                except Exception:
-                    pass
+                pair_key = (src_l, dst_l)
+                reverse_pair_key = (dst_l, src_l)
+                if pair_key not in canonical_pairs and reverse_pair_key not in canonical_pairs:
+                    try:
+                        _add(make_route([src, vvv_addr, dst]))
+                    except Exception:
+                        pass
 
         return routes
 
@@ -1373,6 +1547,19 @@ class MarketDataProvider:
 
         path_result = self._quote_via_path_engine(token_in, token_out, amount_in_decimal=1.0)
         if path_result and self._valid_price(path_result.price):
+            metadata = path_result.metadata if isinstance(path_result.metadata, dict) else {}
+            detail_payload = {
+                "valid": True,
+                "provider": path_result.provider,
+                "path": list(path_result.route.tokens) if path_result.route else metadata.get("path"),
+                "source": path_result.source,
+                "score": path_result.score,
+                "policy_penalty": metadata.get("policy_penalty"),
+                "guardrail_penalty": metadata.get("guardrail_penalty"),
+                "decimals": metadata.get("decimals"),
+                "fees": [hop.fee for hop in getattr(path_result.route, "hops", [])] if path_result.route else metadata.get("fees"),
+            }
+            type(self)._record_price_source(symbol, path_result.source or "path_engine", detail_payload)
             return float(path_result.price)
 
         attempted: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
@@ -1591,6 +1778,7 @@ class MarketDataProvider:
                 "decimals": {"in": dec_in, "out": dec_out},
                 "price": price,
                 "path": used_route.tokens,
+                "fees": [hop.fee for hop in getattr(used_route, "hops", [])],
             }
 
         if supports_reserve:
@@ -1605,13 +1793,14 @@ class MarketDataProvider:
                     amount_out_units = int(price * amount_in_units * (10 ** (dec_out - dec_in)))
                 else:
                     amount_out_units = int(price * amount_in_units / (10 ** (dec_in - dec_out)))
-                return {
-                    "provider": "approx",
-                    "amount_in": amount_in_units,
-                    "amount_out": amount_out_units,
-                    "decimals": {"in": dec_in, "out": dec_out},
-                    "price": price,
-                    "path": plan.tokens,
+            return {
+                "provider": "approx",
+                "amount_in": amount_in_units,
+                "amount_out": amount_out_units,
+                "decimals": {"in": dec_in, "out": dec_out},
+                "price": price,
+                "path": plan.tokens,
+                "fees": [hop.fee for hop in plan.hops],
                 }
 
         # As a final fallback, try composable hop pricing for multi-hop routes
@@ -1630,6 +1819,7 @@ class MarketDataProvider:
                 "decimals": {"in": dec_in, "out": dec_out},
                 "price": price,
                 "path": plan.tokens,
+                "fees": [hop.fee for hop in plan.hops],
             }
 
         _record("dex_final", 0.0, "error")
@@ -1804,10 +1994,10 @@ class MarketDataProvider:
                     uv2 = (hops[0] or {}).get("uniswap_v2") or {}
                     if uv2.get("pair"):
                         info = {
-                            "pair": uv2.get("pair"),
-                            "reserves": uv2.get("reserves"),
-                            "token0": uv2.get("token0"),
-                            "token1": uv2.get("token1"),
+                        "pair": uv2.get("pair"),
+                        "reserves": uv2.get("reserves"),
+                        "token0": uv2.get("token0"),
+                        "token1": uv2.get("token1"),
                         }
             except Exception:
                 info = None
@@ -1856,14 +2046,17 @@ class MarketDataProvider:
         config = load_env_config()
         path_result = self._quote_via_path_engine(diem, quote, amount_in_decimal=1.0)
         if path_result and self._valid_price(path_result.price):
+            metadata = path_result.metadata if isinstance(path_result.metadata, dict) else {}
             detail_payload = {
                 "valid": True,
                 "provider": path_result.provider,
-                "path": list(path_result.route.tokens) if path_result.route else path_result.metadata.get("path"),
+                "path": list(path_result.route.tokens) if path_result.route else metadata.get("path"),
                 "source": path_result.source,
                 "score": path_result.score,
-                "policy_penalty": path_result.metadata.get("policy_penalty") if isinstance(path_result.metadata, dict) else None,
-                "guardrail_penalty": path_result.metadata.get("guardrail_penalty") if isinstance(path_result.metadata, dict) else None,
+                "policy_penalty": metadata.get("policy_penalty"),
+                "guardrail_penalty": metadata.get("guardrail_penalty"),
+                "decimals": metadata.get("decimals"),
+                "fees": [hop.fee for hop in getattr(path_result.route, "hops", [])] if path_result.route else metadata.get("fees"),
             }
             type(self)._record_price_source(symbol, path_result.source or "path_engine", detail_payload)
             return float(path_result.price)
@@ -1880,24 +2073,49 @@ class MarketDataProvider:
         source = "missing"
         selected: Optional[float] = None
 
-        routes = self._collect_trade_paths()
-        if not routes:
-            routes = [make_route([diem, quote])]
+        raw_routes = list(self._collect_trade_paths())
+        route_candidates: List[RoutePlan] = []
+        seen_route_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+        def _add_candidate(plan: RoutePlan) -> None:
+            tokens = [str(tok).strip() for tok in getattr(plan, "tokens", []) if tok and str(tok).strip()]
+            if not tokens or tokens[0].lower() != diem.lower():
+                return
+            key = (tuple(tok.lower() for tok in tokens), tuple(hop.fee for hop in plan.hops))
+            if key in seen_route_keys:
+                return
+            seen_route_keys.add(key)
+            route_candidates.append(plan)
+
+        for plan in self._canonical_routes_for_symbol("DIEM"):
+            _add_candidate(plan)
+
+        for plan in raw_routes:
+            _add_candidate(plan)
+
+        if not route_candidates:
+            try:
+                _add_candidate(make_route([diem, quote]))
+            except Exception:
+                pass
         else:
-            has_diem_path = any(r.tokens and r.tokens[0].lower() == diem.lower() for r in routes)
-            if not has_diem_path:
-                routes.insert(0, make_route([diem, quote]))
+            has_direct = any(
+                plan.tokens
+                and len(plan.tokens) == 2
+                and plan.tokens[-1].lower() == quote.lower()
+                for plan in route_candidates
+            )
+            if not has_direct:
+                try:
+                    _add_candidate(make_route([diem, quote]))
+                except Exception:
+                    pass
 
         detail_payload: Optional[Dict[str, Any]] = None
-        seen: set[tuple[str, ...]] = set()
-        for route in routes:
+        for route in route_candidates:
             tokens = [t.strip() for t in route.tokens if t and t.strip()]
             if not tokens or tokens[0].lower() != diem.lower():
                 continue
-            key = tuple(t.lower() for t in tokens)
-            if key in seen:
-                continue
-            seen.add(key)
 
             total: Optional[float] = None
             local_source = None
@@ -1907,8 +2125,10 @@ class MarketDataProvider:
                 local_source = "aggregator_direct"
                 total = float(direct_quote.get("price") or 0.0)
                 source_detail = {
-                    "provider": direct_quote.get("provider"),
-                    "path": direct_quote.get("path"),
+                "provider": direct_quote.get("provider"),
+                "path": direct_quote.get("path"),
+                "decimals": direct_quote.get("decimals"),
+                "reserves": direct_quote.get("reserves"),
                 }
                 if direct_quote.get("source"):
                     source_detail["source"] = direct_quote.get("source")
@@ -1917,7 +2137,7 @@ class MarketDataProvider:
                 if self._valid_price(seg_price):
                     local_source = "aggregator_segments"
                     total = float(seg_price)
-                    source_detail = {"provider": "segments", "path": tokens}
+                    source_detail = {"provider": "segments", "path": tokens, "fees": [hop.fee for hop in route.hops]}
             if total is None:
                 continue
 
@@ -1973,9 +2193,9 @@ class MarketDataProvider:
                     if self._valid_price(bridge_price):
                         type(self)._record_price_source(
                             symbol,
-                            "bridge_vvv",
+                        "bridge_vvv",
                             {"valid": True, "path": ["bridge", "vvv", "usdc"], "reason": "override_weth"},
-                        )
+                    )
                         return float(bridge_price)
 
             type(self)._record_price_source(symbol, source, detail_payload)
@@ -2070,12 +2290,12 @@ class MarketDataProvider:
             try:
                 from libs.telemetry.events import emit as _emit
                 payload = {
-                    "symbols": [str(s) for s in symbols],
-                    "prices": dict(normalized_out),
-                    "latency_ms": round(total_elapsed * 1000.0, 3),
-                    "cache_hits": stats["cache_hits"],
-                    "cache_misses": stats["cache_misses"],
-                    "dex_calls": stats.get("dex_calls", 0),
+                "symbols": [str(s) for s in symbols],
+                "prices": dict(normalized_out),
+                "latency_ms": round(total_elapsed * 1000.0, 3),
+                "cache_hits": stats["cache_hits"],
+                "cache_misses": stats["cache_misses"],
+                "dex_calls": stats.get("dex_calls", 0),
                 }
                 _emit("signal.market.prices", payload)
             except Exception:
@@ -2117,9 +2337,12 @@ class MarketDataProvider:
                 price = float(bp.get("price") or 0.0)
                 price_valid = self._valid_price(price)
                 detail = {
-                    "valid": price_valid,
-                    "provider": bp.get("provider") if isinstance(bp, dict) else None,
-                    "path": bp.get("path") if isinstance(bp, dict) else None,
+                "valid": price_valid,
+                "provider": bp.get("provider") if isinstance(bp, dict) else None,
+                "path": bp.get("path") if isinstance(bp, dict) else None,
+                "decimals": bp.get("decimals") if isinstance(bp, dict) else None,
+                    "fees": bp.get("fees"),
+                "reserves": bp.get("reserves") if isinstance(bp, dict) else None,
                 }
                 type(self)._record_price_source("DIEM", "route_direct", detail)
                 return self._apply_price_sanity("DIEM", price)
@@ -2187,11 +2410,35 @@ class MarketDataProvider:
                 override = self._route_optional_from_env("WBTC_PRICE_PATH") or self._route_optional_from_env("WBTC_TRADE_PATH")
                 weth = self._weth_address()
                 routes: List[RoutePlan] = []
+                seen_route_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+
+                def _append_route(plan: RoutePlan) -> None:
+                    key = (tuple(plan.tokens), tuple(hop.fee for hop in plan.hops))
+                    if key in seen_route_keys:
+                        return
+                    seen_route_keys.add(key)
+                    routes.append(plan)
+
                 if override:
-                    routes.append(override)
+                    _append_route(override)
+                for plan in self._canonical_routes_for_symbol("WBTC"):
+                    tokens = getattr(plan, "tokens", [])
+                    if not tokens:
+                        continue
+                    if tokens[0].lower() != token.lower():
+                        continue
+                    if tokens[-1].lower() == quote.lower():
+                        _append_route(plan)
+
                 if weth and weth.lower() not in {token.lower(), quote.lower()}:
-                    routes.append(make_route([token, weth, quote]))
-                routes.append(make_route([token, quote]))
+                    try:
+                        _append_route(make_route([token, weth, quote]))
+                    except Exception:
+                        pass
+                try:
+                    _append_route(make_route([token, quote]))
+                except Exception:
+                    pass
                 for route in routes:
                     priced = None
                     candidates: list[float] = []
@@ -2266,6 +2513,8 @@ class MarketDataProvider:
                     "score": path_result.score,
                     "policy_penalty": metadata.get("policy_penalty"),
                     "guardrail_penalty": metadata.get("guardrail_penalty"),
+                    "decimals": metadata.get("decimals"),
+                    "fees": [hop.fee for hop in getattr(path_result.route, "hops", [])] if path_result.route else metadata.get("fees"),
                 }
                 type(self)._record_price_source("ETH", path_result.source or "path_engine", detail_payload)
                 return self._apply_price_sanity("ETH", float(path_result.price))
@@ -2273,10 +2522,22 @@ class MarketDataProvider:
             routes_to_try: List[RoutePlan] = []
             seen_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
 
+            def _add_route(candidate: RoutePlan) -> None:
+                key = (tuple(candidate.tokens), tuple(hop.fee for hop in candidate.hops))
+                if key in seen_keys:
+                    return
+                seen_keys.add(key)
+                routes_to_try.append(candidate)
+
+            try:
+                for canonical in self._canonical_routes_for_symbol("ETH"):
+                    _add_route(canonical)
+            except Exception:
+                pass
+
             override = self._route_optional_from_env("ETH_PRICE_PATH")
             if override:
-                seen_keys.add((tuple(override.tokens), tuple(hop.fee for hop in override.hops)))
-                routes_to_try.append(override)
+                _add_route(override)
 
             try:
                 trade_route = self._route_from_env()
@@ -2297,20 +2558,14 @@ class MarketDataProvider:
                         candidate = make_route([a, b], [fee] if fee is not None else None)
                     except Exception:
                         continue
-                    key = (tuple(candidate.tokens), tuple(hop.fee for hop in candidate.hops))
-                    if key in seen_keys:
-                        continue
-                    seen_keys.add(key)
-                    routes_to_try.append(candidate)
+                    _add_route(candidate)
 
             try:
                 fallback_route = make_route([weth, quote])
             except Exception:
                 fallback_route = None
             if fallback_route is not None:
-                key = (tuple(fallback_route.tokens), tuple(hop.fee for hop in fallback_route.hops))
-                if key not in seen_keys:
-                    routes_to_try.append(fallback_route)
+                _add_route(fallback_route)
 
             for route in routes_to_try:
                 try:
@@ -2322,14 +2577,17 @@ class MarketDataProvider:
                 if not self._valid_price(price):
                     continue
                 type(self)._record_price_source(
-                    "ETH",
-                    "aggregator",
-                    {
-                        "valid": True,
-                        "provider": bp.get("provider"),
-                        "path": list(bp.get("path") or route.tokens),
-                        "source": "best_price",
-                    },
+                "ETH",
+                "aggregator",
+                {
+                "valid": True,
+                "provider": bp.get("provider"),
+                "path": list(bp.get("path") or route.tokens),
+                "fees": bp.get("fees"),
+                "source": "best_price",
+                "decimals": bp.get("decimals"),
+                "reserves": bp.get("reserves"),
+                },
                 )
                 return self._apply_price_sanity("ETH", price)
 
@@ -2345,8 +2603,8 @@ class MarketDataProvider:
                     scan_price = None
                 if self._valid_price(scan_price):
                     type(self)._record_price_source(
-                        "ETH",
-                        "aggregator_scan",
+                    "ETH",
+                    "aggregator_scan",
                         {"valid": True, "path": list(route_to_scan.tokens), "source": "scan"},
                     )
                     return self._apply_price_sanity("ETH", float(scan_price))
@@ -2355,8 +2613,8 @@ class MarketDataProvider:
                 px = self._mid_price_from_reserves(weth, quote)
                 if self._valid_price(px):
                     type(self)._record_price_source(
-                        "ETH",
-                        "reserves",
+                    "ETH",
+                    "reserves",
                         {"valid": True, "path": [weth, quote], "source": "mid_price"},
                     )
                     return self._apply_price_sanity("ETH", float(px))
@@ -2370,8 +2628,8 @@ class MarketDataProvider:
                 ext_price = None
             if self._valid_price(ext_price):
                 type(self)._record_price_source(
-                    "ETH",
-                    "external_fallback",
+                "ETH",
+                "external_fallback",
                     {"valid": True, "source": "external_reference"},
                 )
                 return self._apply_price_sanity("ETH", float(ext_price))
@@ -2417,13 +2675,13 @@ class MarketDataProvider:
             import os as _os
             if (_os.getenv("VENICE_OFFLINE_SIGNALS") or "false").strip().lower() in {"1", "true", "yes", "on"}:
                 stub = {
-                    "offline": True,
-                    "source": "stub",
-                    "kind": "vvv_metrics",
-                    "ts": int(time.time()),
-                    "circulating_supply": None,
-                    "utilization": None,
-                    "staking_yield": None,
+                "offline": True,
+                "source": "stub",
+                "kind": "vvv_metrics",
+                "ts": int(time.time()),
+                "circulating_supply": None,
+                "utilization": None,
+                "staking_yield": None,
                 }
                 self._vvv_metrics_cache, self._vvv_metrics_cache_t = stub, time.time()
                 return stub
@@ -2713,3 +2971,9 @@ class MarketDataProvider:
             return int(cap)
         except Exception:
             return None
+
+
+
+
+
+

@@ -34,6 +34,7 @@ class ReflexGuardian:
             self.max_drawdown = self.max_drawdown / 100.0
         self.apply_in_dry_run = self._resolve_flag(apply_in_dry_run, "REFLEX_APPLY_DRY_RUN", False)
         self.require_active_stake = self._resolve_flag(require_active_stake, "REFLEX_REQUIRE_ACTIVE_STAKE", True)
+        self._consecutive_inactive = 0
 
     # ------------------------------------------------------------------
     def evaluate(
@@ -72,17 +73,34 @@ class ReflexGuardian:
         if utilization is not None and self.max_utilization is not None and utilization > self.max_utilization:
             warnings.append("utilization_hot")
 
-        stake_status = (stake or {}).get("status")
-        if stake_status not in (None, "ok"):
+        stake_payload = stake if isinstance(stake, dict) else {}
+        stake_status_raw = stake_payload.get("status")
+        stake_status = str(stake_status_raw or "").lower()
+        if stake_status not in {"", "ok", "unknown"}:
             reasons.append("stake_error")
         if self.require_active_stake:
-            snapshot = (stake or {}).get("snapshot")
-            active = bool(snapshot.get("active_staker")) if isinstance(snapshot, dict) else False
-            if not active:
+            snapshot = stake_payload.get("snapshot") if isinstance(stake_payload, dict) else None
+            active_flag: Optional[bool]
+            if isinstance(snapshot, dict) and "active_staker" in snapshot:
+                active_flag = bool(snapshot.get("active_staker"))
+            else:
+                active_flag = None
+            threshold = self._stake_inactive_threshold()
+            if stake_status == "unknown" or active_flag is None:
+                self._consecutive_inactive = 0
+            elif active_flag is False:
+                self._consecutive_inactive += 1
+            else:
+                self._consecutive_inactive = 0
+            if self._consecutive_inactive >= threshold:
                 reasons.append("stake_inactive")
 
         halt = bool(reasons)
         result = self._result(halt, reasons, warnings, price, utilization, vol_bps)
+        observed = result.get("observed", {})
+        observed["stake_inactive_consecutive"] = self._consecutive_inactive
+        observed["stake_status"] = stake_status
+        result["observed"] = observed
         if last_cycle is not None:
             result["lastCycleTs"] = last_cycle.get("ts")
         if halt or warnings:
@@ -102,8 +120,14 @@ class ReflexGuardian:
             except Exception:
                 pass
         return result
-
     # ------------------------------------------------------------------
+    def _stake_inactive_threshold(self) -> int:
+        try:
+            value = int(os.getenv("REFLEX_STAKE_INACTIVE_CONSEC") or 3)
+        except Exception:
+            value = 3
+        return max(1, value)
+
     def _result(
         self,
         halt: bool,
@@ -165,3 +189,4 @@ class ReflexGuardian:
 
 
 __all__ = ["ReflexGuardian"]
+

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import requests
 
+logger = logging.getLogger("venice_sdk.client")
 
 @dataclass
 class VeniceConfig:
@@ -36,9 +38,36 @@ class VeniceClient:
     Endpoints are configurable via env to match your Venice deployment.
     """
 
+    @staticmethod
+    def _normalize_base_url(base: Optional[str]) -> tuple[str, bool]:
+        """Ensure the base URL ends with /api/v1, returning (url, coerced_flag)."""
+        fallback = "https://api.venice.ai/api/v1"
+        value = str(base or "").strip()
+        if not value:
+            return fallback, True
+        normalized = value.rstrip("/")
+        if "/api/v1" in normalized:
+            idx = normalized.index("/api/v1") + len("/api/v1")
+            trimmed = normalized[:idx]
+            return trimmed, trimmed != normalized
+        coerced = False
+        if normalized.endswith("/api"):
+            normalized = f"{normalized}/v1"
+            coerced = True
+        else:
+            normalized = f"{normalized}/api/v1"
+            coerced = True
+        if not normalized.endswith("/api/v1"):
+            return fallback, True
+        return normalized, coerced
+
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None):
+        raw_base = base_url or os.getenv("VENICE_API_BASE_URL", "https://api.venice.ai/api/v1")
+        resolved_base, coerced = self._normalize_base_url(raw_base)
+        if coerced:
+            logger.warning("VENICE_API_BASE_URL missing '/api/v1'; using %s (was %s)", resolved_base, raw_base)
         self.config = VeniceConfig(
-            base_url=base_url or os.getenv("VENICE_API_BASE_URL", "https://api.venice.ai/api/v1"),
+            base_url=resolved_base,
             api_key=api_key or os.getenv("VENICE_API_KEY"),
             create_root_path=os.getenv("VENICE_CREATE_ROOT_PATH", "/api_keys/generate_web3_key"),
             create_subkey_path=os.getenv("VENICE_CREATE_SUBKEY_PATH", "/api_keys"),

@@ -253,7 +253,9 @@ class ArbiDiem:
                 return int(adjusted), bps2
             try:
                 if prev_bps is not None and abs(bps2 - prev_bps) < 1e-6:
-                    break
+                    if adjusted <= 1:
+                        break
+                    continue
             except Exception:
                 pass
         try:

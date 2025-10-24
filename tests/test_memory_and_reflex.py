@@ -68,7 +68,8 @@ def test_reflex_guardian_warns_high_utilization():
     assert "utilization_hot" in result["warnings"]
 
 
-def test_reflex_guardian_requires_active_stake():
+def test_reflex_guardian_requires_active_stake(monkeypatch):
+    monkeypatch.setenv("REFLEX_STAKE_INACTIVE_CONSEC", "1")
     guardian = ReflexGuardian(max_drawdown=None, max_vol_bps=None, max_utilization=None, require_active_stake=True)
     result = guardian.evaluate(
         price=1.0,
@@ -107,3 +108,31 @@ def test_reflex_guardian_apply_in_dry_run_flag():
     )
     assert result_apply["halt"] is True
     assert "price_unavailable" in result_apply["reasons"]
+
+
+def test_reflex_guardian_consecutive_inactive_threshold():
+    guardian = ReflexGuardian(max_drawdown=None, max_vol_bps=None, max_utilization=None, require_active_stake=True)
+    kwargs = {
+        "price": 1.0,
+        "utilization": 0.5,
+        "vol_bps": 10.0,
+        "dry_run": False,
+        "enable_live": True,
+        "last_cycle": None,
+    }
+    stake_payload = {"status": "ok", "snapshot": {"active_staker": False}}
+    first = guardian.evaluate(stake=stake_payload, **kwargs)
+    assert first["halt"] is False
+    second = guardian.evaluate(stake=stake_payload, **kwargs)
+    assert second["halt"] is False
+    third = guardian.evaluate(stake=stake_payload, **kwargs)
+    assert third["halt"] is True
+    assert third["observed"]["stake_inactive_consecutive"] >= 3
+
+    unknown = guardian.evaluate(
+        stake={"status": "unknown", "snapshot": {"active_staker": True}},
+        **kwargs,
+    )
+    assert unknown["halt"] is False
+    assert unknown["observed"]["stake_inactive_consecutive"] == 0
+
