@@ -364,19 +364,25 @@ class ArbiDiem:
             # Risk-gated sizing (utilization/vol-aware if available)
             want = int(desired_units) if desired_units is not None else self._desired_units()
             # Optional pool reserve cap (best-effort)
-            reserve_cap: int | None = None
+            reserve_cap_units: int | None = None
             pool_take_bps: int | None = None
             try:
                 md = self._market_provider()
                 routes = self._trade_routes()
                 path = routes[0] if routes else None
                 try:
-                    pool_take_bps = int(self.risk.pool_take_cap_bps())
+                    pool_take_bps = int(getattr(self.risk, "pool_take_bps_cap", 25))
                 except Exception:
                     pool_take_bps = 25
-                reserve_cap = md.reserve_cap_units(path, take_bps=pool_take_bps) if path else None
+                if path:
+                    cap_raw = md.reserve_cap_units(path, take_bps=pool_take_bps)
+                    if cap_raw is not None:
+                        try:
+                            reserve_cap_units = max(0, int(cap_raw))
+                        except Exception:
+                            reserve_cap_units = None
             except Exception:
-                reserve_cap = None
+                reserve_cap_units = None
             try:
                 suggested = self.risk.size_with_risk(
                     want,
@@ -384,18 +390,24 @@ class ArbiDiem:
                     current_inventory_usd=current_inventory_usd,
                     utilization_ratio=utilization_ratio,
                     vol_bps=vol_bps,
-                    reserve_cap_units=reserve_cap,
                 )
             except Exception:
                 suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
+            base_suggested = max(0, int(suggested))
+            final_suggested = base_suggested
+            if reserve_cap_units is not None:
+                final_suggested = min(base_suggested, reserve_cap_units)
             rationale.update({
                 "desired_units": int(want),
-                "suggested_units": int(suggested),
-                "reserve_cap_units": (int(reserve_cap) if isinstance(reserve_cap, int) else None),
+                "suggested_units": int(base_suggested),
+                "reserve_cap_units": (int(reserve_cap_units) if reserve_cap_units is not None else None),
                 "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
                 "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
                 "vol_bps": (float(vol_bps) if vol_bps is not None else None),
             })
+            if final_suggested != base_suggested:
+                rationale.update({"reserve_capped_units": int(final_suggested)})
+            suggested = int(final_suggested)
             if suggested <= 0:
                 logger.info("Risk rejected mint/trade (suggested=0)")
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})
@@ -455,19 +467,25 @@ class ArbiDiem:
                 return False
             want = int(desired_units) if desired_units is not None else self._desired_units()
             # Reserve cap for reversed path (QUOTE->...->DIEM)
-            reserve_cap: int | None = None
+            reserve_cap_units: int | None = None
             pool_take_bps: int | None = None
             try:
                 md = self._market_provider()
                 routes = self._trade_routes()
                 path_buy = routes[0].reversed() if routes else None
                 try:
-                    pool_take_bps = int(self.risk.pool_take_cap_bps())
+                    pool_take_bps = int(getattr(self.risk, "pool_take_bps_cap", 25))
                 except Exception:
                     pool_take_bps = 25
-                reserve_cap = md.reserve_cap_units(path_buy, take_bps=pool_take_bps) if path_buy else None
+                if path_buy:
+                    cap_raw = md.reserve_cap_units(path_buy, take_bps=pool_take_bps)
+                    if cap_raw is not None:
+                        try:
+                            reserve_cap_units = max(0, int(cap_raw))
+                        except Exception:
+                            reserve_cap_units = None
             except Exception:
-                reserve_cap = None
+                reserve_cap_units = None
             try:
                 suggested = self.risk.size_with_risk(
                     want,
@@ -475,18 +493,24 @@ class ArbiDiem:
                     current_inventory_usd=current_inventory_usd,
                     utilization_ratio=utilization_ratio,
                     vol_bps=vol_bps,
-                    reserve_cap_units=reserve_cap,
                 )
             except Exception:
                 suggested = self.risk.suggest_trade_units(want, market_price, current_inventory_usd)
+            base_suggested = max(0, int(suggested))
+            final_suggested = base_suggested
+            if reserve_cap_units is not None:
+                final_suggested = min(base_suggested, reserve_cap_units)
             rationale.update({
                 "desired_units": int(want),
-                "suggested_units": int(suggested),
-                "reserve_cap_units": (int(reserve_cap) if isinstance(reserve_cap, int) else None),
+                "suggested_units": int(base_suggested),
+                "reserve_cap_units": (int(reserve_cap_units) if reserve_cap_units is not None else None),
                 "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
                 "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
                 "vol_bps": (float(vol_bps) if vol_bps is not None else None),
             })
+            if final_suggested != base_suggested:
+                rationale.update({"reserve_capped_units": int(final_suggested)})
+            suggested = int(final_suggested)
             if suggested <= 0:
                 logger.info("Risk rejected buy/burn (suggested=0)")
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})
