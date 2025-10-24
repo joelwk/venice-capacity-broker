@@ -150,9 +150,10 @@ def test_diem_price_canonical_path(monkeypatch):
 def test_price_health_tracks_clamp(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
 
-    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", "0xf4d97f2da56e8c3098f3a8d538db630a2606a024")
-    monkeypatch.setenv("VVV_TOKEN_ADDRESS", "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf")
-    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    # use non-sensitive placeholder addresses to avoid gitleaks false positives
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", "0x0000000000000000000000000000000000000002")
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", "0x0000000000000000000000000000000000000003")
 
     provider = MarketDataProvider()
     type(provider)._last_price_sources.clear()
