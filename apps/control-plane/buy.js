@@ -12,6 +12,9 @@ const state = {
   lastQuoteLatencyMs: null,
   pricesMeta: null,
   discounts: null,
+  lastPricesAt: null,
+  inflightPricesPromise: null,
+  pricesAbort: null,
 };
 
 const assetDecimals = {
@@ -33,6 +36,7 @@ const TEST_MODELS_ENDPOINT = `${VENICE_API_BASE_URL}/models`;
 const TEST_CHAT_ENDPOINT = `${VENICE_API_BASE_URL}/chat/completions`;
 const DEFAULT_UNITS = 0.1;
 const PRICE_REFRESH_SECONDS = 45;
+const MAX_PRICE_STALE_SECONDS = 60;
 const PRICING_PRIORITY = ['DIEM', 'USDC', 'ETH', 'WETH', 'WBTC', 'USDT'];
 const PRICING_SKELETON_HTML = [
   '<tr class="skeleton-row"><td><span class="skeleton-block skeleton-w-1"></span></td><td><span class="skeleton-block skeleton-w-2"></span></td><td><span class="skeleton-block skeleton-w-3"></span></td><td><span class="skeleton-block skeleton-w-4"></span></td></tr>',
@@ -78,6 +82,26 @@ function nowMs() {
     return performance.now();
   }
   return Date.now();
+}
+
+async function fetchWithRetry(url, options = {}, cfg = {}) {
+  const { attempts = 5, baseMs = 500, factor = 2, jitter = 0.25, timeoutMs = 5000 } = cfg;
+  for (let i = 0; i < attempts; i++) {
+    const ac = new AbortController();
+    const id = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: ac.signal });
+      clearTimeout(id);
+      if (res.ok) return res;
+      if (res.status === 503 && i < attempts - 1) throw new Error('SLA');
+      return res; // let caller handle non-OK when not retryable
+    } catch (e) {
+      clearTimeout(id);
+      if (i === attempts - 1) throw e;
+      const jitter = 1 + (Math.random() * 2 - 1) * jitter;
+      await new Promise(r => setTimeout(r, baseMs * jitter * Math.pow(factor, i)));
+    }
+  }
 }
 
 function formatUsd(value) {
@@ -159,6 +183,16 @@ function renderPricingTable() {
 
   const prices = state.prices;
   const hasPrices = prices && Object.keys(prices).length > 0;
+  
+  // SWR: Show last good prices immediately, even during refresh
+  if (state.pricesLoading && hasPrices) {
+    table.classList.remove("hidden");
+    empty.classList.add("hidden");
+    if (note) note.textContent = 'Refreshing market data...';
+    // Keep existing table content, just show refresh indicator
+    return;
+  }
+  
   if (state.pricesLoading && !hasPrices) {
     table.classList.remove("hidden");
     empty.classList.add("hidden");
@@ -254,6 +288,11 @@ function renderPricingTable() {
       const hitRateRaw = Number(state.pricesMeta.cache_hit_rate ?? state.pricesMeta.cacheHitRate);
       if (Number.isFinite(hitRateRaw) && hitRateRaw > 0 && hitRateRaw <= 1) {
         metaParts.push(`cache hit ${(hitRateRaw * 100).toFixed(1)}%`);
+      }
+      // Add last updated timestamp
+      if (state.lastPricesAt) {
+        const ageSeconds = Math.floor((Date.now() - state.lastPricesAt) / 1000);
+        metaParts.push(`updated ${ageSeconds}s ago`);
       }
       if (metaParts.length > 0) {
         const metaText = metaParts.join(', ');
@@ -912,35 +951,65 @@ async function loadEnv() {
 }
 
 async function loadEnvAndPrices() {
+  // Single-flight: prevent concurrent calls
+  if (state.inflightPricesPromise) {
+    return state.inflightPricesPromise;
+  }
+
   state.pricesMeta = null;
   state.pricesLoading = true;
-  try {
-    const res = await fetch(ENV_AND_PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || "Combined env/prices request failed");
-    }
-    const body = await res.json();
-    const envPayload = body && body.env;
-    const pricePayload = body && body.prices;
-    if (!envPayload || !pricePayload) {
-      throw new Error("Combined payload missing env or prices");
-    }
-    applyEnvPayload(envPayload || {});
-    state.prices = pricePayload || {};
-    state.pricesMeta = body && body.meta ? body.meta : null;
-    computeQuoteMetrics();
-    clearAlert($("quote-status"));
-    return true;
-  } catch (err) {
-    state.pricesMeta = null;
-    console.warn("Combined env/prices fetch failed", err);
-    showAlert($("quote-status"), "error", "Unable to load market data. Please refresh in a few seconds.");
-    return false;
-  } finally {
-    state.pricesLoading = false;
-    renderPricingTable();
+  
+  // Abort previous request if any
+  if (state.pricesAbort) {
+    state.pricesAbort.abort();
   }
+  state.pricesAbort = new AbortController();
+
+  const promise = (async () => {
+    try {
+      const res = await fetchWithRetry(ENV_AND_PRICES_ENDPOINT, { 
+        headers: JSON_GET_HEADERS,
+        signal: state.pricesAbort.signal 
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Combined env/prices request failed");
+      }
+      const body = await res.json();
+      const envPayload = body && body.env;
+      const pricePayload = body && body.prices;
+      if (!envPayload || !pricePayload) {
+        throw new Error("Combined payload missing env or prices");
+      }
+      applyEnvPayload(envPayload || {});
+      state.prices = pricePayload || {};
+      state.pricesMeta = body && body.meta ? body.meta : null;
+      state.lastPricesAt = Date.now();
+      computeQuoteMetrics();
+      clearAlert($("quote-status"));
+      return true;
+    } catch (err) {
+      state.pricesMeta = null;
+      console.warn("Combined env/prices fetch failed", err);
+      
+      // Check if we have fresh cached data (< 60s old)
+      if (state.lastPricesAt && (Date.now() - state.lastPricesAt) < MAX_PRICE_STALE_SECONDS * 1000) {
+        console.log("Using cached prices due to fetch failure");
+        return true; // Use cached data
+      }
+      
+      showAlert($("quote-status"), "error", "Unable to load market data. Please refresh in a few seconds.");
+      return false;
+    } finally {
+      state.pricesLoading = false;
+      state.inflightPricesPromise = null;
+      state.pricesAbort = null;
+      renderPricingTable();
+    }
+  })();
+
+  state.inflightPricesPromise = promise;
+  return promise;
 }
 
 
@@ -959,32 +1028,63 @@ function populateAssets(assets) {
 }
 
 async function fetchPrices() {
+  // Single-flight: prevent concurrent calls
+  if (state.inflightPricesPromise) {
+    return state.inflightPricesPromise;
+  }
+
   const hadPrices = state.prices && Object.keys(state.prices).length > 0;
   state.pricesLoading = true;
   state.pricesMeta = null;
+  
+  // Abort previous request if any
+  if (state.pricesAbort) {
+    state.pricesAbort.abort();
+  }
+  state.pricesAbort = new AbortController();
+
   if (!hadPrices) {
     renderPricingTable();
   }
-  try {
-    const res = await fetch(PRICES_ENDPOINT, { headers: JSON_GET_HEADERS });
-    if (!res.ok) {
-      throw new Error(await res.text());
+
+  const promise = (async () => {
+    try {
+      const res = await fetchWithRetry(PRICES_ENDPOINT, { 
+        headers: JSON_GET_HEADERS,
+        signal: state.pricesAbort.signal 
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const body = await res.json();
+      state.prices = (body && body.prices) || {};
+      state.lastPricesAt = Date.now();
+      clearAlert($("quote-status"));
+    } catch (err) {
+      if (err) {
+        console.warn('Market price fetch failed', err);
+      }
+      
+      // Check if we have fresh cached data (< 60s old)
+      if (state.lastPricesAt && (Date.now() - state.lastPricesAt) < MAX_PRICE_STALE_SECONDS * 1000) {
+        console.log("Using cached prices due to fetch failure");
+        return; // Use cached data
+      }
+      
+      if (!hadPrices) {
+        showAlert($("quote-status"), "error", "Unable to refresh market data. Trying again soon.");
+      }
+    } finally {
+      state.pricesLoading = false;
+      state.inflightPricesPromise = null;
+      state.pricesAbort = null;
+      computeQuoteMetrics();
+      renderPricingTable();
     }
-    const body = await res.json();
-    state.prices = (body && body.prices) || {};
-    clearAlert($("quote-status"));
-  } catch (err) {
-    if (err) {
-      console.warn('Market price fetch failed', err);
-    }
-    if (!hadPrices) {
-      showAlert($("quote-status"), "error", "Unable to refresh market data. Trying again soon.");
-    }
-  } finally {
-    state.pricesLoading = false;
-    computeQuoteMetrics();
-    renderPricingTable();
-  }
+  })();
+
+  state.inflightPricesPromise = promise;
+  return promise;
 }
 
 function schedulePriceRefresh() {
