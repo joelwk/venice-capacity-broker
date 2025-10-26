@@ -100,6 +100,8 @@ def _http_latency_bucket(seconds: float) -> str:
 
 _prices_resp_cache: dict[str, tuple[float, dict]] = {}
 _prices_resp_cache_lock = Lock()
+_env_prices_resp_cache: dict[str, tuple[float, dict]] = {}  # Cache for env-and-prices endpoint
+_env_prices_resp_cache_lock = Lock()
 _marketdata_provider_lock = Lock()
 _marketdata_provider_instance: object | None = None
 _marketdata_provider_factory_id: int | None = None
@@ -130,11 +132,11 @@ def _prices_cache_ttl_seconds() -> float:
     try:
         raw = os.getenv("BROKER_PRICES_TTL_SECONDS")
         if raw is None or str(raw).strip() == "":
-            return 2.0
+            return 30.0  # Increased default from 2s to 30s for better performance
         ttl = float(raw)
         return ttl if ttl > 0 else 0.0
     except Exception:
-        return 2.0
+        return 30.0
 
 
 def _prices_cache_capacity() -> int:
@@ -177,6 +179,40 @@ def _prices_cache_set(key: str, payload: dict) -> None:
             except ValueError:
                 _prices_resp_cache.clear()
         _prices_resp_cache[key] = (time.time(), snapshot)
+
+
+def _env_prices_cache_get(key: str) -> dict | None:
+    """Get cached env-and-prices response. Uses same TTL as prices cache."""
+    ttl = _prices_cache_ttl_seconds()
+    if ttl <= 0:
+        return None
+    now = time.time()
+    with _env_prices_resp_cache_lock:
+        entry = _env_prices_resp_cache.get(key)
+        if entry is None:
+            return None
+        ts, payload = entry
+        if (now - ts) > ttl:
+            _env_prices_resp_cache.pop(key, None)
+            return None
+        return dict(payload)
+
+
+def _env_prices_cache_set(key: str, payload: dict) -> None:
+    """Set cached env-and-prices response. Uses same TTL as prices cache."""
+    ttl = _prices_cache_ttl_seconds()
+    if ttl <= 0:
+        return
+    snapshot = dict(payload)
+    with _env_prices_resp_cache_lock:
+        capacity = _prices_cache_capacity()
+        if capacity > 0 and len(_env_prices_resp_cache) >= capacity:
+            try:
+                oldest_key = min(_env_prices_resp_cache.items(), key=lambda item: item[1][0])[0]
+                _env_prices_resp_cache.pop(oldest_key, None)
+            except ValueError:
+                _env_prices_resp_cache.clear()
+        _env_prices_resp_cache[key] = (time.time(), snapshot)
 
 
 try:
@@ -1760,6 +1796,14 @@ try:
         syms = [s.strip() for s in (symbols or "").split(",") if s.strip()]
         if not syms:
             syms = ["VVV", "DIEM", "ETH", "USDC", "WBTC"]
+        
+        # Check cache for env-and-prices (keyed by symbol list)
+        key_parts = sorted({s.upper() for s in syms}) if syms else []
+        cache_key = ",".join(key_parts) if key_parts else "__empty__"
+        cached_payload = _env_prices_cache_get(cache_key)
+        if cached_payload is not None:
+            return cached_payload
+        
         start_total = time.perf_counter()
         outcome = "ok"
         meta: Dict[str, Any] = {"symbols": syms}
@@ -1777,7 +1821,10 @@ try:
                         meta[key] = stats[key]
             duration = time.perf_counter() - start_total
             meta["latency_ms"] = round(duration * 1000.0, 3)
-            return {"env": env_payload, "prices": prices_payload, "meta": meta}
+            result = {"env": env_payload, "prices": prices_payload, "meta": meta}
+            # Cache the result
+            _env_prices_cache_set(cache_key, result)
+            return result
         except HTTPException:
             outcome = "error"
             raise

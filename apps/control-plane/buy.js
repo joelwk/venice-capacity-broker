@@ -15,6 +15,7 @@ const state = {
   lastPricesAt: null,
   inflightPricesPromise: null,
   pricesAbort: null,
+  quoteButtonDisabled: false, // Track if quote button should be disabled after successful quote
 };
 
 const assetDecimals = {
@@ -45,11 +46,16 @@ const PRICING_SKELETON_HTML = [
 ].join('');
 const JSON_GET_HEADERS = { Accept: "application/json" };
 const JSON_POST_HEADERS = { "Content-Type": "application/json", Accept: "application/json" };
-const INIT_WATCHDOG_MS = 4000;
+const INIT_WATCHDOG_MS = 60000; // Increased from 4s to 60s to match expected load times
 let initWatchdog = setTimeout(() => {
   const empty = document.getElementById("pricing-empty");
   if (empty && (!state.prices || Object.keys(state.prices).length === 0)) {
-    empty.textContent = "Market data unavailable.";
+    empty.textContent = "Market data still loading... Please wait.";
+    // Show retry button if watchdog fires
+    const retryContainer = document.getElementById("pricing-retry");
+    if (retryContainer) {
+      retryContainer.classList.remove("hidden");
+    }
   }
 }, INIT_WATCHDOG_MS);
 
@@ -85,7 +91,13 @@ function nowMs() {
 }
 
 async function fetchWithRetry(url, options = {}, cfg = {}) {
-  const { attempts = 5, baseMs = 500, factor = 2, jitter = 0.25, timeoutMs = 5000 } = cfg;
+  // Increased default timeout for price and env calls which can take longer
+  const defaultTimeout = url.includes('/env-and-prices') || url.includes('/market/prices') 
+    ? 25000  // 25s for market data
+    : url.includes('/quotes') 
+      ? 30000  // 30s for quotes
+      : 5000;  // 5s for other calls
+  const { attempts = 5, baseMs = 500, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
   for (let i = 0; i < attempts; i++) {
     const ac = new AbortController();
     const id = setTimeout(() => ac.abort(), timeoutMs);
@@ -383,8 +395,15 @@ function updateQuoteCountdown() {
   el.textContent = remaining <= 0 ? "Quote expired" : `Quote expires in ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   if (remaining <= 0) {
     enableStep2(false);
-    showAlert($("quote-status"), "error", "Quote expired. Refresh for a new quote.");
+    showAlert($("quote-status"), "error", "Quote expired. Refresh the quote and try again.");
     stopQuoteTimer();
+    // Re-enable quote button when expired
+    state.quoteButtonDisabled = false;
+    const btn = $("quote-btn");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Get Quote";
+    }
   }
 }
 
@@ -445,6 +464,61 @@ function resetStep3() {
   if (keyInput) keyInput.value = "";
   const expiry = $("key-expiry");
   if (expiry) expiry.textContent = "";
+}
+
+function saveSessionToStorage() {
+  try {
+    if (state.purchaseId) {
+      localStorage.setItem("purchaseId", state.purchaseId);
+    }
+    if (state.quote && state.quote.quoteId) {
+      localStorage.setItem("activeQuote", JSON.stringify({
+        quoteId: state.quote.quoteId,
+        expiresAt: state.quote.expiresAt,
+        asset: state.quote.asset,
+        units: state.quote.units,
+        totalPrice: state.quote.totalPrice ?? state.quote.total_price,
+      }));
+    }
+  } catch (err) {
+    console.warn("Failed to save session to localStorage", err);
+  }
+}
+
+function loadSessionFromStorage() {
+  try {
+    const storedPurchaseId = localStorage.getItem("purchaseId");
+    if (storedPurchaseId) {
+      state.purchaseId = storedPurchaseId;
+    }
+    const storedQuote = localStorage.getItem("activeQuote");
+    if (storedQuote) {
+      const parsed = JSON.parse(storedQuote);
+      const now = Math.floor(Date.now() / 1000);
+      const expires = Number(parsed.expiresAt);
+      if (Number.isFinite(expires) && expires > now) {
+        // Quote is still valid, restore it
+        state.quote = parsed;
+        state.quoteButtonDisabled = true;
+        return true;
+      } else {
+        // Quote expired, clear it
+        localStorage.removeItem("activeQuote");
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load session from localStorage", err);
+  }
+  return false;
+}
+
+function clearSessionStorage() {
+  try {
+    localStorage.removeItem("purchaseId");
+    localStorage.removeItem("activeQuote");
+  } catch (err) {
+    console.warn("Failed to clear session storage", err);
+  }
 }
 
 function applyQuote(result) {
@@ -525,6 +599,15 @@ function applyQuote(result) {
   enableStep2(true);
   resetStep3();
   startQuoteTimer();
+  // Disable quote button after successful quote to prevent reset
+  state.quoteButtonDisabled = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Quote Active";
+  }
+  
+  // Save to localStorage for persistence
+  saveSessionToStorage();
 }
 
 async function requestQuote() {
@@ -583,18 +666,17 @@ async function requestQuote() {
 
   if (assetSelect) assetSelect.setAttribute("aria-invalid", "false");
 
+  // Allow quotes even without local price data; the backend provides pricing info
   const priceSnapshot = state.prices || {};
   const hasPriceData = priceSnapshot && Object.keys(priceSnapshot).length > 0;
   const diemPrice = Number(priceSnapshot.DIEM);
+  // Only warn if prices are missing; don't block quote request
   if (!hasPriceData || !Number.isFinite(diemPrice) || diemPrice <= 0) {
-    showAlert(status, "error", "Live market data is unavailable. Refresh the page and try again.");
-    return;
-  }
-  if (asset !== "USDC") {
+    console.warn("Market snapshot not yet loaded, but proceeding with quote request");
+  } else if (asset !== "USDC") {
     const paymentPrice = Number(priceSnapshot[asset]);
     if (!Number.isFinite(paymentPrice) || paymentPrice <= 0) {
-      showAlert(status, "error", `No current price for ${asset}. Refresh market data before requesting a quote.`);
-      return;
+      console.warn(`No current price for ${asset} in snapshot, but proceeding with quote request`);
     }
   }
 
@@ -747,6 +829,7 @@ function handleVerifyResponse(body) {
   }
   if (purchaseId) {
     state.purchaseId = purchaseId;
+    saveSessionToStorage(); // Persist purchaseId
     showAlert(verifyStatus, "success", "Payment verified. Issuing your key now.");
     showKey({ status: body.status, purchaseId });
     pollPurchaseUntilReady(purchaseId);
@@ -1283,6 +1366,17 @@ function setupEventHandlers() {
   if (quoteBtn) quoteBtn.addEventListener("click", requestQuote);
   const refreshBtn = $("quote-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", requestQuote);
+  
+  // Wire up retry button for price loading
+  const retryBtn = $("retry-prices-btn");
+  if (retryBtn) {
+    retryBtn.addEventListener("click", () => {
+      const retryContainer = $("pricing-retry");
+      if (retryContainer) retryContainer.classList.add("hidden");
+      loadEnvAndPrices().catch(err => console.error("Retry failed", err));
+    });
+  }
+  
   const verifyBtn = $("verify-btn");
   if (verifyBtn) verifyBtn.addEventListener("click", handleVerify);
   const walletField = $("wallet-address");
@@ -1344,6 +1438,26 @@ async function init() {
   enableStep2(false);
   state.pricesLoading = true;
   renderPricingTable();
+  
+  // Try to restore session from localStorage
+  const hasStoredQuote = loadSessionFromStorage();
+  if (hasStoredQuote) {
+    // Restore quote UI if we have a valid stored quote
+    applyQuote(state.quote);
+    startQuoteTimer();
+    const btn = $("quote-btn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Quote Active";
+    }
+  }
+  
+  // If we have a stored purchaseId but no key yet, resume polling
+  if (state.purchaseId && !$("api-key")?.value) {
+    showKey({ status: "issuing", purchaseId: state.purchaseId });
+    pollPurchaseUntilReady(state.purchaseId);
+  }
+  
   const combinedLoaded = await loadEnvAndPrices();
   if (!combinedLoaded) {
     await Promise.all([loadEnv(), fetchPrices()]);
