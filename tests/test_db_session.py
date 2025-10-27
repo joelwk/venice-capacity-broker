@@ -94,7 +94,8 @@ def test_get_engine_falls_back_on_missing_driver(monkeypatch, tmp_path):
         assert placeholder_hits == [real_url]
         assert len(engine_calls) == 2
         assert engine is engine_calls[-1]
-        assert engine_calls[0]["target_url"] == real_url
+        expected_primary_url = db_session._with_connect_timeout(real_url)
+        assert engine_calls[0]["target_url"] == expected_primary_url
         assert engine_calls[1]["target_url"] == sqlite_url
         kwargs = engine_calls[1]["kwargs"]
         assert kwargs["connect_args"]["check_same_thread"] is False
