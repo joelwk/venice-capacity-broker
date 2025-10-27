@@ -110,8 +110,8 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
     } catch (e) {
       clearTimeout(id);
       if (i === attempts - 1) throw e;
-      const jitter = 1 + (Math.random() * 2 - 1) * jitter;
-      await new Promise(r => setTimeout(r, baseMs * jitter * Math.pow(factor, i)));
+      const jitterFactor = 1 + (Math.random() * 2 - 1) * jitter;
+      await new Promise(r => setTimeout(r, baseMs * jitterFactor * Math.pow(factor, i)));
     }
   }
 }
