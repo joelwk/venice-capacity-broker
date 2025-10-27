@@ -7,8 +7,12 @@ from collections.abc import Iterable
 import importlib
 import os
 from libs.pricing.engine import StaticPricingEngine, MarketPricingEngine
-from db.session import get_session, create_db_and_tables
+from db.session import create_db_and_tables, get_session
 from libs.telemetry.events import emit as emit_event
+try:
+    from libs.telemetry.metrics import inc as _metrics_inc  # type: ignore
+except Exception:
+    _metrics_inc = None  # type: ignore
 
 
 def parse_discount_fraction(value: Optional[str]) -> Optional[float]:
@@ -57,6 +61,26 @@ def resolve_discount_fraction(asset_u: str) -> tuple[float, str]:
     if asset_norm == "WBTC":
         return 0.10, "default_wbtc"
     return 0.05, "default"
+
+
+def _latency_bucket(seconds: float) -> str:
+    try:
+        s = float(seconds)
+    except Exception:
+        s = 0.0
+    if s < 0.05:
+        return "lt_50ms"
+    if s < 0.1:
+        return "lt_100ms"
+    if s < 0.2:
+        return "lt_200ms"
+    if s < 0.5:
+        return "lt_500ms"
+    if s < 1.0:
+        return "lt_1s"
+    if s < 2.0:
+        return "lt_2s"
+    return "ge_2s"
 
 
 def configured_discount_map(assets: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
@@ -254,11 +278,15 @@ class PricingService:
         discount_meta: Dict[str, Any] = {}
         price_health: Dict[str, Any] | None = None
         price_guard: Dict[str, Any] | None = None
+        market_data_start: float = 0.0
+        engine_start: float = 0.0
+        persist_start: float = 0.0
         try:
             if isinstance(self.engine, MarketPricingEngine):
                 try:
                     from services.marketdata.provider import MarketDataProvider  # lazy import
 
+                    market_data_start = time.perf_counter()
                     mdp = MarketDataProvider()
                     symbols = ["DIEM", "ETH", "USDC", "WBTC", "VVV"]
                     prefetched = mdp.prices(symbols) or {}
@@ -339,6 +367,7 @@ class PricingService:
                 if units is None:
                     raise ValueError("units must be greater than zero")
                 draft = self.engine.price(float(units), asset)
+            engine_start = time.perf_counter()
             util = self._utilization_ratio()
             alpha = float(os.getenv("PRICE_UTIL_ALPHA", "0.5") or 0.5)
             mult = 1.0 + max(0.0, min(1.0, util)) * alpha
@@ -350,22 +379,38 @@ class PricingService:
                 unit_price_with_markup=unit_price_markup,
             )
             total_price = int(round(unit_price * float(draft.units)))
-            from datetime import datetime, timezone
-            quote_model = self._get_quote_model()
-            with next(get_session()) as s:  # type: ignore[call-arg]
-                q = quote_model(
-                    quote_id=draft.quote_id,
-                    units=float(draft.units),
-                    asset=draft.asset,
-                    unit_price=unit_price,
-                    total_price=total_price,
-                    accepted_min=draft.accepted_min,
-                    accepted_max=draft.accepted_max,
-                    expires_at=datetime.fromtimestamp(draft.expires_at_epoch, tz=timezone.utc),
-                    status="open",
-                )
-                s.add(q)
-                s.commit()
+            engine_end = time.perf_counter()
+            
+            # Build timing metadata
+            market_data_duration = 0.0
+            if market_data_start > 0:
+                market_data_duration = (time.perf_counter() - market_data_start) * 1000.0
+            
+            engine_duration = 0.0
+            if engine_start > 0:
+                engine_duration = (engine_end - engine_start) * 1000.0
+            
+            total_duration = (time.perf_counter() - start_time) * 1000.0
+            
+            meta: Dict[str, Any] = {
+                "totalMs": round(total_duration, 3),
+                "engineMs": round(engine_duration, 3),
+            }
+            if market_data_duration > 0:
+                meta["marketDataMs"] = round(market_data_duration, 3)
+            
+            # Add cache stats if available
+            if mdp_stats:
+                cache_hits = mdp_stats.get("cache_hits")
+                cache_misses = mdp_stats.get("cache_misses")
+                cache_hit_rate = mdp_stats.get("cache_hit_rate")
+                if cache_hits is not None:
+                    meta["cacheHits"] = int(cache_hits)
+                if cache_misses is not None:
+                    meta["cacheMisses"] = int(cache_misses)
+                if cache_hit_rate is not None:
+                    meta["cacheHitRate"] = round(float(cache_hit_rate), 3)
+            
             response: Dict[str, object] = {
                 "quoteId": draft.quote_id,
                 "units": float(draft.units),
@@ -378,53 +423,94 @@ class PricingService:
                 "discountBps": discount_meta.get("totalBps"),
                 "discount": discount_meta,
                 "unitPriceBeforeDiscount": unit_price_markup,
+                "meta": meta,
             }
             if price_health is not None:
                 response["priceHealth"] = price_health
             if price_guard is not None:
                 response["priceGuard"] = price_guard
+            # emit latency metrics (counters with buckets)
+            if _metrics_inc is not None:
+                try:
+                    _metrics_inc(
+                        "quote_latency_bucket_total",
+                        labels={"bucket": _latency_bucket(total_duration / 1000.0)},
+                    )
+                    if market_data_duration > 0:
+                        _metrics_inc(
+                            "quote_marketdata_latency_bucket_total",
+                            labels={"bucket": _latency_bucket(market_data_duration / 1000.0)},
+                        )
+                    _metrics_inc(
+                        "quote_engine_latency_bucket_total",
+                        labels={"bucket": _latency_bucket(engine_duration / 1000.0)},
+                    )
+                except Exception:
+                    pass
             return response
-        except Exception:
-            outcome = "error"
-            raise
-        finally:
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+    def persist_quote(self, payload: Dict[str, Any]) -> None:
+        self._persist_quote_from_payload(payload)
+
+    def _persist_quote_from_payload(self, payload: Dict[str, Any]) -> None:
+        from datetime import datetime, timezone
+
+        quote_id = str(payload.get("quoteId")) if payload.get("quoteId") else None
+        if not quote_id:
+            raise ValueError("quote payload missing quoteId")
+
+        units_val = float(payload.get("units") or 0.0)
+        if units_val <= 0:
+            raise ValueError("quote payload units invalid")
+
+        asset = str(payload.get("asset") or "").strip().upper()
+        if not asset:
+            raise ValueError("quote payload asset missing")
+
+        unit_price = int(payload.get("unitPrice") or payload.get("unit_price") or 0)
+        total_price = int(payload.get("totalPrice") or payload.get("total_price") or 0)
+        if unit_price <= 0 or total_price <= 0:
+            raise ValueError("quote payload pricing invalid")
+
+        accepted_min = payload.get("acceptedMin")
+        accepted_max = payload.get("acceptedMax")
+
+        expires_at_raw = payload.get("expiresAt") or payload.get("expires_at")
+        if not expires_at_raw:
+            raise ValueError("quote payload expiresAt missing")
+        expires_at = datetime.fromtimestamp(int(expires_at_raw), tz=timezone.utc)
+
+        quote_model = self._get_quote_model()
+        with next(get_session()) as session:  # type: ignore[call-arg]
             try:
-                payload: Dict[str, Any] = {
-                    "outcome": outcome,
-                    "latency_ms": round(duration_ms, 3),
-                    "asset": asset.strip().upper(),
-                    "engine": "market" if isinstance(self.engine, MarketPricingEngine) else "static",
-                }
-                payload["quoteLatencyMs"] = payload["latency_ms"]
-                if units is not None:
-                    payload["units"] = float(units)
-                if budget_usd is not None:
-                    payload["budgetUsd"] = float(budget_usd)
-                if discount_meta:
-                    total_bps = discount_meta.get("totalBps")
-                    if total_bps is not None:
-                        payload["discountBps"] = total_bps
-                if prefetched_prices:
-                    payload["prefetch"] = True
-                if mdp_stats:
-                    cache_hits = mdp_stats.get("cache_hits")
-                    cache_misses = mdp_stats.get("cache_misses")
-                    hit_rate = mdp_stats.get("cache_hit_rate")
-                    dex_calls = mdp_stats.get("dex_calls")
-                    if cache_hits is not None:
-                        payload["cacheHits"] = cache_hits
-                    if cache_misses is not None:
-                        payload["cacheMisses"] = cache_misses
-                    if hit_rate is not None:
-                        payload["cacheHitRate"] = hit_rate
-                    if dex_calls is not None:
-                        payload["dexCalls"] = dex_calls
-                    if "duration_seconds" in mdp_stats:
-                        payload["pricesDurationSec"] = mdp_stats.get("duration_seconds")
-                emit_event("pricing.quote", payload)
-            except Exception:
-                pass
+                from sqlmodel import select  # type: ignore
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError("sqlmodel unavailable for quote persistence") from exc
+
+            stmt = select(quote_model).where(quote_model.quote_id == quote_id)
+            existing = session.exec(stmt).first()
+            if existing is None:
+                q = quote_model(
+                    quote_id=quote_id,
+                    units=units_val,
+                    asset=asset,
+                    unit_price=unit_price,
+                    total_price=total_price,
+                    accepted_min=accepted_min,
+                    accepted_max=accepted_max,
+                    expires_at=expires_at,
+                    status="open",
+                )
+                session.add(q)
+            else:
+                existing.units = units_val
+                existing.asset = asset
+                existing.unit_price = unit_price
+                existing.total_price = total_price
+                existing.accepted_min = accepted_min
+                existing.accepted_max = accepted_max
+                existing.expires_at = expires_at
+            session.commit()
 
     def _utilization_ratio(self) -> float:
         """Compute recent utilization ratio as used/capacity in lookback window.

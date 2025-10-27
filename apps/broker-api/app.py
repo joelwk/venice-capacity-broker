@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import time
 from threading import Lock
@@ -132,11 +133,11 @@ def _prices_cache_ttl_seconds() -> float:
     try:
         raw = os.getenv("BROKER_PRICES_TTL_SECONDS")
         if raw is None or str(raw).strip() == "":
-            return 30.0  # Increased default from 2s to 30s for better performance
+            return 60.0  # Increased to 60s to align with frontend watchdog and reduce refresh loops
         ttl = float(raw)
         return ttl if ttl > 0 else 0.0
     except Exception:
-        return 30.0
+        return 60.0
 
 
 def _prices_cache_capacity() -> int:
@@ -162,14 +163,24 @@ def _prices_cache_get(key: str) -> dict | None:
         if (now - ts) > ttl:
             _prices_resp_cache.pop(key, None)
             return None
-        return dict(payload)
+        snapshot = copy.deepcopy(payload)
+        meta = dict(snapshot.get("meta") or {})
+        meta["cacheHit"] = True
+        meta["cacheAgeMs"] = round((now - ts) * 1000.0, 3)
+        meta["refreshedAt"] = int(now * 1000)
+        snapshot["meta"] = meta
+        return snapshot
 
 
 def _prices_cache_set(key: str, payload: dict) -> None:
     ttl = _prices_cache_ttl_seconds()
     if ttl <= 0:
         return
-    snapshot = dict(payload)
+    snapshot = copy.deepcopy(payload)
+    meta = dict(snapshot.get("meta") or {})
+    meta["cacheHit"] = False
+    meta["refreshedAt"] = int(time.time() * 1000)
+    snapshot["meta"] = meta
     with _prices_resp_cache_lock:
         capacity = _prices_cache_capacity()
         if capacity > 0 and len(_prices_resp_cache) >= capacity:
@@ -203,7 +214,12 @@ def _env_prices_cache_set(key: str, payload: dict) -> None:
     ttl = _prices_cache_ttl_seconds()
     if ttl <= 0:
         return
-    snapshot = dict(payload)
+    snapshot = copy.deepcopy(payload)
+    meta = dict(snapshot.get("meta") or {})
+    if "cacheHit" not in meta:
+        meta["cacheHit"] = False
+    meta["refreshedAt"] = int(time.time() * 1000)
+    snapshot["meta"] = meta
     with _env_prices_resp_cache_lock:
         capacity = _prices_cache_capacity()
         if capacity > 0 and len(_env_prices_resp_cache) >= capacity:
@@ -288,8 +304,29 @@ try:
     async def _lifespan(app: FastAPI):
         try:
             _warm_marketdata_async(_marketdata_warm_symbols)
+            # Warm env-and-prices cache on startup
+            warm_symbols_list = list(_marketdata_warm_symbols) + ["VVV"]
+            def _warm_env_prices():
+                try:
+                    env_payload = env_status()
+                    mdp = _get_marketdata_provider()
+                    prices_payload = mdp.prices(warm_symbols_list)
+                    stats = mdp.last_prices_stats() if hasattr(mdp, "last_prices_stats") else {}
+                    meta = {"symbols": warm_symbols_list}
+                    if isinstance(stats, dict):
+                        for key in ("cache_hits", "cache_misses", "cache_hit_rate", "dex_calls", "duration_seconds"):
+                            if key in stats:
+                                meta[key] = stats[key]
+                    key_parts = sorted({s.upper() for s in warm_symbols_list})
+                    cache_key = ",".join(key_parts) if key_parts else "__empty__"
+                    result = {"env": env_payload, "prices": prices_payload, "meta": meta}
+                    _env_prices_cache_set(cache_key, result)
+                    logger.info("env-and-prices cache warmed for symbols=%s", ",".join(warm_symbols_list))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("env-and-prices warmup failed: %s", exc)
+            threading.Thread(target=_warm_env_prices, name="broker-env-prices-warm", daemon=True).start()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("marketdata warmup scheduling failed: %s", exc)
+            logger.debug("startup warmup scheduling failed: %s", exc)
         yield
 
     app = FastAPI(
@@ -1800,9 +1837,72 @@ try:
         # Check cache for env-and-prices (keyed by symbol list)
         key_parts = sorted({s.upper() for s in syms}) if syms else []
         cache_key = ",".join(key_parts) if key_parts else "__empty__"
-        cached_payload = _env_prices_cache_get(cache_key)
+        
+        # SWR: Get cached age and payload
+        now = time.time()
+        cache_age = 0.0
+        cached_payload = None
+        with _env_prices_resp_cache_lock:
+            entry = _env_prices_resp_cache.get(cache_key)
+            if entry is not None:
+                ts, payload = entry
+                cache_age = now - ts
+                ttl = _prices_cache_ttl_seconds()
+                if ttl <= 0 or cache_age <= ttl:
+                    cached_payload = dict(payload)
+        
+        # SWR: Return stale payload immediately if available, refresh in background
         if cached_payload is not None:
-            return cached_payload
+            result = dict(cached_payload)
+            # Add cache metadata
+            if "meta" not in result:
+                result["meta"] = {}
+            result["meta"]["cacheHit"] = True
+            result["meta"]["cacheAgeMs"] = round(cache_age * 1000.0, 3)
+            result["meta"]["refreshedAt"] = int(now * 1000)
+            # metrics for cache hit and age bucket
+            try:
+                if _metrics_inc is not None:
+                    _metrics_inc("env_prices_cache_hits_total", labels={"age_bucket": _http_latency_bucket(cache_age)})
+            except Exception:
+                pass
+            
+            # Trigger background refresh if cache is getting old (>50% of TTL)
+            ttl = _prices_cache_ttl_seconds()
+            if ttl > 0 and cache_age > (ttl * 0.5):
+                def _bg_refresh():
+                    try:
+                        refresh_start = time.perf_counter()
+                        env_payload = env_status()
+                        mdp = _get_marketdata_provider()
+                        prices_payload = mdp.prices(syms)
+                        stats = mdp.last_prices_stats() if hasattr(mdp, "last_prices_stats") else {}
+                        meta = {"symbols": syms}
+                        if isinstance(stats, dict):
+                            for key in ("cache_hits", "cache_misses", "cache_hit_rate", "dex_calls", "duration_seconds"):
+                                if key in stats:
+                                    meta[key] = stats[key]
+                        fresh_result = {"env": env_payload, "prices": prices_payload, "meta": meta}
+                        _env_prices_cache_set(cache_key, fresh_result)
+                        # record refresh latency metric
+                        try:
+                            if _metrics_inc is not None:
+                                dur = time.perf_counter() - refresh_start
+                                _metrics_inc("env_prices_refresh_latency_bucket_total", labels={"bucket": _http_latency_bucket(dur)})
+                        except Exception:
+                            pass
+                    except Exception:
+                        try:
+                            if _metrics_inc is not None:
+                                _metrics_inc("env_prices_refresh_errors_total")
+                        except Exception:
+                            pass
+                        pass
+                
+                import threading
+                threading.Thread(target=_bg_refresh, daemon=True).start()
+            
+            return result
         
         start_total = time.perf_counter()
         outcome = "ok"
@@ -1819,8 +1919,11 @@ try:
                 for key in ("cache_hits", "cache_misses", "cache_hit_rate", "dex_calls", "duration_seconds"):
                     if key in stats:
                         meta[key] = stats[key]
+            refreshed_at_ms = int(time.time() * 1000)
             duration = time.perf_counter() - start_total
             meta["latency_ms"] = round(duration * 1000.0, 3)
+            meta["cacheHit"] = False
+            meta["refreshedAt"] = refreshed_at_ms
             result = {"env": env_payload, "prices": prices_payload, "meta": meta}
             # Cache the result
             _env_prices_cache_set(cache_key, result)
@@ -1911,6 +2014,8 @@ try:
                     meta["last_latency_ts"] = int(last_ts)
                 except Exception:
                     pass
+            meta["cacheHit"] = False
+            meta["refreshedAt"] = int(time.time() * 1000)
             resp = {"symbols": syms, "prices": prices, "ratios": ratios, "meta": meta}
             _prices_cache_set(cache_key, resp)
             return resp
@@ -2384,23 +2489,80 @@ try:
                 unitPriceBeforeDiscount: int | None = None
                 priceHealth: Dict[str, Any] | None = None
                 priceGuard: Dict[str, Any] | None = None
+                meta: Dict[str, Any] | None = None
 
             QuoteResponse.model_rebuild()
 
-            @app.get("/v1/quotes", response_model=QuoteResponse)
-            def get_quote(
-                units: float | None = Query(default=None, gt=0),
-                asset: str = Query(..., description="ETH, USDC, or WBTC"),
-                budget: float | None = Query(default=None, gt=0, description="Budget in USD"),
-            ) -> dict:
-                if units is None and budget is None:
-                    raise HTTPException(status_code=400, detail="specify units or budget")
-                if units is not None and budget is not None:
-                    raise HTTPException(status_code=400, detail="provide either units or budget, not both")
-                try:
-                    return _pricing.get_quote(units=units, asset=asset, budget_usd=budget)
-                except Exception as e:  # noqa: BLE001
-                    raise HTTPException(status_code=400, detail=str(e))
+            _quotes_async_enabled = (_os.getenv("QUOTES_ASYNC_PERSIST") or "true").strip().lower() in {"1", "true", "yes", "on", "auto"}
+
+            if _quotes_async_enabled:
+                from fastapi import BackgroundTasks  # type: ignore
+
+                _quote_results: Dict[str, dict] = {}
+                _quote_results_lock = Lock()
+
+                def _persist_quote_async(payload: dict) -> None:
+                    try:
+                        _pricing.persist_quote(payload)
+                    except Exception as _persist_exc:  # noqa: BLE001
+                        logger.warning(
+                            "quote persist async failed quoteId=%s error=%s",
+                            payload.get("quoteId"),
+                            _persist_exc,
+                        )
+
+                def _snapshot_quote(payload: dict) -> dict:
+                    snap = dict(payload)
+                    qid = snap.get("quoteId")
+                    if qid:
+                        with _quote_results_lock:
+                            _quote_results[qid] = snap
+                    return snap
+
+                def _lookup_quote(quote_id: str) -> dict | None:
+                    with _quote_results_lock:
+                        hit = _quote_results.get(quote_id)
+                        return dict(hit) if hit is not None else None
+
+                QuoteResponse.model_rebuild()
+
+                @app.get("/v1/quotes", response_model=QuoteResponse)
+                def get_quote(
+                    background_tasks: BackgroundTasks,
+                    units: float | None = Query(default=None, gt=0),
+                    asset: str = Query(..., description="ETH, USDC, or WBTC"),
+                    budget: float | None = Query(default=None, gt=0, description="Budget in USD"),
+                ) -> dict:
+                    if units is None and budget is None:
+                        raise HTTPException(status_code=400, detail="specify units or budget")
+                    if units is not None and budget is not None:
+                        raise HTTPException(status_code=400, detail="provide either units or budget, not both")
+                    try:
+                        quote_payload = _pricing.get_quote(units=units, asset=asset, budget_usd=budget)
+                    except Exception as e:  # noqa: BLE001
+                        raise HTTPException(status_code=400, detail=str(e))
+                    snapshot = _snapshot_quote(quote_payload)
+                    background_tasks.add_task(_persist_quote_async, snapshot)
+                    return snapshot
+
+            else:
+                QuoteResponse.model_rebuild()
+
+                @app.get("/v1/quotes", response_model=QuoteResponse)
+                def get_quote(
+                    units: float | None = Query(default=None, gt=0),
+                    asset: str = Query(..., description="ETH, USDC, or WBTC"),
+                    budget: float | None = Query(default=None, gt=0, description="Budget in USD"),
+                ) -> dict:
+                    if units is None and budget is None:
+                        raise HTTPException(status_code=400, detail="specify units or budget")
+                    if units is not None and budget is not None:
+                        raise HTTPException(status_code=400, detail="provide either units or budget, not both")
+                    try:
+                        return _pricing.get_quote(units=units, asset=asset, budget_usd=budget)
+                    except Exception as e:  # noqa: BLE001
+                        raise HTTPException(status_code=400, detail=str(e))
+
 
         if _features["purchases"]:
             from db.session import get_session

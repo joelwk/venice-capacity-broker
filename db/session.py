@@ -10,6 +10,8 @@ logger = get_logger("db.session")
 
 
 _ENGINE_ATTEMPTS: List[Dict[str, Any]] = []
+_ENGINE_CACHE: Any = None
+_SESSION_FACTORY: Any = None
 
 
 def get_engine_attempts() -> List[Dict[str, Any]]:
@@ -49,6 +51,10 @@ def _ensure_sqlmodel() -> None:
 def _db_url() -> str:
     url = os.getenv("SQL_DATABASE_URL") or os.getenv("DATABASE_URL")
     if url:
+        # Ensure connect_timeout is set for Postgres URLs
+        if not url.startswith("sqlite") and "connect_timeout" not in url:
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}connect_timeout=2"
         return url
     host = os.getenv("POSTGRES_HOST")
     if not host:
@@ -59,7 +65,7 @@ def _db_url() -> str:
     pwd = os.getenv("POSTGRES_PASSWORD", "")
     db = os.getenv("POSTGRES_DB", "postgres")
     port = int(os.getenv("POSTGRES_PORT", "5432"))
-    return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}"
+    return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}?connect_timeout=2"
 
 def _is_sqlite(url: str) -> bool:
     return url.strip().lower().startswith("sqlite")
@@ -236,6 +242,12 @@ def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
 
 
 def get_engine():
+    global _ENGINE_CACHE
+    
+    # Return cached engine if available
+    if _ENGINE_CACHE is not None:
+        return _ENGINE_CACHE
+    
     _reset_engine_attempts()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
@@ -273,15 +285,21 @@ def get_engine():
             pass
 
     try:
-        return _call_engine_factory(url, **kwargs)
+        engine = _call_engine_factory(url, **kwargs)
+        _ENGINE_CACHE = engine
+        return engine
     except ModuleNotFoundError as exc:
         message = str(exc).lower()
         if "psycopg2" in message and not is_sqlite:
-            return _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
+            engine = _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
+            _ENGINE_CACHE = engine
+            return engine
         raise
     except Exception:
         if not is_sqlite:
-            return _sqlite_fallback_engine(echo, url, "database connection failed for %s; using SQLite %s")
+            engine = _sqlite_fallback_engine(echo, url, "database connection failed for %s; using SQLite %s")
+            _ENGINE_CACHE = engine
+            return engine
         raise
 
 

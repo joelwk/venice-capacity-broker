@@ -31,7 +31,7 @@ const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const ENV_ENDPOINT = "/v1/env";
 const ENV_AND_PRICES_ENDPOINT = "/v1/env-and-prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
-const PRICES_ENDPOINT = "/v1/market/prices?symbols=DIEM,ETH,USDC,WBTC";
+const PRICES_ENDPOINT = "/v1/market/prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
 const VENICE_API_BASE_URL = "https://api.venice.ai/api/v1";
 const TEST_MODELS_ENDPOINT = `${VENICE_API_BASE_URL}/models`;
 const TEST_CHAT_ENDPOINT = `${VENICE_API_BASE_URL}/chat/completions`;
@@ -595,7 +595,9 @@ function applyQuote(result) {
   const latencyText = Number.isFinite(latencyValue) && latencyValue > 0
     ? `Quote ready in ${latencyValue} ms. `
     : '';
-  showAlert($("quote-status"), "success", `${latencyText}Send the payment before it expires.`);
+  const metaLatency = formatLatencyMeta(result.meta);
+  const metaText = metaLatency ? `${metaLatency} ` : "";
+  showAlert($("quote-status"), "success", `${latencyText}${metaText}Send the payment before it expires.`);
   enableStep2(true);
   resetStep3();
   startQuoteTimer();
@@ -691,7 +693,11 @@ async function requestQuote() {
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
     const startedAt = nowMs();
-    const res = await fetch(`${QUOTE_ENDPOINT}?${params.toString()}`, { headers: JSON_GET_HEADERS });
+    const res = await fetchWithRetry(
+      `${QUOTE_ENDPOINT}?${params.toString()}`,
+      { headers: JSON_GET_HEADERS },
+      { timeoutMs: 30000, attempts: 3 }
+    );
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || "Quote request failed");
@@ -704,7 +710,19 @@ async function requestQuote() {
     updateVerifyButtonState();
   } catch (err) {
     console.error("[quote] request failed", err);
-    showAlert(status, "error", err instanceof Error && err.message ? err.message : "Quote request failed. Please try again.");
+    const warmup = err instanceof Error && (err.name === "AbortError" || err.message === "SLA" || /abort|timeout/i.test(err.message));
+    const message = warmup
+      ? "Broker is warming up. Please retry in a moment."
+      : err instanceof Error && err.message
+        ? err.message
+        : "Quote request failed. Please try again.";
+    showAlert(status, "error", message);
+    if (warmup) {
+      const retryContainer = $("pricing-retry");
+      if (retryContainer) {
+        retryContainer.classList.remove("hidden");
+      }
+    }
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -1117,9 +1135,10 @@ async function fetchPrices() {
   }
 
   const hadPrices = state.prices && Object.keys(state.prices).length > 0;
+  const previousMeta = state.pricesMeta;
   state.pricesLoading = true;
   state.pricesMeta = null;
-  
+
   // Abort previous request if any
   if (state.pricesAbort) {
     state.pricesAbort.abort();
@@ -1141,6 +1160,7 @@ async function fetchPrices() {
       }
       const body = await res.json();
       state.prices = (body && body.prices) || {};
+      state.pricesMeta = body && body.meta ? body.meta : null;
       state.lastPricesAt = Date.now();
       clearAlert($("quote-status"));
     } catch (err) {
@@ -1151,9 +1171,12 @@ async function fetchPrices() {
       // Check if we have fresh cached data (< 60s old)
       if (state.lastPricesAt && (Date.now() - state.lastPricesAt) < MAX_PRICE_STALE_SECONDS * 1000) {
         console.log("Using cached prices due to fetch failure");
+        if (previousMeta) {
+          state.pricesMeta = previousMeta;
+        }
         return; // Use cached data
       }
-      
+
       if (!hadPrices) {
         showAlert($("quote-status"), "error", "Unable to refresh market data. Trying again soon.");
       }
@@ -1359,6 +1382,17 @@ async function testApiKey() {
       triggerBtn.textContent = "Run test call";
     }
   }
+}
+
+function formatLatencyMeta(meta) {
+  if (!meta || typeof meta !== "object") return "";
+  const { totalMs, marketDataMs, engineMs, persistMs } = meta;
+  const parts = [];
+  if (Number.isFinite(totalMs)) parts.push(`total ${Math.round(totalMs)} ms`);
+  if (Number.isFinite(marketDataMs)) parts.push(`market ${Math.round(marketDataMs)} ms`);
+  if (Number.isFinite(engineMs)) parts.push(`engine ${Math.round(engineMs)} ms`);
+  if (Number.isFinite(persistMs)) parts.push(`persist ${Math.round(persistMs)} ms`);
+  return parts.length ? `(${parts.join(", ")})` : "";
 }
 
 function setupEventHandlers() {
