@@ -8,7 +8,6 @@ import importlib
 import os
 from libs.pricing.engine import StaticPricingEngine, MarketPricingEngine
 from db.session import create_db_and_tables, get_session
-from libs.telemetry.events import emit as emit_event
 try:
     from libs.telemetry.metrics import inc as _metrics_inc  # type: ignore
 except Exception:
@@ -279,7 +278,6 @@ class PricingService:
         price_guard: Dict[str, Any] | None = None
         market_data_start: float = 0.0
         engine_start: float = 0.0
-        persist_start: float = 0.0
         try:
             if isinstance(self.engine, MarketPricingEngine):
                 try:
