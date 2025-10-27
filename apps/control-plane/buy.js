@@ -603,6 +603,7 @@ function applyQuote(result) {
   startQuoteTimer();
   // Disable quote button after successful quote to prevent reset
   state.quoteButtonDisabled = true;
+  const btn = $("quote-btn");
   if (btn) {
     btn.disabled = true;
     btn.textContent = "Quote Active";
@@ -724,7 +725,8 @@ async function requestQuote() {
       }
     }
   } finally {
-    if (btn) {
+    // Respect state.quoteButtonDisabled set during successful applyQuote
+    if (!state.quoteButtonDisabled && btn) {
       btn.disabled = false;
       btn.textContent = "Get Quote";
     }
