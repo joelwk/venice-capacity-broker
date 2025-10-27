@@ -11,6 +11,7 @@ logger = get_logger("db.session")
 
 _ENGINE_ATTEMPTS: List[Dict[str, Any]] = []
 _ENGINE_CACHE: Any = None
+_ENGINE_CACHE_KEY: Any = None
 _SESSION_FACTORY: Any = None
 
 
@@ -48,14 +49,19 @@ def _ensure_sqlmodel() -> None:
         create_engine = _create_engine  # type: ignore[assignment]
 
 
-def _db_url() -> str:
+def _with_connect_timeout(url: str) -> str:
+    """Attach a short connect timeout to non-SQLite URLs when missing."""
+
+    if _is_sqlite(url) or "connect_timeout" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}connect_timeout=2"
+
+
+def _db_url(*, add_connect_timeout: bool = True) -> str:
     url = os.getenv("SQL_DATABASE_URL") or os.getenv("DATABASE_URL")
     if url:
-        # Ensure connect_timeout is set for Postgres URLs
-        if not url.startswith("sqlite") and "connect_timeout" not in url:
-            sep = "&" if "?" in url else "?"
-            url = f"{url}{sep}connect_timeout=2"
-        return url
+        return _with_connect_timeout(url) if add_connect_timeout else url
     host = os.getenv("POSTGRES_HOST")
     if not host:
         # Fall back to a local SQLite database when no Postgres configuration is
@@ -65,7 +71,8 @@ def _db_url() -> str:
     pwd = os.getenv("POSTGRES_PASSWORD", "")
     db = os.getenv("POSTGRES_DB", "postgres")
     port = int(os.getenv("POSTGRES_PORT", "5432"))
-    return f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}?connect_timeout=2"
+    base_url = f"postgresql+psycopg2://{user}:{pwd}@{host}:{port}/{db}"
+    return _with_connect_timeout(base_url) if add_connect_timeout else base_url
 
 def _is_sqlite(url: str) -> bool:
     return url.strip().lower().startswith("sqlite")
@@ -241,27 +248,28 @@ def _sqlite_fallback_engine(echo: bool, source_url: str, warning_fmt: str):
 
 
 
+def _cache_key(url: str, kwargs: Dict[str, Any]) -> Any:
+    return (url, tuple(sorted(kwargs.items())))
+
+
 def get_engine():
-    global _ENGINE_CACHE
-    
-    # Return cached engine if available
-    if _ENGINE_CACHE is not None:
-        return _ENGINE_CACHE
-    
+    global _ENGINE_CACHE, _ENGINE_CACHE_KEY
+
     _reset_engine_attempts()
     echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
     pool_size = int(os.getenv("DATABASE_POOL_SIZE") or 5)
-    url = _db_url()
-    is_sqlite = _is_sqlite(url)
-
-    placeholder = _looks_like_placeholder(url)
+    raw_url = _db_url(add_connect_timeout=False)
+    is_sqlite = _is_sqlite(raw_url)
+    placeholder = _looks_like_placeholder(raw_url)
 
     if placeholder and not is_sqlite:
-        return _sqlite_fallback_engine(echo, url, "placeholder database URL (%s); using SQLite %s")
+        return _sqlite_fallback_engine(echo, raw_url, "placeholder database URL (%s); using SQLite %s")
+
+    url = raw_url if is_sqlite else _with_connect_timeout(raw_url)
+    kwargs: Dict[str, Any] = {"echo": echo}
 
     _ensure_sqlmodel()
 
-    kwargs: Dict[str, Any] = {"echo": echo}
     if is_sqlite:
         kwargs.update(_sqlite_connect_kwargs())
     else:
@@ -284,21 +292,28 @@ def get_engine():
         except Exception:
             pass
 
+    key = _cache_key(url, kwargs)
+    if _ENGINE_CACHE is not None and _ENGINE_CACHE_KEY == key:
+        return _ENGINE_CACHE
+
     try:
         engine = _call_engine_factory(url, **kwargs)
         _ENGINE_CACHE = engine
+        _ENGINE_CACHE_KEY = key
         return engine
     except ModuleNotFoundError as exc:
         message = str(exc).lower()
         if "psycopg2" in message and not is_sqlite:
             engine = _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
             _ENGINE_CACHE = engine
+            _ENGINE_CACHE_KEY = _cache_key(_fallback_sqlite_url(), _sqlite_connect_kwargs() | {"echo": echo})
             return engine
         raise
     except Exception:
         if not is_sqlite:
             engine = _sqlite_fallback_engine(echo, url, "database connection failed for %s; using SQLite %s")
             _ENGINE_CACHE = engine
+            _ENGINE_CACHE_KEY = _cache_key(_fallback_sqlite_url(), _sqlite_connect_kwargs() | {"echo": echo})
             return engine
         raise
 
