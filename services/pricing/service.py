@@ -315,11 +315,8 @@ class PricingService:
                                 "details": dict(price_health),
                             }
                         elif not source_ok:
-                            price_guard = {
-                                "status": "fallback",
-                                "reason": "price_guard",
-                                "details": dict(price_health),
-                            }
+                            # Record a hint for operators but keep quotes active when price comes from a fallback.
+                            price_health["fallback"] = True
                 except Exception:
                     prefetched_prices = {}
                     mdp_stats = {}
