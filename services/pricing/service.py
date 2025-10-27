@@ -299,13 +299,24 @@ class PricingService:
                             price_health_candidate = None
                     if isinstance(price_health_candidate, dict) and price_health_candidate:
                         price_health = dict(price_health_candidate)
-                        source_label = str(price_health.get("source") or "")
+                        source_label_raw = str(price_health.get("source") or "")
+                        source_label_norm = source_label_raw.strip().lower()
                         clamped = bool(price_health.get("clamped"))
                         valid_flag = price_health.get("valid")
-                        source_ok = source_label.startswith("aggregator")
-                        if clamped or valid_flag is False or not source_ok:
+                        trusted_prefixes = ("aggregator", "path_engine", "external_reference", "legacy")
+                        has_source = bool(source_label_norm)
+                        source_ok = any(
+                            source_label_norm.startswith(prefix) for prefix in trusted_prefixes if prefix
+                        )
+                        if clamped or valid_flag is False or not has_source:
                             price_guard = {
                                 "status": "unhealthy",
+                                "reason": "price_guard",
+                                "details": dict(price_health),
+                            }
+                        elif not source_ok:
+                            price_guard = {
+                                "status": "fallback",
                                 "reason": "price_guard",
                                 "details": dict(price_health),
                             }
