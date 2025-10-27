@@ -91,13 +91,15 @@ function nowMs() {
 }
 
 async function fetchWithRetry(url, options = {}, cfg = {}) {
-  // Increased default timeout for price and env calls which can take longer
+  // Tune timeouts: faster feedback for quotes; keep prices more lenient
   const defaultTimeout = url.includes('/env-and-prices') || url.includes('/market/prices') 
-    ? 25000  // 25s for market data
+    ? 20000  // 20s for market data
     : url.includes('/quotes') 
-      ? 30000  // 30s for quotes
+      ? 12000  // 12s for quotes
       : 5000;  // 5s for other calls
-  const { attempts = 5, baseMs = 500, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
+  // Reduce attempts for quotes so warmup message surfaces sooner; keep others unchanged
+  const defaultAttempts = url.includes('/quotes') ? 2 : 5;
+  const { attempts = defaultAttempts, baseMs = 400, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
   for (let i = 0; i < attempts; i++) {
     const ac = new AbortController();
     const id = setTimeout(() => ac.abort(), timeoutMs);
@@ -305,6 +307,18 @@ function renderPricingTable() {
       if (state.lastPricesAt) {
         const ageSeconds = Math.floor((Date.now() - state.lastPricesAt) / 1000);
         metaParts.push(`updated ${ageSeconds}s ago`);
+      }
+      // Readiness hint: show cache coverage when warming just finished
+      const ch = Number(state.pricesMeta.cache_hits);
+      const cm = Number(state.pricesMeta.cache_misses);
+      if (Number.isFinite(ch) && Number.isFinite(cm)) {
+        const total = ch + cm;
+        if (total > 0) {
+          const hitRate = ch / total;
+          if (hitRate >= 0.8 && ageSeconds <= 30) {
+            metaParts.push('ready');
+          }
+        }
       }
       if (metaParts.length > 0) {
         const metaText = metaParts.join(', ');
