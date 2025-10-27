@@ -272,7 +272,6 @@ class PricingService:
         budget_usd: Optional[float] = None,
     ) -> Dict[str, object]:
         start_time = time.perf_counter()
-        outcome = "ok"
         prefetched_prices: Dict[str, float] = {}
         mdp_stats: Dict[str, Any] = {}
         discount_meta: Dict[str, Any] = {}
@@ -448,6 +447,8 @@ class PricingService:
                 except Exception:
                     pass
             return response
+        except Exception:
+            raise
 
     def persist_quote(self, payload: Dict[str, Any]) -> None:
         self._persist_quote_from_payload(payload)
