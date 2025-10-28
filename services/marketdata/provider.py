@@ -409,6 +409,7 @@ class MarketDataProvider:
         price: Optional[float],
         external_price: float,
         diff: float,
+        context: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Allow operators to force internal pricing when clamps fire."""
         flag = os.getenv("MARKETDATA_SANITY_CLAMP_INTERNAL")
@@ -431,15 +432,23 @@ class MarketDataProvider:
         try:
             label = (symbol or "").upper()
             if label == "ETH":
-                detail = type(self)._get_price_source(label)
+                detail: Optional[Dict[str, Any]] = context if isinstance(context, dict) else None
+                if detail is None:
+                    snapshot = type(self)._get_price_source(label)
+                    if isinstance(snapshot, dict):
+                        detail = snapshot
                 path = detail.get("path") if isinstance(detail, dict) else None
                 if isinstance(path, (list, tuple)):
                     tokens = [str(tok).strip().lower() for tok in path if tok]
-                    if len(tokens) == 2:
-                        weth = (self._weth_address() or "").strip().lower()
-                        quote = (self._quote_token_address() or "").strip().lower()
-                        if weth and quote and tokens[0] == weth and tokens[-1] == quote:
-                            return True
+                elif isinstance(path, str) and path.strip():
+                    tokens = [segment.strip().lower() for segment in path.split("->") if segment.strip()]
+                else:
+                    tokens = []
+                if len(tokens) == 2:
+                    weth = (self._weth_address() or "").strip().lower()
+                    quote = (self._quote_token_address() or "").strip().lower()
+                    if weth and quote and tokens[0] == weth and tokens[-1] == quote:
+                        return True
         except Exception:
             return False
         return False
@@ -569,7 +578,7 @@ class MarketDataProvider:
             breakdown["reserves"] = detail.get("reserves")
         return breakdown
 
-    def _apply_price_sanity(self, symbol: str, price: Optional[float]) -> float:
+    def _apply_price_sanity(self, symbol: str, price: Optional[float], *, context: Optional[Dict[str, Any]] = None) -> float:
         label = self._norm_symbol_label(symbol)
         stats = getattr(self, '_active_stats', None)
 
@@ -635,7 +644,7 @@ class MarketDataProvider:
             breakdown = self._price_breakdown(label)
             fallback_source = "external"
             fallback_price = float(ext_price)
-            prefer_internal = self._price_sanity_prefer_internal(label, price, ext_price, diff)
+            prefer_internal = self._price_sanity_prefer_internal(label, price, ext_price, diff, context)
             if prefer_internal and self._valid_price(price):
                 try:
                     fallback_price = float(price)
@@ -2542,10 +2551,11 @@ class MarketDataProvider:
                     path_result = None
             if path_result and self._valid_price(path_result.price):
                 metadata = path_result.metadata if isinstance(path_result.metadata, dict) else {}
+                raw_path = list(path_result.route.tokens) if path_result.route else metadata.get("path")
                 detail_payload = {
                     "valid": True,
                     "provider": path_result.provider,
-                    "path": list(path_result.route.tokens) if path_result.route else metadata.get("path"),
+                    "path": raw_path,
                     "source": path_result.source,
                     "score": path_result.score,
                     "policy_penalty": metadata.get("policy_penalty"),
@@ -2554,7 +2564,13 @@ class MarketDataProvider:
                     "fees": [hop.fee for hop in getattr(path_result.route, "hops", [])] if path_result.route else metadata.get("fees"),
                 }
                 type(self)._record_price_source("ETH", path_result.source or "path_engine", detail_payload)
-                return self._apply_price_sanity("ETH", float(path_result.price))
+                context_path: Optional[List[str]] = None
+                if isinstance(raw_path, (list, tuple)):
+                    context_path = [str(tok).strip() for tok in raw_path if tok]
+                elif isinstance(raw_path, str) and raw_path.strip():
+                    context_path = [segment.strip() for segment in raw_path.split("->") if segment.strip()]
+                context_detail = {"path": context_path} if context_path else None
+                return self._apply_price_sanity("ETH", float(path_result.price), context=context_detail)
 
             routes_to_try: List[RoutePlan] = []
             seen_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
@@ -2613,20 +2629,26 @@ class MarketDataProvider:
                 price = float(bp.get("price") or 0.0)
                 if not self._valid_price(price):
                     continue
-                type(self)._record_price_source(
-                "ETH",
-                "aggregator",
-                {
-                "valid": True,
-                "provider": bp.get("provider"),
-                "path": list(bp.get("path") or route.tokens),
-                "fees": bp.get("fees"),
-                "source": "best_price",
-                "decimals": bp.get("decimals"),
-                "reserves": bp.get("reserves"),
-                },
-                )
-                return self._apply_price_sanity("ETH", price)
+                raw_path = bp.get("path")
+                if not raw_path:
+                    raw_path = list(route.tokens)
+                detail_payload = {
+                    "valid": True,
+                    "provider": bp.get("provider"),
+                    "path": raw_path,
+                    "fees": bp.get("fees"),
+                    "source": "best_price",
+                    "decimals": bp.get("decimals"),
+                    "reserves": bp.get("reserves"),
+                }
+                type(self)._record_price_source("ETH", "aggregator", detail_payload)
+                context_path: Optional[List[str]] = None
+                if isinstance(raw_path, (list, tuple)):
+                    context_path = [str(tok).strip() for tok in raw_path if tok]
+                elif isinstance(raw_path, str) and raw_path.strip():
+                    context_path = [segment.strip() for segment in raw_path.split("->") if segment.strip()]
+                context_detail = {"path": context_path} if context_path else None
+                return self._apply_price_sanity("ETH", price, context=context_detail)
 
             # Fallback: scan decreasing sizes on the simplest WETH->QUOTE route
             try:
@@ -2639,22 +2661,26 @@ class MarketDataProvider:
                 except Exception:
                     scan_price = None
                 if self._valid_price(scan_price):
+                    scan_path = list(route_to_scan.tokens)
                     type(self)._record_price_source(
-                    "ETH",
-                    "aggregator_scan",
-                        {"valid": True, "path": list(route_to_scan.tokens), "source": "scan"},
+                        "ETH",
+                        "aggregator_scan",
+                        {"valid": True, "path": scan_path, "source": "scan"},
                     )
-                    return self._apply_price_sanity("ETH", float(scan_price))
+                    context_detail = {"path": [str(tok).strip() for tok in scan_path if tok]}
+                    return self._apply_price_sanity("ETH", float(scan_price), context=context_detail)
 
             try:
                 px = self._mid_price_from_reserves(weth, quote)
                 if self._valid_price(px):
+                    reserve_path = [weth, quote]
                     type(self)._record_price_source(
-                    "ETH",
-                    "reserves",
-                        {"valid": True, "path": [weth, quote], "source": "mid_price"},
+                        "ETH",
+                        "reserves",
+                        {"valid": True, "path": reserve_path, "source": "mid_price"},
                     )
-                    return self._apply_price_sanity("ETH", float(px))
+                    context_detail = {"path": [str(tok).strip() for tok in reserve_path if tok]}
+                    return self._apply_price_sanity("ETH", float(px), context=context_detail)
             except Exception:
                 pass
 
@@ -3008,9 +3034,5 @@ class MarketDataProvider:
             return int(cap)
         except Exception:
             return None
-
-
-
-
 
 
