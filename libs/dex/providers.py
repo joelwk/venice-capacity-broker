@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
@@ -681,8 +681,7 @@ class DexAggregator:
         if self._timeout < 0:
             self._timeout = 0.0
         try:
-            worker_env = os.getenv("DEX_AGGREGATOR_MAX_WORKERS")
-            configured_workers = int(worker_env.strip()) if worker_env else 0
+            configured_workers = int((os.getenv("DEX_MAX_WORKERS") or "0").strip() or 0)
         except Exception:
             configured_workers = 0
         default_workers = len(self.providers) if self.providers else 1
@@ -699,6 +698,20 @@ class DexAggregator:
             self._circ_max_cool = 300.0
         if self._circ_max_cool <= 0:
             self._circ_max_cool = float(self._circ_cool)
+        # Early-exit linger after first successful quote (milliseconds)
+        try:
+            self._linger_ms = int((os.getenv("DEX_FIRST_QUOTE_LINGER_MS") or "80").strip() or 80)
+        except Exception:
+            self._linger_ms = 80
+        if self._linger_ms < 0:
+            self._linger_ms = 0
+        # Optional aggregate timeout across all providers; falls back to per-provider timeout if unset
+        try:
+            self._aggregate_timeout = float((os.getenv("DEX_AGGREGATE_TIMEOUT_SECONDS") or str(self._timeout)).strip())
+        except Exception:
+            self._aggregate_timeout = self._timeout
+        if self._aggregate_timeout < 0:
+            self._aggregate_timeout = 0.0
 
     @staticmethod
     def _invoke_provider(provider: DexProvider, method: str, route: RoutePlan, *args):
@@ -759,14 +772,37 @@ class DexAggregator:
         if not providers:
             return quotes
         max_workers = min(len(providers), self._max_workers)
-        timeout = self._timeout if self._timeout and self._timeout > 0 else None
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {executor.submit(self._invoke_provider, provider, method, route_plan, amount): provider for provider in providers}
-            for future, provider in future_map.items():
+        per_provider_timeout = self._timeout if self._timeout and self._timeout > 0 else None
+        aggregate_timeout = self._aggregate_timeout if self._aggregate_timeout and self._aggregate_timeout > 0 else None
+        start_ts = time.perf_counter()
+        first_quote_ts: float | None = None
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        future_map = {executor.submit(self._invoke_provider, provider, method, route_plan, amount): provider for provider in providers}
+        pending = set(future_map.keys())
+        try:
+            while pending:
+                # Compute remaining time budget for the aggregate
+                if aggregate_timeout is not None:
+                    elapsed = time.perf_counter() - start_ts
+                    remaining = aggregate_timeout - elapsed
+                    if remaining <= 0:
+                        break
+                else:
+                    remaining = None
+                # Wait for the next completed future within remaining budget
                 try:
-                    quote = future.result(timeout=timeout)
+                    completed_iter = as_completed(list(pending), timeout=remaining)
+                    fut = next(completed_iter)
                 except TimeoutError:
-                    future.cancel()
+                    # Aggregate timeout elapsed before any further completions
+                    break
+                pending.discard(fut)
+                provider = future_map[fut]
+                try:
+                    # If a per-provider timeout is configured, bound result wait to it; otherwise no bound
+                    quote = fut.result(timeout=per_provider_timeout)
+                except TimeoutError:
+                    fut.cancel()
                     if _debug_routes_enabled():
                         route_tokens = list(route_plan.tokens)
                         _logger.warning(
@@ -798,6 +834,9 @@ class DexAggregator:
                         object.__setattr__(quote, "route", route_plan)
                     quotes.append(quote)
                     self._circ_on_success(provider.name)
+                    # Start linger window after first success to allow a potentially better quote to arrive
+                    if first_quote_ts is None:
+                        first_quote_ts = time.perf_counter()
                 else:
                     _metrics_inc("dex_agg_null_quotes_total", labels={"provider": provider.name, "method": method})
                     self._circ_on_failure(provider.name, reason="empty")
@@ -810,6 +849,19 @@ class DexAggregator:
                             route_tokens,
                             int(amount),
                         )
+                # Early-exit if we have at least one quote and linger window has elapsed
+                if first_quote_ts is not None and self._linger_ms >= 0:
+                    if (time.perf_counter() - first_quote_ts) * 1000.0 >= float(self._linger_ms):
+                        break
+        finally:
+            # Mark remaining providers as timed out for circuit/metrics and cancel their futures
+            for fut in list(pending):
+                provider = future_map[fut]
+                fut.cancel()
+                _metrics_inc("dex_agg_timeouts_total", labels={"provider": provider.name, "method": method})
+                self._circ_on_failure(provider.name, reason="timeout")
+            # Do not wait for slow providers; cancel outstanding futures and return
+            executor.shutdown(wait=False, cancel_futures=True)
         return quotes
 
     def quote_all(self, amount_in: int, route: RouteLike) -> List[Quote]:

@@ -169,6 +169,9 @@ class MarketDataProvider:
     _decimals_cache_lock: Lock = Lock()
     _decimals_cache: Dict[str, int] = dict(_INITIAL_DECIMALS_CACHE)
 
+    # Ensure heavy init steps run at most once per process unless explicitly forced
+    _did_initial_validation: bool = False
+
     def _ensure_required_env(self) -> None:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return
@@ -423,6 +426,22 @@ class MarketDataProvider:
                 symbols = set()
             if symbols:
                 return (symbol or "").upper() in symbols
+        # Preserve the on-chain canonical quote for ETH (WETH -> QUOTE) so external feeds
+        # cannot overwrite a healthy internal price when we intentionally avoid VVV.
+        try:
+            label = (symbol or "").upper()
+            if label == "ETH":
+                detail = type(self)._get_price_source(label)
+                path = detail.get("path") if isinstance(detail, dict) else None
+                if isinstance(path, (list, tuple)):
+                    tokens = [str(tok).strip().lower() for tok in path if tok]
+                    if len(tokens) == 2:
+                        weth = (self._weth_address() or "").strip().lower()
+                        quote = (self._quote_token_address() or "").strip().lower()
+                        if weth and quote and tokens[0] == weth and tokens[-1] == quote:
+                            return True
+        except Exception:
+            return False
         return False
 
     def _price_sanity_threshold(self) -> float:
@@ -827,8 +846,27 @@ class MarketDataProvider:
         self._path_engine = PathQuoteEngine(external_price_fetcher=self._external_price)
         self._cached_trade_paths: Optional[Tuple[RoutePlan, ...]] = None
         self._ensure_warm_thread()
-        self._validate_trade_paths()
-        self._check_wbtc_configuration()
+
+        # Allow skipping expensive path validation on startup or after first run
+        skip_validation = False
+        try:
+            init_light = self._env_flag("MARKETDATA_INIT_LIGHT", default=False)
+            skip_validation = (
+                init_light
+                or self._env_flag("MARKETDATA_SKIP_TRADE_PATH_VALIDATION", default=False)
+                or type(self)._did_initial_validation
+            )
+        except Exception:
+            skip_validation = type(self)._did_initial_validation
+
+        if not skip_validation:
+            self._validate_trade_paths()
+            type(self)._did_initial_validation = True
+
+        # WBTC configuration is informational; allow skipping in light init
+        if not self._env_flag("MARKETDATA_INIT_LIGHT", default=False):
+            self._check_wbtc_configuration()
+
         # Best-effort warm for core ETH pricing path (WETH -> QUOTE)
         try:
             weth = self._weth_address()

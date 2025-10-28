@@ -50,6 +50,30 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CORS_ENABLED: ${CORS_ENABLED:-false}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
+      # Enable quotes and use market pricing engine
+      QUOTES_ENABLED: ${QUOTES_ENABLED:-1}
+      PRICE_ENGINE: ${PRICE_ENGINE:-market}
+      # Limit accepted assets to those with known liquidity/config in this deployment
+      ACCEPT_ASSETS: ${ACCEPT_ASSETS:-ETH,USDC}
+      # Speed up quote aggregation safely
+      DEX_FIRST_QUOTE_LINGER_MS: ${DEX_FIRST_QUOTE_LINGER_MS:-60}
+      DEX_AGGREGATE_TIMEOUT_SECONDS: ${DEX_AGGREGATE_TIMEOUT_SECONDS:-1.2}
+      DEX_PROVIDER_TIMEOUT_SECONDS: ${DEX_PROVIDER_TIMEOUT_SECONDS:-0.9}
+      DEX_MAX_WORKERS: ${DEX_MAX_WORKERS:-4}
+      # RPC client timeout to avoid long stalls
+      RPC_REQUEST_TIMEOUT_SECONDS: ${RPC_REQUEST_TIMEOUT_SECONDS:-5}
+      # Etherscan path verifier tuning
+      ETHERSCAN_TIMEOUT_SECONDS: ${ETHERSCAN_TIMEOUT_SECONDS:-8}
+      ETHERSCAN_MAX_RETRIES: ${ETHERSCAN_MAX_RETRIES:-1}
+      # Bridge fallback pool addresses (ensure these point to live pools)
+      DIEM_VVV_PAIR_ADDRESS: ${DIEM_VVV_PAIR_ADDRESS:-}
+      VVV_USDC_POOL_ADDRESS: ${VVV_USDC_POOL_ADDRESS:-}
+      # MarketData init behavior (avoid blocking)
+      MARKETDATA_INIT_LIGHT: ${MARKETDATA_INIT_LIGHT:-true}
+      MARKETDATA_SKIP_TRADE_PATH_VALIDATION: ${MARKETDATA_SKIP_TRADE_PATH_VALIDATION:-}
+      # Make startup tests non-blocking in Docker
+      BROKER_TESTS_BACKGROUND: ${BROKER_TESTS_BACKGROUND:-1}
+      BROKER_SKIP_TESTS: ${BROKER_SKIP_TESTS:-0}
     ports:
       - "8000:8000"
     volumes:

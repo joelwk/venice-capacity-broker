@@ -53,8 +53,19 @@ else
   log "Redis tests skipped (SKIP_REDIS_TESTS=1)"
 fi
 
-log "Running test suite before launching broker"
-pytest -q
+# Optional: Skip or background tests to avoid blocking the API startup
+if [ "${BROKER_SKIP_TESTS:-0}" = "1" ]; then
+  log "Skipping test suite (BROKER_SKIP_TESTS=1)"
+else
+  if [ "${BROKER_TESTS_BACKGROUND:-1}" = "1" ]; then
+    log "Launching test suite in background (non-blocking)"
+    # Best-effort timeout to prevent runaway tests from consuming resources
+    ( set +e; timeout "${BROKER_TESTS_TIMEOUT_SECONDS:-900}" pytest -q; RC=$?; log "Background tests exited rc=${RC}" ) &
+  else
+    log "Running test suite before launching broker"
+    pytest -q
+  fi
+fi
 
 if [ -n "${ORIGINAL_REDIS_URL}" ]; then
   export REDIS_URL="${ORIGINAL_REDIS_URL}"

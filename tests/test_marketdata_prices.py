@@ -107,6 +107,45 @@ def test_eth_price_canonical_route_avoids_vvv(monkeypatch):
         assert vvv_addr.lower() not in [tok.lower() for tok in recorded]
 
 
+def test_eth_price_canonical_route_skips_external_clamp(monkeypatch):
+    from services.marketdata.provider import MarketDataProvider
+
+    diem_addr = "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
+    vvv_addr = "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
+    quote_addr = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    weth_addr = "0x4200000000000000000000000000000000000006"
+
+    monkeypatch.setenv("DIEM_TOKEN_ADDRESS", diem_addr)
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", vvv_addr)
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", quote_addr)
+    monkeypatch.setenv("WETH_ADDRESS", weth_addr)
+
+    def fake_best_price(self, route, amount_in_decimal: float = 1.0, **kwargs):  # type: ignore[override]
+        plan = as_route_plan(route)
+        return {
+            "provider": "stub",
+            "amount_in": 1,
+            "amount_out": 3200,
+            "decimals": {"in": 18, "out": 6},
+            "price": 3200.0,
+            "path": list(plan.tokens),
+            "fees": [hop.fee for hop in plan.hops],
+        }
+
+    monkeypatch.setattr(MarketDataProvider, "best_price", fake_best_price, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_quote_via_path_engine", lambda *args, **kwargs: None, raising=False)
+    monkeypatch.setattr(MarketDataProvider, "_external_price", lambda self, symbol: 5000.0, raising=False)
+
+    MarketDataProvider._price_cache.clear()
+    provider = MarketDataProvider()
+    prices = provider.prices(["ETH"])
+
+    assert math.isclose(prices["ETH"], 3200.0)
+    source = type(provider)._get_price_source("ETH")
+    assert source.get("source") == "external_clamp"
+    assert source.get("fallback") == "internal"
+
+
 def test_diem_price_canonical_path(monkeypatch):
     from services.marketdata.provider import MarketDataProvider
 

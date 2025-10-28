@@ -244,6 +244,20 @@ DIEM on-chain actions (live):
 - Stake DIEM for daily API credits via the new `DIEMService.stake_for_api` helper. Configure `DIEM_STAKING_ADDRESS` (or allow it to fall back to `DIEM_TOKEN_ADDRESS`), optional `DIEM_STAKING_ABI`, and `DIEM_STAKE_FN` when the staking function name differs.
 - Optional sVVV capacity gate and lock/unlock hooks can be enabled via env (see DIEM mint/burn gate below).
 
+### Quote troubleshooting (market engine)
+
+If `GET /v1/quotes` hangs and logs show `trade path verification empty` repeatedly, the DIEM price path is missing.
+
+Fixes:
+- Set `TRADE_PATH` for `DIEM->WETH->USDC` on Base and ensure `BASE_RPC_URL` is reachable.
+- Provide bridge addresses so the fallback can supply DIEM/USD when aggregators miss:
+  - `DIEM_VVV_PAIR_ADDRESS` (Aerodrome VVV/DIEM)
+  - `VVV_USDC_POOL_ADDRESS` (Uniswap v3 VVV/USDC)
+- Optionally set `MARKETDATA_INIT_LIGHT=true` to avoid long startup validation. You can also tune verifier limits with `ETHERSCAN_TIMEOUT_SECONDS` and `ETHERSCAN_MAX_RETRIES`.
+
+After updating env, restart the broker and test:
+`curl "http://localhost:8000/v1/quotes?units=1&asset=USDC"`
+
 StakeMaster heartbeat (Venice allocation):
 - The staking agent keeps an active-staker heartbeat by issuing small inference calls on a configurable interval.
   - Interval and controls: `STAKEMASTER_HEARTBEAT_INTERVAL_HOURS` (default 48), `STAKEMASTER_HEARTBEAT_DISABLE=1` to turn it off, `STAKEMASTER_HEARTBEAT_PROMPT` to customize the ping message.

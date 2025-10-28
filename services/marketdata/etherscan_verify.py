@@ -25,6 +25,23 @@ except Exception:  # pragma: no cover - optional dependency in tests
 ETHERSCAN_API_URL_DEFAULT = "https://api.etherscan.io/v2/api"
 
 
+def _timeout_seconds() -> float:
+    try:
+        raw = os.getenv("ETHERSCAN_TIMEOUT_SECONDS")
+        return float(raw) if raw not in (None, "") else 8.0
+    except Exception:
+        return 8.0
+
+
+def _max_retries() -> int:
+    try:
+        raw = os.getenv("ETHERSCAN_MAX_RETRIES")
+        val = int(raw) if raw not in (None, "") else 1
+    except Exception:
+        val = 1
+    return max(0, min(3, val))
+
+
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name)
     if v is None or str(v).strip() == "":
@@ -108,13 +125,14 @@ def _es_get_via_curl(base: str, params: Dict[str, str]) -> Dict[str, Any]:
     if not _curl_available():
         raise RuntimeError("curl not available for Etherscan fallback")
     url = f"{base}?{urlencode(params)}"
+    max_time = str(int(max(1.0, min(30.0, _timeout_seconds()))))
     try:
         proc = subprocess.run(
             [
                 "curl",
                 "-sS",
                 "--max-time",
-                "10",
+                max_time,
                 url,
             ],
             check=True,
@@ -138,18 +156,28 @@ def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
     key = _etherscan_api_key()
     if key:
         q["apikey"] = key
-    try:
-        r = requests.get(base, params=q, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as exc:
-        if _curl_available():
-            try:
-                data = _es_get_via_curl(base, q)
-            except Exception as curl_exc:
-                raise type(exc)(f"{exc} (curl fallback also failed: {curl_exc})") from curl_exc
-        else:
-            raise
+    timeout = max(1.0, min(30.0, _timeout_seconds()))
+    retries = _max_retries()
+    last_exc: Optional[Exception] = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            r = requests.get(base, params=q, timeout=timeout)
+            r.raise_for_status()
+            data = r.json()
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(0.25)
+                continue
+            if _curl_available():
+                try:
+                    data = _es_get_via_curl(base, q)
+                    break
+                except Exception as curl_exc:
+                    raise type(exc)(f"{exc} (curl fallback also failed: {curl_exc})") from curl_exc
+            else:
+                raise
     return data  # type: ignore[no-any-return]
 
 

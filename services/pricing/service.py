@@ -333,6 +333,22 @@ class PricingService:
                             _, price_map = self.engine._resolve_prices()  # type: ignore[attr-defined]
                         except Exception:  # noqa: BLE001
                             price_map = {}
+                    # Fast-fail guard: ensure DIEM baseline is present for budget sizing
+                    try:
+                        diem_ok = float(price_map.get("DIEM") or 0.0) > 0
+                    except Exception:
+                        diem_ok = False
+                    if not diem_ok:
+                        # Try one more time through engine fallback
+                        try:
+                            base_usd, pm2 = self.engine._resolve_prices()  # type: ignore[attr-defined]
+                            if float(pm2.get("DIEM") or 0.0) > 0 or float(base_usd or 0.0) > 0:
+                                price_map.update(pm2)
+                                diem_ok = float(price_map.get("DIEM") or 0.0) > 0
+                        except Exception:
+                            diem_ok = False
+                    if not diem_ok:
+                        raise ValueError("DIEM pricing unavailable; check on-chain pools or set bridge addresses")
                     def _resolve_positive_price(symbols: list[str]) -> float:
                         for sym in symbols:
                             try:
