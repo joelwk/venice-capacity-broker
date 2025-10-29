@@ -27,9 +27,9 @@ class ReflexGuardian:
         apply_in_dry_run: bool | None = None,
         require_active_stake: bool | None = None,
     ) -> None:
-        self.max_vol_bps = self._resolve_float(max_vol_bps, "REFLEX_MAX_VOL_BPS", 800.0)
+        self.max_vol_bps = self._resolve_float(max_vol_bps, "REFLEX_MAX_VOL_BPS", 450.0)
         self.max_utilization = self._resolve_float(max_utilization, "REFLEX_MAX_UTILIZATION", 0.92)
-        self.max_drawdown = self._resolve_float(max_drawdown, "REFLEX_MAX_PRICE_DRAWDOWN", 0.20)
+        self.max_drawdown = self._resolve_float(max_drawdown, "REFLEX_MAX_PRICE_DRAWDOWN", 0.12)
         if self.max_drawdown and self.max_drawdown > 1.0:
             self.max_drawdown = self.max_drawdown / 100.0
         self.apply_in_dry_run = self._resolve_flag(apply_in_dry_run, "REFLEX_APPLY_DRY_RUN", False)

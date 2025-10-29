@@ -277,6 +277,13 @@ Run modes:
 
 * Configure via `AGENT_MEMORY_PATH`, `REFLECTION_VOL_BPS_THRESHOLD`, `REFLECTION_HOLD_STREAK`, and the `REFLEX_*` guardrail envs; use `DIEM_FAKE_PRICE` / `DIEM_FAKE_MINT_RATE` for offline simulations.
 
+* Default guardrails halt live execution once realized volatility crosses 450 bps or drawdowns push past 0.12.
+
+  
+  Override `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_PRICE_DRAWDOWN`, `REFLECTION_VOL_BPS_THRESHOLD`, or `REFLECTION_HOLD_STREAK` to widen or tighten the window.
+
+* Flip `RISK_VOL_PERSIST=1` after the SQL backend is ready so the orchestrator writes price ticks into `db.models.PriceTick` for post-trade reviews.
+
 ## Operational policy and risk
 
 * **Sizing** - Respect pool-take caps (e.g., `RISK_MAX_POOL_TAKE_BPS`) and slippage caps (default 150 bps).

@@ -15,8 +15,8 @@ class ReflectionEngine:
         hold_streak_threshold: int | None = None,
     ) -> None:
         self.lookback = max(1, int(lookback))
-        self.vol_bps_threshold = self._resolve_float(vol_bps_threshold, "REFLECTION_VOL_BPS_THRESHOLD", 600.0)
-        self.hold_streak_threshold = self._resolve_int(hold_streak_threshold, "REFLECTION_HOLD_STREAK", 3)
+        self.vol_bps_threshold = self._resolve_float(vol_bps_threshold, "REFLECTION_VOL_BPS_THRESHOLD", 450.0)
+        self.hold_streak_threshold = self._resolve_int(hold_streak_threshold, "REFLECTION_HOLD_STREAK", 4)
 
     # ------------------------------------------------------------------
     def reflect(

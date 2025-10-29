@@ -78,6 +78,8 @@ ArbiDiem tracks `_last_rationale` for telemetry and exports risk helpers such as
 
 - Records warnings for high utilization so operators can throttle broker tenants.
 
+- Defaults halt live trades once realized volatility tops 450 bps or drawdowns exceed 0.12.
+
 ## Orchestrator Flow
 
 `SingleLoopOrchestrator.run_cycle` gathers market signals, simulates ArbiDiem, and builds a `QuorumContext`.
@@ -122,7 +124,11 @@ Risk and guardrails:
 
 - Guard knobs `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_PRICE_DRAWDOWN`, `ARBI_PRICE_GUARD_MAX_DRIFT`, and `MARKETDATA_PRICE_SANITY_MAX_DRIFT`.
 
+- Default thresholds ship at 450 bps volatility, 0.12 drawdown, and four hold streaks; adjust with `REFLEX_*`, `REFLECTION_VOL_BPS_THRESHOLD`, or `REFLECTION_HOLD_STREAK`.
+
 - Progressive live using `STAKEMASTER_PROGRESSIVE_CYCLES`, `STAKEMASTER_PROGRESSIVE_ENABLE`, and `ARBI_PRICE_GUARD_STREAK_MAX`.
+
+- Enable `RISK_VOL_PERSIST=1` once SQL storage is available to persist `db.models.PriceTick` records.
 
 Memory and analytics:
 
@@ -141,6 +147,8 @@ Phase 2 finalizes DIEM execution: confirm aggregator configuration, price guards
 Phase 3 strengthens broker coordination: ensure CapacityBroker utilization feeds Quorum and treasury signals.
 
 Phase 4 hardens guardrails: calibrate Reflex limits, reflection thresholds, and SQL persistence for long term telemetry.
+
+Defaults now enforce the calibrated thresholds above and gate price tick persistence behind `RISK_VOL_PERSIST`.
 
 ## Testing and Validation
 
