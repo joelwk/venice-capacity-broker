@@ -1,47 +1,49 @@
-### VVV & DIEM — pocket tokenomics for agents
+# VVV and DIEM Tokenomics
 
-**What VVV is for**
+This note summarizes the economics the agents assume when staking VVV, minting DIEM, and reselling capacity.
 
-* ERC-20 on **Base** that turns staking into ongoing, private AI inference access. Your daily capacity scales with your **share of all VVV staked**; as Venice adds GPUs, the per-stake capacity rises.&#x20;
+It distills the longer executive summaries referenced in `AGENTS.md`.
 
-**Daily capacity unit (Diem)**
+## Core Facts
 
-* Staking VVV earns **Diem** (Venice’s daily inference credit); your Diem resets every 24h and grows with network capacity. Treat it as the system’s “compute dividend.”&#x20;
+VVV is an ERC-20 on Base that grants access to Venice inference when staked.
 
-**Staking yield**
+Stakers earn daily DIEM credits plus VVV emissions, and they must keep the heartbeat active to retain status.
 
-* Stakers earn **dual yield**: (1) daily Diem for API use, and (2) **VVV emissions** (inflation initially \~14M/yr, later reduced to \~10M/yr to favor stakers). Net effect: marginal AI cost can be near zero when staking rewards are counted.&#x20;
+DIEM represents one dollar per day of compute when staked and is minted by locking sVVV.
 
-**DIEM (tokenized intelligence)**
+The mint rate rises with outstanding DIEM supply and targets roughly thirty eight thousand tokens to keep float tight.
 
-* **DIEM** is an ERC-20 that represents **\$1/day of AI credit, forever** when staked (a perpetual, on-chain compute right).&#x20;
-* Only **VVV stakers** can mint DIEM by **locking sVVV** (staked VVV). While locked, you still earn **80%** of normal VVV emissions; burn DIEM later to **unlock** the sVVV. A **mint rate** (rises with supply) governs how much sVVV mints 1 DIEM; target float is \~**38k DIEM** to keep supply tight.&#x20;
+Locked sVVV keeps eighty percent of emissions, creating an opportunity cost when DIEM stays idle.
 
-**Agent autonomy (why this matters to us)**
+Burning DIEM unlocks the corresponding sVVV and restores full emissions.
 
-* Venice exposes endpoints so **agents** can hold wallets on Base, **stake VVV, mint/burn DIEM, and generate API keys** programmatically—enabling end-to-end, no-human-in-loop operations.&#x20;
+## Agent Implications
 
-**Mental models**
+StakeMaster must monitor stake share, unclaimed rewards, cooldowns, and heartbeat cadence.
 
-* **Stake share → Diem/day:** `your_VVV_staked / total_staked ≈ share of daily Diem`. Use more when Diem is abundant; monetize excess when demand spikes.&#x20;
-* **DIEM ≈ NPV of \$1/day:** market price should reflect discounted future compute; deviations create mint/sell/buy-back opportunities.&#x20;
+ArbiDiem compares market DIEM price against mint cost, considers emissions drag, and respects slippage and pool take caps.
 
-**When to do what (quick playbook)**
+CapacityBroker should prioritize high utilization tenants when mint rate increases or DIEM inventory tightens.
 
-* **Stake more VVV** when emissions APY is attractive and Diem demand is steady/rising.&#x20;
-* **Mint DIEM** when DIEM trades rich vs. the sVVV you lock (capture premium; you still keep 80% emissions while locked).&#x20;
-* **Burn DIEM** to unlock sVVV when DIEM is cheap (or when you need more staked base to raise future Diem/day).&#x20;
-* **Stake DIEM** you plan to use to realize the **\$1/day** credit; leave surplus liquid for trading or rentals.&#x20;
+AI Treasurer aims to hold one point five times average daily DIEM to cover application demand.
 
-**Key risks to watch**
+Reflection and memory modules log realized mint sell decisions so future cycles learn from slippage and premium drift.
 
-* **Token volatility & mint-rate drift:** DIEM pricing vs. sVVV lock costs can swing; ensure profitable round-trips before mint/sell/buy-back.&#x20;
-* **Liquidity & utilization:** thin DIEM/VVV markets or sudden utilization shifts can change yields and execution costs.&#x20;
+## Operational Notes
 
-**Ops checklist (agents)**
+Only VVV stakers can mint DIEM, so wallet funding and cooldown scheduling directly affect supply.
 
-* Keep Base gas funded; monitor **Diem balance**, **stake share**, **DIEM mint rate**, and **VVV emissions** each cycle.&#x20;
-* Automate stake/mint/burn/key-gen via Venice endpoints; log decisions for quorum/guardrail review.&#x20;
-* Configure a Venice parent key so broker purchase verifications immediately mint scoped API keys; confirmed purchases stay replayable if issuance fails the first time.&#x20;
+Venice supports autonomous API key creation and sub key rotation, enabling agents to resell excess capacity.
 
-*TL;DR:* **Stake VVV** to earn ongoing compute + emissions. **Mint DIEM** (by locking sVVV) to make compute **tradeable** and capture market premia; **burn** to re-balance. Agents can run all of this **autonomously** on Base.&#x20;
+Price sanity clamps treat DIEM spikes above five percent as drift unless `MARKETDATA_PRICE_SANITY_MAX_DRIFT` widens the band.
+
+Use `DIEM_FAKE_PRICE` and `DIEM_FAKE_MINT_RATE` for offline simulations without touching Base.
+
+## References
+
+Primary sources: Venice blog posts on VVV, DIEM, and staking mechanics.
+
+Architecture context: `docs/implementation-plan-agents.md` and `docs/implementation-plan-broker.md`.
+
+On chain routing: `docs/EtherScan.md`.

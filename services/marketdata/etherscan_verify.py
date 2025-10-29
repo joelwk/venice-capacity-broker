@@ -158,7 +158,6 @@ def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
         q["apikey"] = key
     timeout = max(1.0, min(30.0, _timeout_seconds()))
     retries = _max_retries()
-    last_exc: Optional[Exception] = None
     for attempt in range(max(1, retries + 1)):
         try:
             r = requests.get(base, params=q, timeout=timeout)
@@ -166,7 +165,6 @@ def _es_get(params: Dict[str, str]) -> Dict[str, Any]:
             data = r.json()
             break
         except Exception as exc:
-            last_exc = exc
             if attempt < retries:
                 time.sleep(0.25)
                 continue
