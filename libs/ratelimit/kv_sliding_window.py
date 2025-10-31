@@ -62,7 +62,10 @@ class KVSlidingWindowLimiter:
 
         if not getattr(self, '_strict_atomic', False):
             with self._local_lock:
-                count, reset_at = self._fixed_window_state.get(key, (0, now + window_seconds))
+                # Include window_seconds and limit in cache key to avoid stale state
+                # when rate limits are dynamically updated
+                cache_key = f"{key}:{window_seconds}:{limit}"
+                count, reset_at = self._fixed_window_state.get(cache_key, (0, now + window_seconds))
                 if now >= reset_at:
                     count = 0
                     reset_at = now + window_seconds
@@ -74,7 +77,7 @@ class KVSlidingWindowLimiter:
                     }
                     return False, headers
                 count += 1
-                self._fixed_window_state[key] = (count, reset_at)
+                self._fixed_window_state[cache_key] = (count, reset_at)
                 remaining = max(0, limit - count)
                 reset_epoch = reset_at
             headers = {

@@ -368,8 +368,8 @@ def purchases_stream(purchase_id: str) -> StreamingResponse:
 
                 with next(get_session()) as session:  # type: ignore[call-arg]
                     purchase = session.exec(
-                        Purchase.select().where(Purchase.purchase_id == purchase_id)
-                    ).first()  # type: ignore[attr-defined]
+                        _select(Purchase).where(Purchase.purchase_id == purchase_id)
+                    ).first()  # type: ignore[misc]
                     if purchase is None:
                         yield "event: error\n" + "data: not found\n\n"
                         time.sleep(3)

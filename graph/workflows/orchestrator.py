@@ -121,9 +121,11 @@ class Orchestrator:
                         _create_all_env = _os.getenv("SQL_CREATE_ALL_ON_START")
                         
                         if _prod_like:
+                            # Production: only create if explicitly enabled
                             _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
                         else:
-                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                            # Non-production: default to True unless explicitly disabled
+                            _create_all = _create_all_env is None or _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
                         
                         if _create_all:
                             create_db_and_tables()
@@ -997,9 +999,11 @@ class SingleLoopOrchestrator:
                         _create_all_env = os.getenv("SQL_CREATE_ALL_ON_START")
                         
                         if _prod_like:
+                            # Production: only create if explicitly enabled
                             _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
                         else:
-                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                            # Non-production: default to True unless explicitly disabled
+                            _create_all = _create_all_env is None or _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
                         
                         if _create_all:
                             create_db_and_tables()

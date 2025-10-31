@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -55,9 +56,35 @@ _load_dotenv()
 
 logger = get_logger("cli")
 
-# Safe defaults so local tooling/CI gates have secure-but-present config.
-os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "true")
-os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
+
+def _is_test_or_ci_environment() -> bool:
+    """Detect if running in a test or CI environment.
+    
+    Returns True if any of the following conditions are met:
+    - CI environment variable is set (common in CI systems)
+    - PYTEST_CURRENT_TEST is set (pytest is running)
+    - TESTING environment variable is set to truthy value
+    - pytest module is imported (indicating test execution)
+    """
+    if os.getenv("CI") or os.getenv("PYTEST_CURRENT_TEST"):
+        return True
+    
+    testing_env = os.getenv("TESTING", "").strip().lower()
+    if testing_env in {"1", "true", "yes", "on"}:
+        return True
+    
+    # Check if pytest is imported (indicates test execution)
+    if "pytest" in sys.modules:
+        return True
+    
+    return False
+
+
+# Safe defaults for local tooling/CI gates - only set in test/CI environments
+# to prevent overriding production security configurations.
+if _is_test_or_ci_environment():
+    os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "true")
+    os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
 os.environ.setdefault("VENICE_API_BASE_URL", "https://api.venice.ai/api/v1")
 
 def _env_flag(name: str, default: bool = False) -> bool:

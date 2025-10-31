@@ -171,7 +171,11 @@ function computeQuoteMetrics() {
     return;
   }
   const asset = String(state.quote.asset || getSelectedAsset()).toUpperCase();
-  const decimals = assetDecimals[asset] ?? 18;
+  // Use decimals from quote response if available
+  const quoteDecimals = Number(state.quote.discount?.decimals ?? state.quote.decimals);
+  const decimals = Number.isFinite(quoteDecimals) && quoteDecimals > 0 
+    ? quoteDecimals 
+    : (assetDecimals[asset] ?? 18);
   const totalAsset = totalMinor / 10 ** decimals;
   if (!Number.isFinite(totalAsset) || totalAsset <= 0) {
     return;
@@ -329,8 +333,8 @@ function renderPricingTable() {
 }
 
 
-function formatAmount(asset, totalMinor) {
-  const decimals = assetDecimals[asset] ?? 18;
+function formatAmount(asset, totalMinor, decimalsOverride = null) {
+  const decimals = decimalsOverride !== null ? decimalsOverride : (assetDecimals[asset] ?? 18);
   const divisor = 10 ** decimals;
   const value = Number(totalMinor || 0) / divisor;
   if (!Number.isFinite(value)) {
@@ -346,23 +350,25 @@ function formatAmount(asset, totalMinor) {
   };
 }
 
-function computeUsdEstimate(asset, totalMinor, units) {
+function computeUsdEstimate(asset, totalMinor, units, decimalsOverride = null) {
   const prices = state.prices || {};
+  const decimals = decimalsOverride !== null ? decimalsOverride : (assetDecimals[asset] ?? 18);
+  
   if (asset === "USDC") {
-    const usd = Number(totalMinor || 0) / 10 ** (assetDecimals.USDC || 6);
+    const usd = Number(totalMinor || 0) / 10 ** decimals;
     if (Number.isFinite(usd) && usd > 0) {
       return `~$${usd.toFixed(2)} USD`;
     }
   }
   if (asset === "ETH") {
-    const eth = Number(totalMinor || 0) / 10 ** (assetDecimals.ETH || 18);
+    const eth = Number(totalMinor || 0) / 10 ** decimals;
     const ethUsd = Number(prices.ETH);
     if (Number.isFinite(eth) && Number.isFinite(ethUsd) && ethUsd > 0) {
       return `~$${(eth * ethUsd).toFixed(2)} USD`;
     }
   }
   if (asset === "WBTC") {
-    const wbtc = Number(totalMinor || 0) / 10 ** (assetDecimals.WBTC || 8);
+    const wbtc = Number(totalMinor || 0) / 10 ** decimals;
     const wbtcUsd = Number(prices.WBTC);
     if (Number.isFinite(wbtc) && Number.isFinite(wbtcUsd) && wbtcUsd > 0) {
       return `~$${(wbtc * wbtcUsd).toFixed(2)} USD`;
@@ -571,11 +577,15 @@ function applyQuote(result) {
     return;
   }
 
-  const formatted = formatAmount(resolvedAsset, totalMinorRaw);
+  // Use decimals from quote response if available, otherwise fall back to assetDecimals
+  const quoteDecimals = Number(quoteData.discount?.decimals ?? quoteData.decimals);
+  const decimals = Number.isFinite(quoteDecimals) && quoteDecimals > 0 ? quoteDecimals : null;
+  
+  const formatted = formatAmount(resolvedAsset, totalMinorRaw, decimals);
   amountInput.value = formatted.text;
   addressInput.value = state.treasury;
   if (usdLine) {
-    const usdText = computeUsdEstimate(resolvedAsset, totalMinorRaw, unitsValue);
+    const usdText = computeUsdEstimate(resolvedAsset, totalMinorRaw, unitsValue, decimals);
     usdLine.textContent = usdText || "";
   }
   if (discountLine) {
@@ -634,6 +644,16 @@ async function requestQuote() {
   const refreshBtn = $("quote-refresh");
   const status = $("quote-status");
   const details = $("quote-details");
+  
+  // Reset button state at the start to allow new quote requests
+  state.quoteButtonDisabled = false;
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Get Quote";
+  }
+  // Hide refresh button when starting a new quote request
+  if (refreshBtn) refreshBtn.hidden = true;
+  
   if (details) details.classList.add("hidden");
   stopQuoteTimer();
   state.quote = null;
@@ -665,6 +685,11 @@ async function requestQuote() {
       unitsError.classList.remove("hidden");
     }
     if (unitsInput) unitsInput.setAttribute("aria-invalid", "true");
+    // Ensure button remains enabled on validation error
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Get Quote";
+    }
     return;
   }
 
@@ -678,6 +703,11 @@ async function requestQuote() {
       assetError.classList.remove("hidden");
     }
     if (assetSelect) assetSelect.setAttribute("aria-invalid", "true");
+    // Ensure button remains enabled on validation error
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Get Quote";
+    }
     return;
   }
 
@@ -1488,21 +1518,40 @@ function initDefaults() {
 async function init() {
   clearTimeout(initWatchdog);
   initDefaults();
-  setupEventHandlers();
+  // setupEventHandlers() is now called before init() to ensure button works even if init fails
   enableStep2(false);
   state.pricesLoading = true;
   renderPricingTable();
   
   // Try to restore session from localStorage
   const hasStoredQuote = loadSessionFromStorage();
+  const btn = $("quote-btn");
   if (hasStoredQuote) {
     // Restore quote UI if we have a valid stored quote
-    applyQuote(state.quote);
-    startQuoteTimer();
-    const btn = $("quote-btn");
+    try {
+      applyQuote(state.quote);
+      startQuoteTimer();
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Quote Active";
+      }
+    } catch (err) {
+      console.error("Failed to restore quote", err);
+      // If restore fails, ensure button is enabled and state is reset
+      state.quoteButtonDisabled = false;
+      state.quote = null;
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Get Quote";
+      }
+      localStorage.removeItem("activeQuote");
+    }
+  } else {
+    // Ensure button is enabled when there's no stored quote
+    state.quoteButtonDisabled = false;
     if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Quote Active";
+      btn.disabled = false;
+      btn.textContent = "Get Quote";
     }
   }
   
@@ -1520,7 +1569,37 @@ async function init() {
   updateVerifyButtonState();
 }
 
-init();
+// Ensure DOM is ready before initializing
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    // Set up event handlers immediately so button works even if init fails
+    setupEventHandlers();
+    // Ensure button is enabled by default
+    const btn = $("quote-btn");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Get Quote";
+    }
+    init().catch(err => {
+      console.error('[init] initialization failed', err);
+      showAlert($("quote-status"), "error", "Initialization error. Please refresh the page.");
+    });
+  });
+} else {
+  // DOM already loaded
+  // Set up event handlers immediately so button works even if init fails
+  setupEventHandlers();
+  // Ensure button is enabled by default
+  const btn = $("quote-btn");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Get Quote";
+  }
+  init().catch(err => {
+    console.error('[init] initialization failed', err);
+    showAlert($("quote-status"), "error", "Initialization error. Please refresh the page.");
+  });
+}
 
 
 
