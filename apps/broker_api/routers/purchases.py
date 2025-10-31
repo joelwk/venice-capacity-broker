@@ -14,7 +14,15 @@ from fastapi.responses import StreamingResponse
 
 from db.session import create_db_and_tables, get_session
 from db.models import Purchase, Quote
-from sqlmodel import select as _select  # type: ignore
+
+try:
+    from sqlmodel import select as _select  # type: ignore
+
+    _SQLMODEL_AVAILABLE = True
+except ModuleNotFoundError:
+    _select = None  # type: ignore[assignment]
+    _SQLMODEL_AVAILABLE = False
+
 from ..models import PurchaseStatus, PurchaseVerifyRequest
 from ..tenant_store import Tenant, TenantStore
 from services.venice_keys.manager import KeyManager
@@ -42,9 +50,17 @@ def init_router(
     _keys = keys
     _logger = logger
     _extract_field = extract_field
-    _purchases_enabled = purchases_enabled
+    _purchases_enabled = bool(purchases_enabled)
 
-    if not purchases_enabled:
+    if _purchases_enabled and not _SQLMODEL_AVAILABLE:
+        _purchases_enabled = False
+        try:  # pragma: no cover - logging only
+            _logger.warning("purchases: disabling router because sqlmodel is not installed")
+        except Exception:
+            pass
+        return router
+
+    if not _purchases_enabled:
         return router
 
     try:
