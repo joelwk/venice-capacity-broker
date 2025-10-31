@@ -9,9 +9,8 @@ Provides endpoints for:
 from __future__ import annotations
 
 import logging
-import os
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Query
 

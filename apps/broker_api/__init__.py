@@ -7,7 +7,7 @@ in ``apps.broker_api.app``.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid only
     from fastapi import FastAPI
@@ -15,7 +15,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing aid only
 __all__ = ["create_app"]
 
 
-def create_app(*args: Any, **kwargs: Any):
+def create_app(*args: Any, **kwargs: Any) -> "FastAPI":
     """Proxy to ``apps.broker_api.app.create_app``."""
     module = import_module(".app", __name__)
     return module.create_app(*args, **kwargs)

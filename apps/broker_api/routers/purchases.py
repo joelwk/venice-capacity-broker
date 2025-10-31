@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Callable, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from db.session import create_db_and_tables, get_engine, get_session
+from db.session import create_db_and_tables, get_session
 from db.models import Purchase, Quote
 from sqlmodel import select as _select  # type: ignore
 from ..models import PurchaseStatus, PurchaseVerifyRequest
@@ -22,7 +23,7 @@ router = APIRouter()
 
 _store: TenantStore
 _keys: KeyManager
-_logger: logging.Logger
+_logger: logging.Logger = logging.getLogger("broker.api.purchases")
 _extract_field: Callable[[dict, tuple[str, ...]], str]
 _purchases_enabled: bool
 

@@ -267,6 +267,9 @@ def _build_env_status() -> dict[str, Any]:
             "quote_ttl": quote_ttl,
             "last_updated": int(time.time()),
         },
+        "network": {
+            "base_rpc_url": base_rpc or None,
+        },
     }
 
 

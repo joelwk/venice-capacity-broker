@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Dict, Any, Optional, Type
 from collections.abc import Iterable
@@ -13,6 +14,8 @@ try:
     from libs.telemetry.metrics import inc as _metrics_inc  # type: ignore
 except Exception:
     _metrics_inc = None  # type: ignore
+
+logger = logging.getLogger("pricing.service")
 
 
 def parse_discount_fraction(value: Optional[str]) -> Optional[float]:

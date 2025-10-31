@@ -6,7 +6,6 @@ Handles EIP-712 signature verification, asset price conversion, and bid classifi
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Callable
 
 from fastapi import HTTPException

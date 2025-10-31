@@ -2,7 +2,6 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture

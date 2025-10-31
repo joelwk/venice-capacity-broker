@@ -1,7 +1,6 @@
 """
 Unit tests for extracted broker helper modules.
 """
-import os
 import pytest
 from unittest.mock import Mock
 
@@ -140,7 +139,6 @@ def test_cache_set_and_get():
 def test_cache_expiry(monkeypatch):
     """Test cache expiry behavior."""
     from apps.broker_api import cache
-    import time
     
     # Set TTL to 0 (disabled)
     monkeypatch.setenv("BROKER_PRICES_TTL_SECONDS", "0")
