@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Venice Capacity Broker</title>
+    <link rel="stylesheet" href="/admin/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Purchase DIEM Credits</h1>
+      <nav>
+        <a href="/docs" target="_blank" rel="noreferrer">API docs</a>
+        <a href="https://docs.venice.ai/overview/about-venice" target="_blank" rel="noreferrer">Venice docs</a>
+        <a href="mailto:support@venice.ai" target="_blank" rel="noreferrer">Support</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="page-grid">
+        <aside class="card pricing-card" id="pricing-card">
+          <div class="pricing-header">
+            <h2>Market Snapshot</h2>
+            <p class="muted small">Live asset prices compared to DIEM.</p>
+          </div>
+          <div id="pricing-empty" class="status small">Loading market data…</div>
+          <table id="pricing-table" class="price-table hidden" aria-live="polite">
+            <thead>
+              <tr>
+                <th scope="col">Asset</th>
+                <th scope="col">Price (USD)</th>
+                <th scope="col">DIEM ratio</th>
+                <th scope="col">Discount</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-tbody"></tbody>
+          </table>
+          <div id="pricing-note" class="status small muted"></div>
+          <div id="pricing-retry" class="hidden" style="margin-top: 8px;">
+            <button id="retry-prices-btn" type="button" class="ghost small">Retry</button>
+          </div>
+        </aside>
+
+        <div class="flow-column">
+          <p class="page-intro">Buy scoped Venice access by paying with crypto. Follow the steps below to request a quote, send the payment, and collect your API key.</p>
+
+          <section class="card step-card" id="step-quote">
+            <div class="step-heading">
+              <span class="step-badge">1</span>
+              <div>
+                <h2>Step 1 - Get Payment Details</h2>
+                <p class="muted">Request a live quote and send the funds before the timer expires.</p>
+              </div>
+            </div>
+            <div class="step-body">
+              <fieldset class="step-form-group">
+                <legend class="sr-only">Quote Request</legend>
+                <div class="form-field">
+                  <label for="quote-units">DIEM credits</label>
+                    <input id="quote-units" type="number" min="0.01" step="0.01" value="0.10" required aria-describedby="units-error" aria-label="Number of DIEM credits to purchase" />
+                  <span id="units-error" class="error-message hidden" aria-live="polite"></span>
+                </div>
+                <div class="form-field">
+                  <label for="quote-asset">Pay with</label>
+                  <select id="quote-asset" required aria-describedby="asset-error" aria-label="Select cryptocurrency for payment"></select>
+                  <span id="asset-error" class="error-message hidden" aria-live="polite"></span>
+                </div>
+              </fieldset>
+              <div class="step-actions">
+                <button id="quote-btn" type="button">Get Quote</button>
+                <button id="quote-refresh" type="button" class="ghost" hidden>Refresh Quote</button>
+              </div>
+              <div id="quote-status" class="alert hidden" role="status"></div>
+              <div id="quote-details" class="step-details hidden">
+                <p class="muted">Send this exact amount to the address below.</p>
+                <div class="info-grid">
+                  <div class="info-block">
+                    <label>Amount to send</label>
+                    <div class="copy-field">
+                      <input id="quote-amount" type="text" readonly aria-label="Payment amount to send" />
+                      <button id="copy-amount" type="button" aria-label="Copy payment amount to clipboard">Copy Amount</button>
+                    </div>
+                    <div id="quote-usd" class="status small"></div>
+                    <div id="quote-discount" class="status small muted hidden"></div>
+                  </div>
+                  <div class="info-block">
+                    <label>Treasury address</label>
+                    <div class="copy-field">
+                      <input id="quote-address" type="text" readonly aria-label="Treasury wallet address for payment" />
+                      <button id="copy-address" type="button" aria-label="Copy treasury address to clipboard">Copy Address</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="quote-meta">
+                  <span id="quote-countdown" class="pill">Quote expires in --:--</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card step-card step-disabled step-hidden" id="step-verify">
+            <div class="step-heading">
+              <span class="step-badge">2</span>
+              <div>
+                <h2>Step 2 - Confirm Transaction</h2>
+                <p class="muted">After you send the payment, paste the transaction details so we can verify it on-chain.</p>
+              </div>
+            </div>
+            <div class="step-body">
+              <fieldset>
+                <legend class="sr-only">Payment Verification</legend>
+                <div class="form-field">
+                  <label for="wallet-address">Your wallet address</label>
+                  <div class="input-with-button">
+                    <input id="wallet-address" type="text" placeholder="0x..." autocomplete="off" pattern="^0x[a-fA-F0-9]{40}$" required aria-describedby="wallet-error" />
+                    <button id="connect-wallet" type="button" class="ghost">Connect Wallet</button>
+                  </div>
+                  <span id="wallet-error" class="error-message hidden" aria-live="polite"></span>
+                </div>
+                <div class="form-field">
+                  <label for="tx-hash">Transaction hash</label>
+                  <input id="tx-hash" type="text" placeholder="0x..." autocomplete="off" pattern="^0x[a-fA-F0-9]{64}$" required aria-describedby="tx-error" />
+                  <span id="tx-error" class="error-message hidden" aria-live="polite"></span>
+                </div>
+              </fieldset>
+              <div class="step-actions">
+                <button id="verify-btn" type="button" disabled>Verify Payment</button>
+                <div id="verify-spinner" class="spinner hidden" aria-hidden="true"></div>
+              </div>
+              <div id="verify-status" class="alert hidden" role="status"></div>
+            </div>
+          </section>
+
+          <section class="card step-card step-hidden" id="step-key">
+            <div class="step-heading">
+              <span class="step-badge">3</span>
+              <div>
+                <h2>Step 3 - Receive API Key</h2>
+                <p class="muted">Once we verify your payment, we will issue a scoped DIEM access key.</p>
+              </div>
+            </div>
+            <div class="step-body">
+              <div id="key-status" class="alert hidden" role="status"></div>
+              <div class="form-field">
+                <label for="api-key">API key</label>
+                <div class="copy-field">
+                  <input id="api-key" type="text" readonly aria-label="Generated Venice API key" />
+                  <button id="copy-key" type="button" aria-label="Copy API key to clipboard">Copy Key</button>
+                </div>
+              </div>
+              <div class="form-field">
+                <label>Key expiry</label>
+                <div id="key-expiry" class="status"></div>
+              </div>
+              <p class="muted note">Store this key securely; it grants access to your DIEM credits.</p>
+            </div>
+          </section>
+        </div>
+
+        <aside class="card help-card" id="guide-card">
+          <div class="help-section">
+            <h2>Need a quick start?</h2>
+            <p>Use these short guides to learn the basics fast.</p>
+            <div class="help-links">
+              <a class="help-link" href="https://docs.venice.ai/overview/about-venice" target="_blank" rel="noreferrer">What is Venice</a>
+              <a class="help-link" href="https://docs.venice.ai/overview/models" target="_blank" rel="noreferrer">Model catalog</a>
+              <a class="help-link" href="https://docs.venice.ai/api-reference/api-spec" target="_blank" rel="noreferrer">API reference</a>
+            </div>
+          </div>
+          <div class="help-section">
+            <h3>Test your API key</h3>
+            <p>Send a short hello call right here to confirm everything works.</p>
+            <form class="help-form" id="key-test-form">
+              <label for="test-api-key">Paste API key</label>
+              <input id="test-api-key" type="password" placeholder="vk_live_..." autocomplete="off" aria-describedby="test-key-desc" />
+              <div id="test-key-desc" class="sr-only">Enter your Venice API key to test functionality</div>
+              <label for="test-api-prompt">Prompt</label>
+              <textarea id="test-api-prompt" rows="3" placeholder="Ask Venice for a quick greeting." aria-describedby="test-prompt-desc"></textarea>
+              <div id="test-prompt-desc" class="sr-only">Enter a test prompt to send to the Venice API</div>
+              <button id="test-api-btn" type="button" aria-describedby="test-btn-desc">Run test call</button>
+              <div id="test-btn-desc" class="sr-only">Click to test your API key with Venice models</div>
+            </form>
+            <div id="test-api-status" class="status small" aria-live="polite"></div>
+            <pre id="test-api-output" class="mono hidden" aria-live="polite"></pre>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script src="/admin/buy.js" defer></script>
+  </body>
+</html>

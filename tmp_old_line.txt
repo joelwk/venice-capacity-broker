@@ -1,7 +1,0 @@
-## ✅ What’s Done
-
-1. **Repository & Architecture Setup**
-
-   * **Frameworks chosen**: LangGraph orchestrates agent flows; AgentKit handles on-chain calls; Venice API integration is configured.
-   * **Environment & configuration**: Base-chain addresses (VVV, DIEM, staking contract, USDC), router addresses (Uniswap V2, Aerodrome) and slippage/trade paths are defined in `.env` and `default.yml`.
-

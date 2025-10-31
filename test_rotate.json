@@ -1,0 +1,12 @@
+{
+  "tenant-1": {
+    "id": "tenant-1",
+    "label": "Tenant One",
+    "subkey": "new-subkey",
+    "quota": 10,
+    "expires_at": "2025-12-31",
+    "status": "active",
+    "key_id": "new-key-id",
+    "owner_address": null
+  }
+}

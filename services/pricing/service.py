@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 import importlib
 import os
+from threading import Event, Lock, Thread
 from libs.pricing.engine import StaticPricingEngine, MarketPricingEngine
 from db.session import create_db_and_tables, get_session
 try:
@@ -124,11 +125,52 @@ def _refresh_session_bindings() -> None:
 
 class PricingService:
     def __init__(self) -> None:
+        self._marketdata_provider = None
+        self._marketdata_lock: Lock = Lock()
+        self._marketdata_ready: Event = Event()
+        self._marketdata_symbols = ("DIEM", "ETH", "USDC", "WBTC", "VVV")
+
         # Choose engine: market or static
         if (os.getenv("PRICE_ENGINE") or "static").strip().lower() == "market":
             self.engine = MarketPricingEngine()
+            try:
+                from services.marketdata.provider import MarketDataProvider  # lazy import
+
+                self._marketdata_provider = MarketDataProvider()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to initialise market data provider; quotes will warm on first request: %s", exc)
+                self._marketdata_provider = None
+
+            def _warm_marketdata() -> None:
+                provider = self._marketdata_provider
+                if provider is None:
+                    # Nothing to warm; allow requests to proceed (they will retry)
+                    self._marketdata_ready.set()
+                    return
+                acquired = self._marketdata_lock.acquire(blocking=False)
+                try:
+                    if acquired:
+                        try:
+                            provider.prices(self._marketdata_symbols)
+                            self._marketdata_ready.set()
+                        except Exception as warm_exc:  # noqa: BLE001
+                            logger.warning("market data warm-up failed; will retry on demand: %s", warm_exc)
+                    else:
+                        # Lock already held (another warm in progress); wait briefly for readiness
+                        self._marketdata_ready.wait(timeout=300)
+                finally:
+                    if acquired:
+                        self._marketdata_lock.release()
+                    if not self._marketdata_ready.is_set():
+                        # Ensure callers are not blocked forever; subsequent requests will warm inline.
+                        self._marketdata_ready.set()
+
+            Thread(target=_warm_marketdata, name="pricing-marketdata-warm", daemon=True).start()
         else:
             self.engine = StaticPricingEngine()
+            self._marketdata_ready.set()
+            self._marketdata_symbols = tuple()
+
         self._quote_model: Optional[Type[Any]] = None
         self._asset_decimals_map: Dict[str, int] = {
             "USDC": 6,
@@ -281,12 +323,29 @@ class PricingService:
         try:
             if isinstance(self.engine, MarketPricingEngine):
                 try:
+                    market_data_start = time.perf_counter()
                     from services.marketdata.provider import MarketDataProvider  # lazy import
 
-                    market_data_start = time.perf_counter()
-                    mdp = MarketDataProvider()
-                    symbols = ["DIEM", "ETH", "USDC", "WBTC", "VVV"]
-                    prefetched = mdp.prices(symbols) or {}
+                    if getattr(self, "_marketdata_provider", None) is None:
+                        self._marketdata_provider = MarketDataProvider()
+
+                    mdp: MarketDataProvider = self._marketdata_provider  # type: ignore[assignment]
+                    symbols = list(self._marketdata_symbols) or ["DIEM", "ETH", "USDC", "WBTC", "VVV"]
+
+                    # Wait up to 10s for warm-up to complete before proceeding
+                    warmup_timeout = 10.0
+                    if not self._marketdata_ready.wait(timeout=warmup_timeout):
+                        raise RuntimeError("market data warming up; please retry shortly")
+                    
+                    # Acquire lock for market data access
+                    self._marketdata_lock.acquire()
+                    lock_acquired = True
+                    try:
+                        prefetched = mdp.prices(symbols) or {}
+                    finally:
+                        if lock_acquired:
+                            self._marketdata_lock.release()
+                        self._marketdata_ready.set()
                     prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
                     mdp_stats = mdp.last_prices_stats()
                     if hasattr(self.engine, "set_prefetched_prices"):

@@ -125,7 +125,7 @@ limits-set:
 run-broker: validate-env
 	@$(LOAD_ENV_CMD) \
 	ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" $(RUNPY) apps/cli/main.py startup:probe || true; \
-	$(RUNUVICORN) app:app --app-dir apps/broker-api --host 0.0.0.0 --port $(BROKER_API_PORT)
+	$(RUNUVICORN) apps.broker_api.app:app --host 0.0.0.0 --port $(BROKER_API_PORT)
 
 run-stack: validate-env
 	@$(LOAD_ENV_CMD) \

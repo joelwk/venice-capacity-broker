@@ -25,7 +25,11 @@ def _reset_engine_attempts() -> None:
     _ENGINE_ATTEMPTS.clear()
 
 try:
-    from sqlmodel import SQLModel, Session, create_engine
+    from sqlmodel import SQLModel, Session  # type: ignore[import-not-found]
+    try:
+        from sqlmodel import create_engine  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - optional helper
+        create_engine = None  # type: ignore[assignment]
 except Exception:  # noqa: BLE001
     SQLModel = None  # type: ignore
     Session = None  # type: ignore
@@ -35,18 +39,23 @@ except Exception:  # noqa: BLE001
 def _ensure_sqlmodel() -> None:
     """Ensure sqlmodel/sqlalchemy dependencies are available."""
     global SQLModel, Session, create_engine
-    if SQLModel is not None and Session is not None and create_engine is not None:
+    if SQLModel is not None and Session is not None:
         return
     try:
-        from sqlmodel import SQLModel as _SQLModel, Session as _Session, create_engine as _create_engine  # type: ignore
+        from sqlmodel import SQLModel as _SQLModel, Session as _Session  # type: ignore
+        try:
+            from sqlmodel import create_engine as _create_engine  # type: ignore
+        except ImportError:
+            _create_engine = None  # type: ignore[assignment]
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("sqlmodel/sqlalchemy not installed") from exc
     SQLModel = _SQLModel  # type: ignore[assignment]
     Session = _Session  # type: ignore[assignment]
-    current_module = getattr(create_engine, "__module__", None)
-    target_module = getattr(_create_engine, "__module__", None)
-    if create_engine is None or current_module == target_module:
-        create_engine = _create_engine  # type: ignore[assignment]
+    if _create_engine is not None:
+        current_module = getattr(create_engine, "__module__", None)
+        target_module = getattr(_create_engine, "__module__", None)
+        if create_engine is None or current_module == target_module:
+            create_engine = _create_engine  # type: ignore[assignment]
 
 
 def _with_connect_timeout(url: str) -> str:
@@ -305,15 +314,17 @@ def get_engine():
         message = str(exc).lower()
         if "psycopg2" in message and not is_sqlite:
             engine = _sqlite_fallback_engine(echo, url, "psycopg2 missing for %s; falling back to SQLite %s")
-            _ENGINE_CACHE = engine
-            _ENGINE_CACHE_KEY = _cache_key(_fallback_sqlite_url(), _sqlite_connect_kwargs() | {"echo": echo})
+            # Don't cache fallback engines - allow retry to Postgres on next call
+            _ENGINE_CACHE = None
+            _ENGINE_CACHE_KEY = None
             return engine
         raise
     except Exception:
         if not is_sqlite:
             engine = _sqlite_fallback_engine(echo, url, "database connection failed for %s; using SQLite %s")
-            _ENGINE_CACHE = engine
-            _ENGINE_CACHE_KEY = _cache_key(_fallback_sqlite_url(), _sqlite_connect_kwargs() | {"echo": echo})
+            # Don't cache fallback engines - allow retry to Postgres on next call
+            _ENGINE_CACHE = None
+            _ENGINE_CACHE_KEY = None
             return engine
         raise
 

@@ -2,7 +2,7 @@
 
 This plan documents the Capacity Broker API and supporting services that currently live in the repository.
 
-It replaces legacy orchestration notes and reflects `apps/broker-api/app.py`, the CLI helpers, and the market data stack.
+It replaces legacy orchestration notes and reflects `apps/broker_api/app.py`, the CLI helpers, and the market data stack.
 
 ## Scope
 
@@ -14,7 +14,7 @@ Agent automation specifics remain in `docs/implementation-plan-agents.md`.
 
 ## System Snapshot
 
-The Broker API is a Starlette application served from `apps/broker-api/app.py`.
+The Broker API is a FastAPI application served from `apps/broker_api/app.py` with a modular router architecture.
 
 It mounts the static admin UI under `/admin`, exposes JSON endpoints, and authenticates with `BROKER_ADMIN_TOKEN`.
 

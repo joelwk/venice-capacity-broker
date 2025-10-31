@@ -72,9 +72,7 @@ def build_command_specs(uv_bin: Optional[str] | None = None) -> List[CommandSpec
         argv = _module_argv(
             uv_bin,
             "uvicorn",
-            "app:app",
-            "--app-dir",
-            str(REPO_ROOT / "apps" / "broker-api"),
+            "apps.broker_api.app:app",
             "--host",
             str(host),
             "--port",

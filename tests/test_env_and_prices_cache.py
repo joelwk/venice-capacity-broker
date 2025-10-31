@@ -8,13 +8,14 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-APP_PATH = Path("apps/broker-api/app.py").resolve()
+APP_PATH = Path("apps/broker_api/app.py").resolve()
 os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "false")
 os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
 os.environ.setdefault("VENICE_PARENT_KEY", "parent-test")
-spec = importlib.util.spec_from_file_location("broker_app_env_prices_test", APP_PATH)
+spec = importlib.util.spec_from_file_location("apps.broker_api.app", APP_PATH)
 module = importlib.util.module_from_spec(spec)
 assert spec and spec.loader
+module.__package__ = "apps.broker_api"
 spec.loader.exec_module(module)
 app = module.app
 

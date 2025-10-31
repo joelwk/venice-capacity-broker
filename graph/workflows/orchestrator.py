@@ -116,7 +116,17 @@ class Orchestrator:
                         from db.models import PriceTick
                         from datetime import datetime as _dt
 
-                        create_db_and_tables()
+                        # Production-like environments require explicit SQL_CREATE_ALL_ON_START=true
+                        _prod_like = bool(_os.getenv("SQL_DATABASE_URL") or _os.getenv("DATABASE_URL") or _os.getenv("POSTGRES_HOST"))
+                        _create_all_env = _os.getenv("SQL_CREATE_ALL_ON_START")
+                        
+                        if _prod_like:
+                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                        else:
+                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                        
+                        if _create_all:
+                            create_db_and_tables()
                         eng = get_engine()
                         with Session(eng) as _s:  # type: ignore[call-arg]
                             _s.add(PriceTick(symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()))
@@ -982,7 +992,17 @@ class SingleLoopOrchestrator:
                         from sqlmodel import Session
                         from datetime import datetime as _dt
 
-                        create_db_and_tables()
+                        # Production-like environments require explicit SQL_CREATE_ALL_ON_START=true
+                        _prod_like = bool(os.getenv("SQL_DATABASE_URL") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_HOST"))
+                        _create_all_env = os.getenv("SQL_CREATE_ALL_ON_START")
+                        
+                        if _prod_like:
+                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                        else:
+                            _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+                        
+                        if _create_all:
+                            create_db_and_tables()
                         eng = get_engine()
                         with Session(eng) as s:  # type: ignore[call-arg]
                             s.add(PriceTick(symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()))

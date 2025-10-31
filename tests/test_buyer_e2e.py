@@ -41,7 +41,7 @@ def _load_broker_app_module() -> ModuleType:
     os.environ.setdefault("BROKER_REQUIRE_ADMIN_TOKEN", "false")
     os.environ.setdefault("BROKER_ADMIN_TOKEN", "test-admin")
     os.environ.setdefault("VENICE_PARENT_KEY", "parent-test")
-    spec = importlib.util.spec_from_file_location("broker_app_test", "apps/broker-api/app.py")
+    spec = importlib.util.spec_from_file_location("broker_app_test", "apps/broker_api/app.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]

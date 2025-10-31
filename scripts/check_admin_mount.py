@@ -5,7 +5,7 @@ import sys
 
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
-app_py = repo_root / 'apps' / 'broker-api' / 'app.py'
+app_py = repo_root / 'apps' / 'broker_api' / 'app.py'
 spec = importlib.util.spec_from_file_location('broker_app', str(app_py))
 mod = importlib.util.module_from_spec(spec)
 assert spec and spec.loader

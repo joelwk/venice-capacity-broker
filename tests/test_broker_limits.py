@@ -10,7 +10,7 @@ def setup_module(module):
     os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "60"
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "2"
     os.environ["BROKER_STORE_BACKEND"] = "json"
-    os.environ["BROKER_STORE_FILE"] = "apps/broker-api/tenants.test.json"
+    os.environ["BROKER_STORE_FILE"] = "apps/broker_api/tenants.test.json"
     os.environ["BROKER_REQUIRE_ADMIN_TOKEN"] = "false"
     os.environ["BROKER_ADMIN_TOKEN"] = "test-admin"
     # Force in-memory KV (avoid remote Replit DB / Redis during tests)
@@ -29,10 +29,13 @@ def test_rate_limit_enforced(monkeypatch, tmp_path):
     from pathlib import Path
     import importlib.util
 
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location("broker_api_app", str(app_path))
     assert spec and spec.loader
     broker_app = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+    sys.modules["broker_api_app"] = broker_app
     spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
 
     # Stub VeniceClient.chat_completions to avoid network calls
@@ -89,10 +92,13 @@ def test_rate_limit_resets_without_redis(monkeypatch, tmp_path):
     import importlib.util
     import time
 
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location("broker_api_app_rl2", str(app_path))
     assert spec and spec.loader
     broker_app = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+    sys.modules["broker_api_app_rl2"] = broker_app
     spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
 
     from collections import deque
@@ -156,10 +162,13 @@ def test_rate_limit_with_redis_if_available(monkeypatch, tmp_path):
     from pathlib import Path
     import importlib.util
 
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location("broker_api_app_rl3", str(app_path))
     assert spec and spec.loader
     broker_app = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+    sys.modules["broker_api_app_rl3"] = broker_app
     spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
 
     def fake_chat(self, messages, model=None, **kw):  # noqa: ANN001
@@ -197,10 +206,13 @@ def test_no_rate_limit_when_disabled(monkeypatch, tmp_path):
     from pathlib import Path
     import importlib.util
 
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location("broker_api_app_rl_off", str(app_path))
     assert spec and spec.loader
     broker_app = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+    sys.modules["broker_api_app_rl_off"] = broker_app
     spec.loader.exec_module(broker_app)  # type: ignore[attr-defined]
 
     def fake_chat(self, messages, model=None, **kw):  # noqa: ANN001

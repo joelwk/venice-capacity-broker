@@ -725,12 +725,16 @@ async function requestQuote() {
     updateVerifyButtonState();
   } catch (err) {
     console.error("[quote] request failed", err);
-    const warmup = err instanceof Error && (err.name === "AbortError" || err.message === "SLA" || /abort|timeout/i.test(err.message));
+    const errMessage = err instanceof Error ? err.message : String(err);
+    const warmup = err instanceof Error && (
+      err.name === "AbortError" || 
+      err.message === "SLA" || 
+      /abort|timeout/i.test(errMessage) ||
+      /warming up/i.test(errMessage)
+    );
     const message = warmup
       ? "Broker is warming up. Please retry in a moment."
-      : err instanceof Error && err.message
-        ? err.message
-        : "Quote request failed. Please try again.";
+      : errMessage || "Quote request failed. Please try again.";
     showAlert(status, "error", message);
     if (warmup) {
       const retryContainer = $("pricing-retry");

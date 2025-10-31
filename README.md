@@ -8,7 +8,7 @@ It provides a single loop automation path for staking, DIEM arbitrage, and tenan
 
 StakeMaster, ArbiDiem, and CapacityBroker run inside `graph/workflows/orchestrator.py` with quorum voting, Reflex guardrails, and AI Treasurer guidance.
 
-The Broker API (`apps/broker-api/app.py`) exposes tenant management, quotes, purchases, clearing, bids, and SSE streams while serving the `/admin` control panel.
+The Broker API (`apps/broker_api/app.py`) exposes tenant management, quotes, purchases, clearing, bids, and SSE streams while serving the `/admin` control panel.
 
 Market data aggregates DEX quotes, Venice signals, and Etherscan discovery through `services/marketdata/provider.py`.
 
@@ -70,10 +70,21 @@ Enable `RISK_VOL_PERSIST` to persist price ticks into SQL for longer drift analy
 
 ## Documentation
 
-Agent implementation details live in `docs/implementation-plan-agents.md`.
+**Start Here:**
+- `ARCHITECTURE.md` - System architecture and component overview
+- `README.md` - This file (quick start and commands)
 
-Broker specifics are captured in `docs/implementation-plan-broker.md`.
+**Core Documentation:**
+- `AGENTS.md` - Agent catalog with contracts and run surfaces
 
-Deployment references include `docs/DEPLOYMENT.md`.
+**Implementation Plans:**
+- `docs/implementation-plan-agents.md` - Agent implementation details
+- `docs/implementation-plan-broker.md` - Broker implementation specifics
 
-Tokenomics and routing guidance are documented in `docs/venice-diem-tokenomics.md` and `docs/EtherScan.md`.
+**Operational Guides:**
+- `docs/DEPLOYMENT.md` - Deployment for Docker and Replit (includes Base addresses)
+- `docs/agent-management.md` - Agent operation runbooks
+- `docs/ADMIN.md` - Admin control panel guide
+
+**Technical References:**
+- `docs/venice-diem-tokenomics.md` - VVV/DIEM tokenomics

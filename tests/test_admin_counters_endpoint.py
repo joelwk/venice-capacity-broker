@@ -152,10 +152,12 @@ def _make_fake_sql_stubs(rows):
 
 
 def _load_app(module_name: str):
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location(module_name, str(app_path))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    sys.modules[module_name] = mod
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]
     return mod
 
@@ -234,9 +236,9 @@ def test_counters_validates_tenant_and_bucket_seconds(monkeypatch, tmp_path):
         client = TestClient(broker_app.app)
         headers = {"Authorization": "Bearer adminkey"}
 
-        # Missing tenant_id -> 400
+        # Missing tenant_id -> 422 (FastAPI validation error)
         r_missing = client.get("/v1/debug/counters", headers=headers)
-        assert r_missing.status_code == 400
+        assert r_missing.status_code == 422
 
         # Invalid bucket_seconds -> 400
         r_bad_bs = client.get("/v1/debug/counters", headers=headers, params={"tenant_id": "t1", "bucket_seconds": "abc"})

@@ -662,8 +662,24 @@ def collect_token_metrics(address: str, client: BaseScanClient) -> TokenMetrics:
 
 
 def persist_metrics(m: TokenMetrics) -> None:
-    # Allow disabling create_all in production where Alembic migrations are expected
-    if (os.getenv("SQL_CREATE_ALL_ON_START") or "true").strip().lower() in {"1", "true", "yes", "on"}:
+    # Production-like environments require explicit SQL_CREATE_ALL_ON_START=true to enable auto-create
+    # Default to false to prevent accidental schema changes
+    _prod_like = bool(os.getenv("SQL_DATABASE_URL") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_HOST"))
+    _create_all_env = os.getenv("SQL_CREATE_ALL_ON_START")
+    
+    if _prod_like:
+        # Production: require explicit enable, default to false
+        _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+        if not _create_all and _create_all_env is None:
+            # Warn if not explicitly set in production
+            import logging
+            _logger = logging.getLogger("marketdata.token_watcher")
+            _logger.warning("SQL_CREATE_ALL_ON_START not set in production-like environment; using migrations. Set SQL_CREATE_ALL_ON_START=true to enable auto-create")
+    else:
+        # Development: default to false, allow explicit enable
+        _create_all = _create_all_env is not None and _create_all_env.strip().lower() in {"1", "true", "yes", "on"}
+    
+    if _create_all:
         create_db_and_tables()
     with next(get_session()) as s:  # type: ignore[call-arg]
         # Upsert AssetToken

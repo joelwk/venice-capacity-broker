@@ -453,6 +453,39 @@ class MarketDataProvider:
             return False
         return False
 
+    def _is_canonical_direct_pair(
+        self,
+        symbol: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """True when the price path is the canonical direct pair for the symbol."""
+        label = (symbol or "").upper()
+        if label != "ETH":
+            return False
+        path_tokens: List[str] = []
+        raw_path = None
+        if isinstance(context, dict):
+            raw_path = context.get("path")
+        if isinstance(raw_path, (list, tuple)):
+            path_tokens = [str(tok).strip().lower() for tok in raw_path if tok]
+        elif isinstance(raw_path, str) and raw_path.strip():
+            path_tokens = [segment.strip().lower() for segment in raw_path.split("->") if segment.strip()]
+        if not path_tokens:
+            breakdown = self._price_breakdown(label)
+            if breakdown:
+                raw_detail = breakdown.get("path")
+                if isinstance(raw_detail, (list, tuple)):
+                    path_tokens = [str(tok).strip().lower() for tok in raw_detail if tok]
+                elif isinstance(raw_detail, str) and raw_detail.strip():
+                    path_tokens = [segment.strip().lower() for segment in raw_detail.split("->") if segment.strip()]
+        if len(path_tokens) != 2:
+            return False
+        weth = (self._weth_address() or "").strip().lower()
+        quote = (self._quote_token_address() or "").strip().lower()
+        if not weth or not quote:
+            return False
+        return path_tokens[0] == weth and path_tokens[-1] == quote
+
     def _price_sanity_threshold(self) -> float:
         try:
             raw_candidates = (
@@ -638,6 +671,9 @@ class MarketDataProvider:
         threshold = self._price_sanity_threshold()
         diff = abs(float(price) - float(ext_price)) / float(ext_price)
         if diff > threshold:
+            if self._valid_price(price) and self._is_canonical_direct_pair(label, context):
+                type(self)._record_price_source(label, "external_clamp", {"valid": True, "fallback": "internal", "canonical": True})
+                return float(price)
             self._record_counter("marketdata_price_sanity_total", {"symbol": label, "outcome": "clamped", "reason": "drift"})
             evt = _store_event("drift", diff, threshold)
             _logger.warning("price sanity: clamp applied symbol=%s internal=%s external=%s diff=%.6f threshold=%.6f", label, price, ext_price, diff, threshold)
@@ -1126,7 +1162,19 @@ class MarketDataProvider:
     def _ensure_warm_thread(self) -> None:
         cls = type(self)
         env_symbols = os.getenv("MARKETDATA_WARM_SYMBOLS", "")
-        symbols = tuple(sorted({s.strip().upper() for s in env_symbols.split(",") if s.strip()}))
+        raw_symbols = [s.strip().upper() for s in env_symbols.split(",") if s.strip()]
+        if not raw_symbols:
+            return
+        seen: List[str] = []
+        for sym in raw_symbols:
+            if sym not in seen:
+                seen.append(sym)
+        priority: List[str] = []
+        for preferred in ("ETH", "WETH"):
+            if preferred in seen:
+                priority.append(preferred)
+                seen.remove(preferred)
+        symbols = tuple(priority + seen)
         if not symbols:
             return
         interval_val = os.getenv("MARKETDATA_WARM_INTERVAL_SECONDS")
@@ -1361,12 +1409,16 @@ class MarketDataProvider:
         return None
 
     def _weth_address(self) -> str:
-        bt = self._bridge_token_address()
-        if not bt:
-            # Fallback to canonical Base WETH
-            addr = BASE_WETH_ADDRESS
+        env_weth = (os.getenv("WETH_ADDRESS") or "").strip()
+        if env_weth:
+            addr = env_weth
         else:
-            addr = bt
+            bt = self._bridge_token_address()
+            if not bt:
+                # Fallback to canonical Base WETH
+                addr = BASE_WETH_ADDRESS
+            else:
+                addr = bt
         self._remember_default_decimals("WETH", addr)
         self._remember_default_decimals("ETH", addr)
         return addr
@@ -2574,8 +2626,43 @@ class MarketDataProvider:
 
             routes_to_try: List[RoutePlan] = []
             seen_keys: set[Tuple[Tuple[str, ...], Tuple[Optional[int], ...]]] = set()
+            vvv_addr_lower: Optional[str] = None
+            try:
+                vvv_addr = self._address_for_symbol("VVV")
+            except Exception:
+                vvv_addr = None
+            if vvv_addr:
+                vvv_addr_lower = str(vvv_addr).strip().lower() or None
+
+            def _route_contains_vvv(route: RoutePlan) -> bool:
+                if not vvv_addr_lower:
+                    return False
+                try:
+                    tokens = getattr(route, "tokens", ())
+                except Exception:
+                    tokens = ()
+                for tok in tokens:
+                    if str(tok).strip().lower() == vvv_addr_lower:
+                        return True
+                return False
+
+            def _path_contains_vvv(raw_path: Any) -> bool:  # noqa: ANN401
+                if not vvv_addr_lower:
+                    return False
+                if isinstance(raw_path, (list, tuple)):
+                    items = raw_path
+                elif isinstance(raw_path, str):
+                    items = [segment.strip() for segment in raw_path.split("->") if segment.strip()]
+                else:
+                    return False
+                for tok in items:
+                    if str(tok).strip().lower() == vvv_addr_lower:
+                        return True
+                return False
 
             def _add_route(candidate: RoutePlan) -> None:
+                if _route_contains_vvv(candidate):
+                    return
                 key = (tuple(candidate.tokens), tuple(hop.fee for hop in candidate.hops))
                 if key in seen_keys:
                     return
@@ -2632,10 +2719,18 @@ class MarketDataProvider:
                 raw_path = bp.get("path")
                 if not raw_path:
                     raw_path = list(route.tokens)
+                if _path_contains_vvv(raw_path):
+                    continue
+                if isinstance(raw_path, (list, tuple)):
+                    raw_path_list = [str(tok).strip() for tok in raw_path]
+                elif isinstance(raw_path, str) and raw_path.strip():
+                    raw_path_list = [segment.strip() for segment in raw_path.split("->") if segment.strip()]
+                else:
+                    raw_path_list = list(route.tokens)
                 detail_payload = {
                     "valid": True,
                     "provider": bp.get("provider"),
-                    "path": raw_path,
+                    "path": raw_path_list,
                     "fees": bp.get("fees"),
                     "source": "best_price",
                     "decimals": bp.get("decimals"),
@@ -2643,10 +2738,8 @@ class MarketDataProvider:
                 }
                 type(self)._record_price_source("ETH", "aggregator", detail_payload)
                 context_path: Optional[List[str]] = None
-                if isinstance(raw_path, (list, tuple)):
-                    context_path = [str(tok).strip() for tok in raw_path if tok]
-                elif isinstance(raw_path, str) and raw_path.strip():
-                    context_path = [segment.strip() for segment in raw_path.split("->") if segment.strip()]
+                if raw_path_list:
+                    context_path = [tok for tok in raw_path_list if tok]
                 context_detail = {"path": context_path} if context_path else None
                 return self._apply_price_sanity("ETH", price, context=context_detail)
 
@@ -3034,5 +3127,3 @@ class MarketDataProvider:
             return int(cap)
         except Exception:
             return None
-
-

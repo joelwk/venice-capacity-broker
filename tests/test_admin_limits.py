@@ -6,10 +6,13 @@ import importlib.util
 
 
 def _load_app(module_name: str):
-    app_path = Path("apps/broker-api/app.py").resolve()
+    import sys
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location(module_name, str(app_path))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    sys.modules[module_name] = mod
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]
     return mod
 

@@ -48,10 +48,13 @@ def _import_app_with_shared_kv(tmp_store: Path, monkeypatch):
     os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "60"
     os.environ["RATE_LIMIT_MAX_REQUESTS"] = "1000"
 
-    app_path = Path("apps/broker-api/app.py").resolve()
+    app_path = Path("apps/broker_api/app.py").resolve()
     spec = importlib.util.spec_from_file_location("broker_api_app_idem", str(app_path))
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+    sys.modules["broker_api_app_idem"] = mod
     spec.loader.exec_module(mod)  # type: ignore[attr-defined]
     return mod
 
