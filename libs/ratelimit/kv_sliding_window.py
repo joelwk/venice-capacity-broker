@@ -29,7 +29,9 @@ class KVSlidingWindowLimiter:
 
     def __init__(self, kv: KVStore) -> None:
         self.kv = kv
-        self._fixed_window_state: Dict[str, Tuple[int, float]] = {}
+        # Store sliding window state: {cache_key: (window_start, count)}
+        # Previous window is derived by subtracting window_seconds from window_start
+        self._sliding_window_state: Dict[str, Dict[int, int]] = {}
         self._local_lock = threading.Lock()
         checker = getattr(kv, 'has_atomic_counters', None)
         if callable(checker):
@@ -65,25 +67,55 @@ class KVSlidingWindowLimiter:
                 # Include window_seconds and limit in cache key to avoid stale state
                 # when rate limits are dynamically updated
                 cache_key = f"{key}:{window_seconds}:{limit}"
-                count, reset_at = self._fixed_window_state.get(cache_key, (0, now + window_seconds))
-                if now >= reset_at:
-                    count = 0
-                    reset_at = now + window_seconds
-                if count >= limit:
+                
+                # Get or initialize sliding window state for this cache key
+                window_buckets = self._sliding_window_state.get(cache_key, {})
+                
+                # Get current window count
+                count = window_buckets.get(window_start, 0)
+                
+                # Get previous window count
+                prev_window_start = window_start - window_seconds
+                prev_count = window_buckets.get(prev_window_start, 0)
+                
+                # Calculate weighted contribution from previous window (same as atomic version)
+                elapsed = max(0.0, min(float(window_seconds), now - window_start))
+                prev_weight = max(0.0, min(1.0, 1.0 - (elapsed / float(window_seconds))))
+                effective = float(count) + float(prev_count) * prev_weight
+                
+                # Check if request should be allowed (before incrementing)
+                # effective < limit means we have capacity remaining
+                if effective >= float(limit):
+                    remaining = max(0.0, float(limit) - effective)
+                    reset_epoch = window_end
                     headers = {
                         "X-RateLimit-Limit": str(limit),
-                        "X-RateLimit-Remaining": "0",
-                        "X-RateLimit-Reset": str(int(math.ceil(reset_at))),
+                        "X-RateLimit-Remaining": str(int(remaining)),
+                        "X-RateLimit-Reset": str(int(reset_epoch)),
                     }
                     return False, headers
+                
+                # Increment current window count
                 count += 1
-                self._fixed_window_state[cache_key] = (count, reset_at)
-                remaining = max(0, limit - count)
-                reset_epoch = reset_at
+                window_buckets[window_start] = count
+                
+                # Clean up old windows (keep only current and previous)
+                # This prevents unbounded memory growth
+                keys_to_remove = [k for k in window_buckets.keys() if k < prev_window_start]
+                for k in keys_to_remove:
+                    del window_buckets[k]
+                
+                self._sliding_window_state[cache_key] = window_buckets
+                
+                # Recalculate effective count after increment
+                effective = float(count) + float(prev_count) * prev_weight
+                remaining = max(0.0, float(limit) - effective)
+                reset_epoch = window_end
+                
             headers = {
                 "X-RateLimit-Limit": str(limit),
-                "X-RateLimit-Remaining": str(remaining),
-                "X-RateLimit-Reset": str(int(math.ceil(reset_epoch))),
+                "X-RateLimit-Remaining": str(int(remaining)),
+                "X-RateLimit-Reset": str(int(reset_epoch)),
             }
             return True, headers
 

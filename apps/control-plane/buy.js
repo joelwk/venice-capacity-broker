@@ -1730,20 +1730,31 @@ async function init() {
   state.pricesLoading = true;
   renderPricingTable();
   
-  // Try to restore session from localStorage
+  // CRITICAL: Load env/treasury FIRST before restoring quote
+  const combinedLoaded = await loadEnvAndPrices();
+  if (!combinedLoaded) {
+    await Promise.all([loadEnv(), fetchPrices()]);
+  }
+  
+  // Now that treasury is loaded, we can safely restore quote
   const hasStoredQuote = loadSessionFromStorage();
   const btn = $("quote-btn");
   if (hasStoredQuote) {
     // Restore quote UI if we have a valid stored quote
     try {
+      if (!state.treasury) {
+        console.warn("[init] Treasury not loaded, cannot restore quote. Clearing stored quote.");
+        throw new Error("Treasury not available");
+      }
       applyQuote(state.quote);
       startQuoteTimer();
       if (btn) {
         btn.disabled = true;
         btn.textContent = "Quote Active";
       }
+      console.log("[init] Successfully restored quote from localStorage");
     } catch (err) {
-      console.error("Failed to restore quote", err);
+      console.error("[init] Failed to restore quote:", err.message || err);
       // If restore fails, ensure button is enabled and state is reset
       state.quoteButtonDisabled = false;
       state.quote = null;
@@ -1768,10 +1779,6 @@ async function init() {
     pollPurchaseUntilReady(state.purchaseId);
   }
   
-  const combinedLoaded = await loadEnvAndPrices();
-  if (!combinedLoaded) {
-    await Promise.all([loadEnv(), fetchPrices()]);
-  }
   schedulePriceRefresh();
   updateVerifyButtonState();
 }
