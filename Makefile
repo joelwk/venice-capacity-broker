@@ -34,7 +34,7 @@ DOCKER_REMOVE_VOLUMES ?= 0
 
 REPLIT_MODE ?= dry
 
-LOAD_ENV_CMD := set -a; ( [ -f .env ] && . .env ) >/dev/null 2>&1 || true; set +a;
+LOAD_ENV_CMD := set -a; if [ -f .env ]; then . ./.env; fi; set +a;
 
 setup-cli:
 	@echo "Installing minimal CLI dependencies (requests + httpx) for shell usage..."
