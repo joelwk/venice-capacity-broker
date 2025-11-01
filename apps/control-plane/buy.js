@@ -1,3 +1,9 @@
+// Version: 2025-01-01-improved-error-handling
+// Enhanced quote error handling and validation
+
+// Log script load
+console.log("[buy.js] Script loaded - Version: 2025-01-01-improved-error-handling");
+
 const state = {
   env: null,
   treasury: "",
@@ -659,12 +665,21 @@ function applyQuote(result) {
 }
 
 async function requestQuote() {
+  console.log("[requestQuote] Quote request initiated");
   const unitsInput = $("quote-units");
   const assetSelect = $("quote-asset");
   const btn = $("quote-btn");
   const refreshBtn = $("quote-refresh");
   const status = $("quote-status");
   const details = $("quote-details");
+  
+  console.log("[requestQuote] DOM elements found:", {
+    unitsInput: !!unitsInput,
+    assetSelect: !!assetSelect,
+    btn: !!btn,
+    status: !!status,
+    details: !!details
+  });
   
   // Reset button state at the start to allow new quote requests
   state.quoteButtonDisabled = false;
@@ -759,11 +774,14 @@ async function requestQuote() {
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
     const startedAt = nowMs();
+    const quoteUrl = `${QUOTE_ENDPOINT}?${params.toString()}`;
+    console.log("[requestQuote] Fetching quote from:", quoteUrl);
     const res = await fetchWithRetry(
-      `${QUOTE_ENDPOINT}?${params.toString()}`,
+      quoteUrl,
       { headers: JSON_GET_HEADERS },
       { timeoutMs: 30000, attempts: 3 }
     );
+    console.log("[requestQuote] Response received:", { ok: res.ok, status: res.status, statusText: res.statusText });
     if (!res.ok) {
       let errorDetail = "Quote request failed";
       try {
@@ -1531,7 +1549,12 @@ function formatLatencyMeta(meta) {
 
 function setupEventHandlers() {
   const quoteBtn = $("quote-btn");
-  if (quoteBtn) quoteBtn.addEventListener("click", requestQuote);
+  if (quoteBtn) {
+    console.log("[setupEventHandlers] Quote button found, attaching click handler");
+    quoteBtn.addEventListener("click", requestQuote);
+  } else {
+    console.error("[setupEventHandlers] Quote button NOT found!");
+  }
   const refreshBtn = $("quote-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", requestQuote);
   
