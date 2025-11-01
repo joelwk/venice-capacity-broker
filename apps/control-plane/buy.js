@@ -568,7 +568,10 @@ function applyQuote(result) {
   const usdLine = $("quote-usd");
   const discountLine = $("quote-discount");
   const refreshBtn = $("quote-refresh");
-  if (!details || !amountInput || !addressInput) return;
+  if (!details || !amountInput || !addressInput) {
+    console.error("[applyQuote] Missing required DOM elements", { details: !!details, amountInput: !!amountInput, addressInput: !!addressInput });
+    throw new Error("Missing required DOM elements for quote display");
+  }
 
   if (!state.treasury) {
     showAlert($("quote-status"), "error", "Treasury address is not configured on the server.");
@@ -744,15 +747,65 @@ async function requestQuote() {
       { timeoutMs: 30000, attempts: 3 }
     );
     if (!res.ok) {
-      const text = await res.text();
-      throw new Error(text || "Quote request failed");
+      let errorDetail = "Quote request failed";
+      try {
+        const text = await res.text();
+        // Try to parse as JSON to get detail field
+        try {
+          const jsonError = JSON.parse(text);
+          errorDetail = jsonError.detail || jsonError.message || text || errorDetail;
+        } catch {
+          // Not JSON, use text directly
+          errorDetail = text || errorDetail;
+        }
+      } catch {
+        // Failed to read response text
+        errorDetail = res.status === 503 ? "Service temporarily unavailable" : `HTTP ${res.status}`;
+      }
+      
+      // Check if this is a warmup error before throwing
+      const isWarmup = res.status === 503 && (
+        /warming up|market data|pricing unavailable/i.test(errorDetail)
+      );
+      
+      if (isWarmup) {
+        throw new Error("market data warming up; please retry shortly");
+      }
+      
+      throw new Error(errorDetail);
     }
     const body = await res.json();
     const latencyMs = Math.round(nowMs() - startedAt);
     state.lastQuoteLatencyMs = latencyMs;
-    console.debug(`[quote] fetched in ${latencyMs} ms`);
-    applyQuote(body);
-    updateVerifyButtonState();
+    console.debug(`[quote] fetched in ${latencyMs} ms`, body);
+    
+    // Validate response structure
+    if (!body || typeof body !== "object") {
+      throw new Error(`Invalid quote response format: ${typeof body}`);
+    }
+    
+    // Check for required fields (either camelCase or snake_case)
+    const hasRequiredFields = (
+      (body.totalPrice !== undefined || body.total_price !== undefined) &&
+      (body.units !== undefined || body.quantity !== undefined) &&
+      body.asset !== undefined &&
+      (body.quoteId !== undefined || body.quote_id !== undefined)
+    );
+    
+    if (!hasRequiredFields) {
+      console.error("[quote] Missing required fields in response", body);
+      throw new Error(`Quote response missing required fields. Received: ${JSON.stringify(Object.keys(body))}`);
+    }
+    
+    // Wrap applyQuote in try-catch for better error handling
+    try {
+      applyQuote(body);
+      updateVerifyButtonState();
+    } catch (applyErr) {
+      console.error("[quote] applyQuote failed", applyErr, body);
+      const applyErrMessage = applyErr instanceof Error ? applyErr.message : String(applyErr);
+      throw new Error(`Failed to process quote: ${applyErrMessage}. Response: ${JSON.stringify(body)}`);
+    }
   } catch (err) {
     console.error("[quote] request failed", err);
     const errMessage = err instanceof Error ? err.message : String(err);
