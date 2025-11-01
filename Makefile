@@ -34,7 +34,7 @@ DOCKER_REMOVE_VOLUMES ?= 0
 
 REPLIT_MODE ?= dry
 
-LOAD_ENV_CMD := set -a; if [ -f .env ]; then . ./.env; fi; set +a;
+LOAD_ENV_CMD := eval "$$(python scripts/export_env.py)"
 
 setup-cli:
 	@echo "Installing minimal CLI dependencies (requests + httpx) for shell usage..."
