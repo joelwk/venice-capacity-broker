@@ -122,7 +122,7 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
   const defaultTimeout = url.includes('/env-and-prices') || url.includes('/market/prices') 
     ? 20000  // 20s for market data
     : url.includes('/quotes') 
-      ? 12000  // 12s for quotes
+      ? 15000  // 15s for quotes (reduced from 12s for better responsiveness)
       : 5000;  // 5s for other calls
   // Reduce attempts for quotes so warmup message surfaces sooner; keep others unchanged
   const defaultAttempts = url.includes('/quotes') ? 2 : 5;
@@ -815,7 +815,7 @@ async function requestQuote() {
         cache: 'no-store',
         signal: state.quoteAbort.signal
       },
-      { timeoutMs: 30000, attempts: 3 }
+      { timeoutMs: 15000, attempts: 2 }  // Reduced timeout to 15s, 2 attempts for faster feedback
     );
     // If a newer request started, ignore this response
     if (thisRequestId !== state.activeQuoteRequestId) {

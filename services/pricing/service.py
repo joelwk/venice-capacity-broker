@@ -335,20 +335,33 @@ class PricingService:
                     mdp: MarketDataProvider = self._marketdata_provider  # type: ignore[assignment]
                     symbols = list(self._marketdata_symbols) or ["DIEM", "ETH", "USDC", "WBTC", "VVV"]
 
-                    # Wait up to 10s for warm-up to complete before proceeding
-                    warmup_timeout = 10.0
+                    # Wait up to 5s for warm-up to complete before proceeding (reduced from 10s for faster responses)
+                    warmup_timeout = 5.0
                     if not self._marketdata_ready.wait(timeout=warmup_timeout):
                         raise RuntimeError("market data warming up; please retry shortly")
                     
-                    # Acquire lock for market data access
-                    self._marketdata_lock.acquire()
-                    lock_acquired = True
-                    try:
+                    # Acquire lock for market data access with timeout to prevent blocking
+                    # Use non-blocking acquire with retry loop since threading.Lock doesn't support timeout
+                    lock_timeout = 2.0  # Max 2s wait for lock
+                    lock_acquired = False
+                    start_lock_wait = time.perf_counter()
+                    
+                    while not lock_acquired and (time.perf_counter() - start_lock_wait) < lock_timeout:
+                        lock_acquired = self._marketdata_lock.acquire(blocking=False)
+                        if not lock_acquired:
+                            # Brief sleep before retry to avoid busy-waiting
+                            time.sleep(0.05)
+                    
+                    if not lock_acquired:
+                        # Lock acquisition timed out - proceed without lock but log warning
+                        logger.warning("market data lock acquisition timeout; proceeding without lock synchronization")
                         prefetched = mdp.prices(symbols) or {}
-                    finally:
-                        if lock_acquired:
+                    else:
+                        try:
+                            prefetched = mdp.prices(symbols) or {}
+                        finally:
                             self._marketdata_lock.release()
-                        self._marketdata_ready.set()
+                    self._marketdata_ready.set()
                     prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
                     mdp_stats = mdp.last_prices_stats()
                     if hasattr(self.engine, "set_prefetched_prices"):

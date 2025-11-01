@@ -329,8 +329,11 @@ def _build_dependencies() -> dict[str, Any]:
     except Exception:
         deps["pricing_service"] = None
         deps["settle_pricing"] = None
-    deps["quotes_persist_enabled"] = False
-    deps["quotes_async_enabled"] = False
+    # Enable async quote persistence by default for better response times
+    # Set QUOTES_PERSIST_ENABLED=false to disable persistence entirely
+    # Set QUOTES_ASYNC_ENABLED=false to use synchronous persistence (slower)
+    deps["quotes_persist_enabled"] = (os.getenv("QUOTES_PERSIST_ENABLED") or "true").strip().lower() in {"1", "true", "yes", "on"}
+    deps["quotes_async_enabled"] = (os.getenv("QUOTES_ASYNC_ENABLED") or "true").strip().lower() in {"1", "true", "yes", "on"}
     deps["quotes_enabled"] = True
     
     # Purchases
