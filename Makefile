@@ -123,12 +123,12 @@ limits-set:
 
 # --- Convenience targets ---
 run-broker: validate-env
-	@$(LOAD_ENV_CMD) \
+	@$(LOAD_ENV_CMD); \
 	ETHERSCAN_API_KEY="$$ETHERSCAN_API_KEY" TRADE_PATH="$$TRADE_PATH" $(RUNPY) apps/cli/main.py startup:probe || true; \
 	$(RUNUVICORN) apps.broker_api.app:app --host 0.0.0.0 --port $(BROKER_API_PORT)
 
 run-stack: validate-env
-	@$(LOAD_ENV_CMD) \
+	@$(LOAD_ENV_CMD); \
 	$(RUNPY) scripts/start_stack.py
 
 replit-run:
