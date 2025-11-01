@@ -68,12 +68,20 @@ function $(id) {
 }
 
 function showAlert(el, tone, message) {
-  if (!el) return;
+  if (!el) {
+    console.warn("[showAlert] Element not found, cannot display alert:", message);
+    return;
+  }
   const tones = ["alert-info", "alert-success", "alert-error"];
   el.classList.remove("hidden", ...tones);
   const variant = tone === "success" ? "alert-success" : tone === "error" ? "alert-error" : "alert-info";
   el.classList.add(variant);
   el.textContent = message || "";
+  // Ensure the element is visible (in case CSS or other factors hide it)
+  if (el.classList.contains("hidden")) {
+    console.warn("[showAlert] Alert element still has hidden class after removal, forcing visibility");
+    el.classList.remove("hidden");
+  }
 }
 
 function clearAlert(el) {
@@ -624,7 +632,17 @@ function applyQuote(result) {
     : '';
   const metaLatency = formatLatencyMeta(result.meta);
   const metaText = metaLatency ? `${metaLatency} ` : "";
-  showAlert($("quote-status"), "success", `${latencyText}${metaText}Send the payment before it expires.`);
+  const statusEl = $("quote-status");
+  if (statusEl) {
+    showAlert(statusEl, "success", `${latencyText}${metaText}Send the payment before it expires.`);
+    // Double-check that the alert is visible
+    if (statusEl.classList.contains("hidden")) {
+      console.warn("[applyQuote] Status alert still hidden after showAlert, forcing visibility");
+      statusEl.classList.remove("hidden");
+    }
+  } else {
+    console.error("[applyQuote] quote-status element not found");
+  }
   enableStep2(true);
   resetStep3();
   startQuoteTimer();
@@ -818,7 +836,20 @@ async function requestQuote() {
     const message = warmup
       ? "Broker is warming up. Please retry in a moment."
       : errMessage || "Quote request failed. Please try again.";
-    showAlert(status, "error", message);
+    
+    if (status) {
+      showAlert(status, "error", message);
+      // Ensure error is visible
+      if (status.classList.contains("hidden")) {
+        console.warn("[requestQuote] Error alert still hidden, forcing visibility");
+        status.classList.remove("hidden");
+      }
+    } else {
+      console.error("[requestQuote] quote-status element not found, cannot display error");
+      // Fallback: try to alert user via browser alert
+      alert(`Quote request failed: ${message}`);
+    }
+    
     if (warmup) {
       const retryContainer = $("pricing-retry");
       if (retryContainer) {
