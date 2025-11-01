@@ -5,6 +5,7 @@ from threading import Lock
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from ..models import QuoteResponse
 
@@ -72,7 +73,7 @@ def get_quote(
     units: Optional[float] = Query(default=None, gt=0),
     asset: str = Query(..., description="ETH, USDC, or WBTC"),
     budget: Optional[float] = Query(default=None, gt=0, description="Budget in USD"),
-) -> dict:
+) -> JSONResponse:
     if _pricing is None:
         raise HTTPException(status_code=503, detail="pricing unavailable")
     if units is None and budget is None:
@@ -90,12 +91,12 @@ def get_quote(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not _quotes_persist_enabled:
-        return quote_payload
+        return _create_no_cache_response(quote_payload)
 
     snapshot = _snapshot_quote(quote_payload)
     if _quotes_async_enabled and background_tasks is not None:
         background_tasks.add_task(_persist_quote_async, snapshot)
-        return snapshot
+        return _create_no_cache_response(snapshot)
 
     try:
         getattr(_pricing, "persist_quote")(quote_payload)
@@ -105,7 +106,19 @@ def get_quote(
             quote_payload.get("quoteId"),
             exc,
         )
-    return quote_payload
+    return _create_no_cache_response(quote_payload)
+
+
+def _create_no_cache_response(content: dict) -> JSONResponse:
+    """Create a JSONResponse with aggressive no-cache headers."""
+    return JSONResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
 
 
 __all__ = ["router", "init_router"]

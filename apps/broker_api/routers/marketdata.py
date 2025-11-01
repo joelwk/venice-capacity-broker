@@ -13,6 +13,7 @@ import time
 from typing import Any, Callable
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from .. import cache
 
@@ -71,7 +72,7 @@ def get_env() -> dict[str, Any]:
 @router.get("/market/prices")
 def get_market_prices(
     symbols: str = Query(..., description="Comma-separated list of symbols (e.g., DIEM,ETH,USDC)"),
-) -> dict[str, Any]:
+) -> JSONResponse:
     """
     Get current market prices for symbols.
     
@@ -98,7 +99,7 @@ def get_market_prices(
 
         cached = None if bypass_cache else cache.prices_cache_get(cache_key, expected_fingerprint=provider_fp)
         if cached is not None:
-            return cached
+            return _create_no_cache_response(cached)
         
         # Fetch fresh prices
         prices_payload = provider.prices(symbol_list)
@@ -122,18 +123,18 @@ def get_market_prices(
         # Cache the response
         cache.prices_cache_set(cache_key, response, source_fingerprint=provider_fp)
         
-        return response
+        return _create_no_cache_response(response)
     except HTTPException:
         raise
-    except Exception as e:
-        _logger.exception("market prices fetch failed")
-        raise HTTPException(status_code=500, detail=f"failed to fetch prices: {e}") from e
+    except Exception as exc:
+        _logger.exception("Failed to fetch market prices")
+        raise HTTPException(status_code=500, detail=f"prices unavailable: {exc}") from exc
 
 
 @router.get("/env-and-prices")
 def get_env_and_prices(
     symbols: str = Query(..., description="Comma-separated list of symbols (e.g., DIEM,ETH,USDC)"),
-) -> dict[str, Any]:
+) -> JSONResponse:
     """
     Get combined environment status and market prices.
     
@@ -163,7 +164,7 @@ def get_env_and_prices(
 
         cached = None if bypass_cache else cache.env_prices_cache_get(cache_key, expected_fingerprint=provider_fp)
         if cached is not None:
-            return cached
+            return _create_no_cache_response(cached)
         
         # Fetch fresh data
         env_payload = _build_env_status()
@@ -189,10 +190,22 @@ def get_env_and_prices(
         # Cache the response
         cache.env_prices_cache_set(cache_key, response, source_fingerprint=provider_fp)
         
-        return response
+        return _create_no_cache_response(response)
     except HTTPException:
         raise
-    except Exception as e:
-        _logger.exception("env-and-prices fetch failed")
-        raise HTTPException(status_code=500, detail=f"failed to fetch env-and-prices: {e}") from e
+    except Exception as exc:
+        _logger.exception("Failed to fetch env and prices")
+        raise HTTPException(status_code=500, detail=f"env/prices unavailable: {exc}") from exc
+
+
+def _create_no_cache_response(content: dict) -> JSONResponse:
+    """Create a JSONResponse with aggressive no-cache headers to prevent stale data."""
+    return JSONResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+    )
 

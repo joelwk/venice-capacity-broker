@@ -22,6 +22,8 @@ const state = {
   inflightPricesPromise: null,
   pricesAbort: null,
   quoteButtonDisabled: false, // Track if quote button should be disabled after successful quote
+  quoteAbort: null,
+  activeQuoteRequestId: 0,
 };
 
 const assetDecimals = {
@@ -116,6 +118,16 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
   const { attempts = defaultAttempts, baseMs = 400, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
   for (let i = 0; i < attempts; i++) {
     const ac = new AbortController();
+    // If caller supplied a signal, forward its abort to our controller so external aborts cancel retries too
+    const externalSignal = options && options.signal;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      try {
+        externalSignal.addEventListener('abort', () => ac.abort(), { once: true });
+      } catch (_) {}
+    }
     const id = setTimeout(() => ac.abort(), timeoutMs);
     try {
       const res = await fetch(url, { ...options, signal: ac.signal });
@@ -763,6 +775,14 @@ async function requestQuote() {
     }
   }
 
+  // Abort any in-flight quote and start a new request id to prevent races
+  if (state.quoteAbort) {
+    try { state.quoteAbort.abort(); } catch (_) {}
+  }
+  state.quoteAbort = new AbortController();
+  state.activeQuoteRequestId = (state.activeQuoteRequestId || 0) + 1;
+  const thisRequestId = state.activeQuoteRequestId;
+
   try {
     if (btn) {
       btn.disabled = true;
@@ -773,14 +793,31 @@ async function requestQuote() {
     const params = new URLSearchParams();
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
+    // Multi-layer cache-bust: timestamp + random to avoid intermediary/browser/CDN caches serving stale quotes
+    params.set("_t", String(Date.now()));
+    params.set("_r", String(Math.random()).substring(2, 10));
     const startedAt = nowMs();
     const quoteUrl = `${QUOTE_ENDPOINT}?${params.toString()}`;
     console.log("[requestQuote] Fetching quote from:", quoteUrl);
     const res = await fetchWithRetry(
       quoteUrl,
-      { headers: JSON_GET_HEADERS },
+      { 
+        headers: { 
+          ...JSON_GET_HEADERS, 
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: 'no-store',
+        signal: state.quoteAbort.signal
+      },
       { timeoutMs: 30000, attempts: 3 }
     );
+    // If a newer request started, ignore this response
+    if (thisRequestId !== state.activeQuoteRequestId) {
+      console.warn("[requestQuote] Stale quote response ignored");
+      return;
+    }
     console.log("[requestQuote] Response received:", { ok: res.ok, status: res.status, statusText: res.statusText });
     if (!res.ok) {
       let errorDetail = "Quote request failed";
@@ -815,6 +852,12 @@ async function requestQuote() {
     state.lastQuoteLatencyMs = latencyMs;
     console.debug(`[quote] fetched in ${latencyMs} ms`, body);
     
+    // If a newer request started, ignore this response
+    if (thisRequestId !== state.activeQuoteRequestId) {
+      console.warn("[requestQuote] Stale quote JSON ignored");
+      return;
+    }
+    
     // Validate response structure
     if (!body || typeof body !== "object") {
       throw new Error(`Invalid quote response format: ${typeof body}`);
@@ -843,6 +886,11 @@ async function requestQuote() {
       throw new Error(`Failed to process quote: ${applyErrMessage}. Response: ${JSON.stringify(body)}`);
     }
   } catch (err) {
+    // If a newer request started, suppress error UI for this one
+    if (thisRequestId !== state.activeQuoteRequestId) {
+      console.warn("[requestQuote] Stale quote error suppressed");
+      return;
+    }
     console.error("[quote] request failed", err);
     const errMessage = err instanceof Error ? err.message : String(err);
     const warmup = err instanceof Error && (
@@ -875,12 +923,15 @@ async function requestQuote() {
       }
     }
   } finally {
-    // Respect state.quoteButtonDisabled set during successful applyQuote
-    if (!state.quoteButtonDisabled && btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
+    // Only reset UI if this is still the latest request
+    if (thisRequestId === state.activeQuoteRequestId) {
+      // Respect state.quoteButtonDisabled set during successful applyQuote
+      if (!state.quoteButtonDisabled && btn) {
+        btn.disabled = false;
+        btn.textContent = "Get Quote";
+      }
+      if (refreshBtn) refreshBtn.disabled = false;
     }
-    if (refreshBtn) refreshBtn.disabled = false;
   }
 }
 
@@ -1548,15 +1599,28 @@ function formatLatencyMeta(meta) {
 }
 
 function setupEventHandlers() {
+  // Debounce quote requests to prevent rapid-fire clicking causing race conditions
+  let quoteDebounceTimer = null;
+  const debouncedRequestQuote = () => {
+    if (quoteDebounceTimer) {
+      console.log("[setupEventHandlers] Debouncing quote request - ignoring rapid click");
+      return;
+    }
+    quoteDebounceTimer = setTimeout(() => {
+      quoteDebounceTimer = null;
+    }, 500); // 500ms debounce window
+    requestQuote();
+  };
+
   const quoteBtn = $("quote-btn");
   if (quoteBtn) {
     console.log("[setupEventHandlers] Quote button found, attaching click handler");
-    quoteBtn.addEventListener("click", requestQuote);
+    quoteBtn.addEventListener("click", debouncedRequestQuote);
   } else {
     console.error("[setupEventHandlers] Quote button NOT found!");
   }
   const refreshBtn = $("quote-refresh");
-  if (refreshBtn) refreshBtn.addEventListener("click", requestQuote);
+  if (refreshBtn) refreshBtn.addEventListener("click", debouncedRequestQuote);
   
   // Wire up retry button for price loading
   const retryBtn = $("retry-prices-btn");
