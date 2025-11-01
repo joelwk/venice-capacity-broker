@@ -38,8 +38,10 @@ const QUOTE_ENDPOINT = "/v1/quotes";
 const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const ENV_ENDPOINT = "/v1/env";
-const ENV_AND_PRICES_ENDPOINT = "/v1/env-and-prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
-const PRICES_ENDPOINT = "/v1/market/prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
+const ENV_AND_PRICES_BASE = "/v1/env-and-prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
+const ENV_AND_PRICES_ENDPOINT = ENV_AND_PRICES_BASE;
+const PRICES_BASE = "/v1/market/prices?symbols=VVV,DIEM,ETH,USDC,WBTC";
+const PRICES_ENDPOINT = PRICES_BASE;
 const VENICE_API_BASE_URL = "https://api.venice.ai/api/v1";
 const TEST_MODELS_ENDPOINT = `${VENICE_API_BASE_URL}/models`;
 const TEST_CHAT_ENDPOINT = `${VENICE_API_BASE_URL}/chat/completions`;
@@ -603,7 +605,7 @@ function applyQuote(result) {
     showAlert($("quote-status"), "error", "Treasury address is not configured on the server.");
     details.classList.add("hidden");
     enableStep2(false);
-    return;
+    throw new Error("Treasury address is not configured on the server.");
   }
 
   // Use decimals from quote response if available, otherwise fall back to assetDecimals
@@ -718,6 +720,22 @@ async function requestQuote() {
   clearAlert(status);
   clearAlert($("verify-status"));
   state.lastQuoteLatencyMs = null;
+
+  // Force reload env/prices if treasury is missing (could be stale cache)
+  if (!state.treasury) {
+    console.warn("[requestQuote] Treasury not loaded, forcing env refresh");
+    try {
+      await loadEnvAndPrices();
+      if (!state.treasury) {
+        showAlert(status, "error", "Treasury address is not configured on server. Please contact support.");
+        return;
+      }
+    } catch (err) {
+      console.error("[requestQuote] Failed to load treasury", err);
+      showAlert(status, "error", "Failed to load server configuration. Please refresh the page.");
+      return;
+    }
+  }
 
   const unitsRaw = unitsInput ? Number(unitsInput.value) : DEFAULT_UNITS;
   const unitsError = $("units-error");
@@ -1271,8 +1289,17 @@ async function loadEnvAndPrices() {
 
   const promise = (async () => {
     try {
-      const res = await fetchWithRetry(ENV_AND_PRICES_ENDPOINT, { 
-        headers: JSON_GET_HEADERS,
+      // Add cache-busting parameters to force fresh data
+      const cacheBust = `&_t=${Date.now()}&_r=${String(Math.random()).substring(2, 10)}`;
+      const url = `${ENV_AND_PRICES_BASE}${cacheBust}`;
+      const res = await fetchWithRetry(url, { 
+        headers: { 
+          ...JSON_GET_HEADERS,
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: 'no-store',
         signal: state.pricesAbort.signal 
       });
       if (!res.ok) {
@@ -1354,8 +1381,17 @@ async function fetchPrices() {
 
   const promise = (async () => {
     try {
-      const res = await fetchWithRetry(PRICES_ENDPOINT, { 
-        headers: JSON_GET_HEADERS,
+      // Add cache-busting parameters to force fresh data
+      const cacheBust = `&_t=${Date.now()}&_r=${String(Math.random()).substring(2, 10)}`;
+      const url = `${PRICES_BASE}${cacheBust}`;
+      const res = await fetchWithRetry(url, { 
+        headers: { 
+          ...JSON_GET_HEADERS,
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
+        cache: 'no-store',
         signal: state.pricesAbort.signal 
       });
       if (!res.ok) {
