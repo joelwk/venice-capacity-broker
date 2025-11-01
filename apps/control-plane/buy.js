@@ -21,7 +21,6 @@ const state = {
   lastPricesAt: null,
   inflightPricesPromise: null,
   pricesAbort: null,
-  quoteButtonDisabled: false, // Track if quote button should be disabled after successful quote
   quoteAbort: null,
   activeQuoteRequestId: 0,
 };
@@ -75,6 +74,16 @@ function supportsEventSource() {
 
 function $(id) {
   return document.getElementById(id);
+}
+
+// Centralized quote button state management - eliminates redundancy
+function setQuoteButtonState(enabled, text = null) {
+  const btn = $("quote-btn");
+  if (!btn) return;
+  btn.disabled = !enabled;
+  if (text !== null) {
+    btn.textContent = text;
+  }
 }
 
 function showAlert(el, tone, message) {
@@ -225,6 +234,7 @@ function renderPricingTable() {
   const tbody = $("pricing-tbody");
   const empty = $("pricing-empty");
   const note = $("pricing-note");
+  const retryContainer = $("pricing-retry");
   if (!table || !tbody || !empty) return;
 
   const prices = state.prices;
@@ -234,6 +244,7 @@ function renderPricingTable() {
   if (state.pricesLoading && hasPrices) {
     table.classList.remove("hidden");
     empty.classList.add("hidden");
+    if (retryContainer) retryContainer.classList.add("hidden");
     if (note) note.textContent = 'Refreshing market data...';
     // Keep existing table content, just show refresh indicator
     return;
@@ -251,6 +262,8 @@ function renderPricingTable() {
     tbody.innerHTML = "";
     empty.classList.remove("hidden");
     empty.textContent = "Market data unavailable.";
+    // Show retry button when no prices available
+    if (retryContainer) retryContainer.classList.remove("hidden");
     if (note) note.textContent = "";
     return;
   }
@@ -309,6 +322,9 @@ function renderPricingTable() {
     })
     .join("");
 
+  // Hide retry button when prices are successfully displayed
+  if (retryContainer) retryContainer.classList.add("hidden");
+  
   table.classList.toggle("hidden", rows.length === 0);
   empty.classList.toggle("hidden", rows.length > 0);
   empty.textContent = rows.length > 0 ? "" : "Market data unavailable.";
@@ -441,18 +457,12 @@ function updateQuoteCountdown() {
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
   el.textContent = remaining <= 0 ? "Quote expired" : `Quote expires in ${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-  if (remaining <= 0) {
-    enableStep2(false);
-    showAlert($("quote-status"), "error", "Quote expired. Refresh the quote and try again.");
-    stopQuoteTimer();
-    // Re-enable quote button when expired
-    state.quoteButtonDisabled = false;
-    const btn = $("quote-btn");
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
+    if (remaining <= 0) {
+      enableStep2(false);
+      showAlert($("quote-status"), "error", "Quote expired. Refresh the quote and try again.");
+      stopQuoteTimer();
+      setQuoteButtonState(true, "Get Quote");
     }
-  }
 }
 
 function enableStep2(enable, options = {}) {
@@ -542,13 +552,12 @@ function loadSessionFromStorage() {
     const storedQuote = localStorage.getItem("activeQuote");
     if (storedQuote) {
       const parsed = JSON.parse(storedQuote);
-      const now = Math.floor(Date.now() / 1000);
-      const expires = Number(parsed.expiresAt);
-      if (Number.isFinite(expires) && expires > now) {
-        // Quote is still valid, restore it
-        state.quote = parsed;
-        state.quoteButtonDisabled = true;
-        return true;
+        const now = Math.floor(Date.now() / 1000);
+        const expires = Number(parsed.expiresAt);
+        if (Number.isFinite(expires) && expires > now) {
+          // Quote is still valid, restore it
+          state.quote = parsed;
+          return true;
       } else {
         // Quote expired, clear it
         localStorage.removeItem("activeQuote");
@@ -666,13 +675,7 @@ function applyQuote(result) {
   enableStep2(true);
   resetStep3();
   startQuoteTimer();
-  // Disable quote button after successful quote to prevent reset
-  state.quoteButtonDisabled = true;
-  const btn = $("quote-btn");
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Quote Active";
-  }
+  setQuoteButtonState(false, "Quote Active");
   
   // Save to localStorage for persistence
   saveSessionToStorage();
@@ -682,7 +685,6 @@ async function requestQuote() {
   console.log("[requestQuote] Quote request initiated");
   const unitsInput = $("quote-units");
   const assetSelect = $("quote-asset");
-  const btn = $("quote-btn");
   const refreshBtn = $("quote-refresh");
   const status = $("quote-status");
   const details = $("quote-details");
@@ -690,17 +692,12 @@ async function requestQuote() {
   console.log("[requestQuote] DOM elements found:", {
     unitsInput: !!unitsInput,
     assetSelect: !!assetSelect,
-    btn: !!btn,
     status: !!status,
     details: !!details
   });
   
   // Reset button state at the start to allow new quote requests
-  state.quoteButtonDisabled = false;
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "Get Quote";
-  }
+  setQuoteButtonState(true, "Get Quote");
   // Hide refresh button when starting a new quote request
   if (refreshBtn) refreshBtn.hidden = true;
   
@@ -750,13 +747,9 @@ async function requestQuote() {
       unitsError.textContent = "Enter a valid DIEM credit amount (minimum 0.01).";
       unitsError.classList.remove("hidden");
     }
-    if (unitsInput) unitsInput.setAttribute("aria-invalid", "true");
-    // Ensure button remains enabled on validation error
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
-    }
-    return;
+      if (unitsInput) unitsInput.setAttribute("aria-invalid", "true");
+      setQuoteButtonState(true, "Get Quote");
+      return;
   }
 
   if (unitsInput) unitsInput.setAttribute("aria-invalid", "false");
@@ -768,13 +761,9 @@ async function requestQuote() {
       assetError.textContent = "Please select a payment asset.";
       assetError.classList.remove("hidden");
     }
-    if (assetSelect) assetSelect.setAttribute("aria-invalid", "true");
-    // Ensure button remains enabled on validation error
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
-    }
-    return;
+      if (assetSelect) assetSelect.setAttribute("aria-invalid", "true");
+      setQuoteButtonState(true, "Get Quote");
+      return;
   }
 
   if (assetSelect) assetSelect.setAttribute("aria-invalid", "false");
@@ -801,12 +790,9 @@ async function requestQuote() {
   state.activeQuoteRequestId = (state.activeQuoteRequestId || 0) + 1;
   const thisRequestId = state.activeQuoteRequestId;
 
-  try {
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Getting quote...";
-    }
-    if (refreshBtn) refreshBtn.disabled = true;
+    try {
+      setQuoteButtonState(false, "Getting quote...");
+      if (refreshBtn) refreshBtn.disabled = true;
 
     const params = new URLSearchParams();
     params.set("units", String(unitsRaw));
@@ -943,10 +929,12 @@ async function requestQuote() {
   } finally {
     // Only reset UI if this is still the latest request
     if (thisRequestId === state.activeQuoteRequestId) {
-      // Respect state.quoteButtonDisabled set during successful applyQuote
-      if (!state.quoteButtonDisabled && btn) {
-        btn.disabled = false;
-        btn.textContent = "Get Quote";
+      // Only re-enable if quote wasn't successfully applied (applyQuote sets it to disabled)
+      const btn = $("quote-btn");
+      if (btn && btn.disabled && btn.textContent === "Quote Active") {
+        // Quote was successfully applied, keep it disabled
+      } else {
+        setQuoteButtonState(true, "Get Quote");
       }
       if (refreshBtn) refreshBtn.disabled = false;
     }
@@ -1251,8 +1239,7 @@ function applyEnvPayload(payload) {
   }
   const feats = (body && body.features) || {};
   if (feats && feats.quotes === false) {
-    const btn = $("quote-btn");
-    if (btn) btn.disabled = true;
+    setQuoteButtonState(false, "Get Quote");
     showAlert($("quote-status"), "error", "Quotes are disabled by the server.");
   }
   if (feats && feats.purchases === false) {
@@ -1306,13 +1293,20 @@ async function loadEnvAndPrices() {
         const text = await res.text();
         throw new Error(text || "Combined env/prices request failed");
       }
-      const body = await res.json();
+      const body = await res.json().catch(err => {
+        throw new Error(`Failed to parse JSON response: ${err.message || err}`);
+      });
       const envPayload = body && body.env;
       const pricePayload = body && body.prices;
       if (!envPayload || !pricePayload) {
         throw new Error("Combined payload missing env or prices");
       }
-      applyEnvPayload(envPayload || {});
+      try {
+        applyEnvPayload(envPayload || {});
+      } catch (envErr) {
+        console.error("[loadEnvAndPrices] Failed to apply env payload:", envErr);
+        throw new Error(`Failed to process server config: ${envErr.message || envErr}`);
+      }
       state.prices = pricePayload || {};
       state.pricesMeta = body && body.meta ? body.meta : null;
       state.lastPricesAt = Date.now();
@@ -1418,6 +1412,11 @@ async function fetchPrices() {
 
       if (!hadPrices) {
         showAlert($("quote-status"), "error", "Unable to refresh market data. Trying again soon.");
+        // Show retry button for market snapshot failures
+        const retryContainer = $("pricing-retry");
+        if (retryContainer) {
+          retryContainer.classList.remove("hidden");
+        }
       }
     } finally {
       state.pricesLoading = false;
@@ -1652,6 +1651,7 @@ function setupEventHandlers() {
   if (quoteBtn) {
     console.log("[setupEventHandlers] Quote button found, attaching click handler");
     quoteBtn.addEventListener("click", debouncedRequestQuote);
+    setQuoteButtonState(true, "Get Quote");
   } else {
     console.error("[setupEventHandlers] Quote button NOT found!");
   }
@@ -1731,9 +1731,20 @@ async function init() {
   renderPricingTable();
   
   // CRITICAL: Load env/treasury FIRST before restoring quote
-  const combinedLoaded = await loadEnvAndPrices();
-  if (!combinedLoaded) {
-    await Promise.all([loadEnv(), fetchPrices()]);
+  try {
+    const combinedLoaded = await loadEnvAndPrices();
+    if (!combinedLoaded) {
+      await Promise.all([loadEnv(), fetchPrices()]);
+    }
+  } catch (err) {
+    console.error('[init] Failed to load env/prices:', err);
+    // Try fallback load
+    try {
+      await Promise.all([loadEnv(), fetchPrices()]);
+    } catch (fallbackErr) {
+      console.error('[init] Fallback load also failed:', fallbackErr);
+      throw new Error(`Failed to initialize: ${err.message || err}`);
+    }
   }
   
   // Now that treasury is loaded, we can safely restore quote
@@ -1748,30 +1759,17 @@ async function init() {
       }
       applyQuote(state.quote);
       startQuoteTimer();
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = "Quote Active";
-      }
+      // applyQuote already sets button state to "Quote Active" and disabled
       console.log("[init] Successfully restored quote from localStorage");
-    } catch (err) {
-      console.error("[init] Failed to restore quote:", err.message || err);
-      // If restore fails, ensure button is enabled and state is reset
-      state.quoteButtonDisabled = false;
-      state.quote = null;
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "Get Quote";
+      } catch (err) {
+        console.error("[init] Failed to restore quote:", err.message || err);
+        state.quote = null;
+        setQuoteButtonState(true, "Get Quote");
+        localStorage.removeItem("activeQuote");
       }
-      localStorage.removeItem("activeQuote");
+    } else {
+      setQuoteButtonState(true, "Get Quote");
     }
-  } else {
-    // Ensure button is enabled when there's no stored quote
-    state.quoteButtonDisabled = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
-    }
-  }
   
   // If we have a stored purchaseId but no key yet, resume polling
   if (state.purchaseId && !$("api-key")?.value) {
@@ -1783,36 +1781,23 @@ async function init() {
   updateVerifyButtonState();
 }
 
-// Ensure DOM is ready before initializing
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    // Set up event handlers immediately so button works even if init fails
-    setupEventHandlers();
-    // Ensure button is enabled by default
-    const btn = $("quote-btn");
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Get Quote";
-    }
-    init().catch(err => {
-      console.error('[init] initialization failed', err);
-      showAlert($("quote-status"), "error", "Initialization error. Please refresh the page.");
-    });
-  });
-} else {
-  // DOM already loaded
-  // Set up event handlers immediately so button works even if init fails
+// Centralized initialization - eliminates duplication between loading/loaded states
+function initializeApp() {
   setupEventHandlers();
-  // Ensure button is enabled by default
-  const btn = $("quote-btn");
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "Get Quote";
-  }
+  setQuoteButtonState(true, "Get Quote");
   init().catch(err => {
     console.error('[init] initialization failed', err);
     showAlert($("quote-status"), "error", "Initialization error. Please refresh the page.");
+    setQuoteButtonState(true, "Get Quote");
   });
+}
+
+// Ensure DOM is ready before initializing
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeApp);
+} else {
+  // DOM already loaded
+  initializeApp();
 }
 
 
