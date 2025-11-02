@@ -80,15 +80,38 @@ def get_quote(
         raise HTTPException(status_code=400, detail="specify units or budget")
     if units is not None and budget is not None:
         raise HTTPException(status_code=400, detail="provide either units or budget, not both")
-    try:
-        quote_payload = getattr(_pricing, "get_quote")(units=units, asset=asset, budget_usd=budget)
-    except RuntimeError as exc:
-        # Check if this is a warm-up error
-        if "warming up" in str(exc).lower():
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    
+    # Retry logic for warmup errors
+    max_retries = 2
+    retry_delay = 0.5  # seconds
+    last_exception = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            quote_payload = getattr(_pricing, "get_quote")(units=units, asset=asset, budget_usd=budget)
+            # Success - break out of retry loop
+            break
+        except RuntimeError as exc:
+            error_msg = str(exc).lower()
+            # Check if this is a warm-up error that might benefit from retry
+            if ("warming up" in error_msg or "market data unavailable" in error_msg) and attempt < max_retries:
+                last_exception = exc
+                _logger.info("Quote request warmup retry %d/%d: %s", attempt + 1, max_retries + 1, exc)
+                import time
+                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                continue
+            # Not retryable or out of retries - raise immediately
+            if "warming up" in error_msg or "market data unavailable" in error_msg:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            # Non-retryable errors
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        # All retries exhausted
+        if last_exception:
+            raise HTTPException(status_code=503, detail=f"market data unavailable after {max_retries + 1} attempts: {last_exception}") from last_exception
+        raise HTTPException(status_code=503, detail="quote generation failed")
 
     if not _quotes_persist_enabled:
         return _create_no_cache_response(quote_payload)

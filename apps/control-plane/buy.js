@@ -122,10 +122,10 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
   const defaultTimeout = url.includes('/env-and-prices') || url.includes('/market/prices') 
     ? 20000  // 20s for market data
     : url.includes('/quotes') 
-      ? 15000  // 15s for quotes (reduced from 12s for better responsiveness)
+      ? 20000  // 20s for quotes (increased for warmup timeouts)
       : 5000;  // 5s for other calls
-  // Reduce attempts for quotes so warmup message surfaces sooner; keep others unchanged
-  const defaultAttempts = url.includes('/quotes') ? 2 : 5;
+  // Increase attempts for quotes to handle warmup scenarios better
+  const defaultAttempts = url.includes('/quotes') ? 3 : 5;
   const { attempts = defaultAttempts, baseMs = 400, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
   for (let i = 0; i < attempts; i++) {
     const ac = new AbortController();
@@ -144,13 +144,19 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
       const res = await fetch(url, { ...options, signal: ac.signal });
       clearTimeout(id);
       if (res.ok) return res;
-      if (res.status === 503 && i < attempts - 1) throw new Error('SLA');
+      // Retry 503 errors (service unavailable, warmup issues)
+      if (res.status === 503 && i < attempts - 1) {
+        console.log(`[fetchWithRetry] 503 error on attempt ${i + 1}/${attempts}, retrying...`);
+        throw new Error('SLA');
+      }
       return res; // let caller handle non-OK when not retryable
     } catch (e) {
       clearTimeout(id);
       if (i === attempts - 1) throw e;
       const jitterFactor = 1 + (Math.random() * 2 - 1) * jitter;
-      await new Promise(r => setTimeout(r, baseMs * jitterFactor * Math.pow(factor, i)));
+      const delay = baseMs * jitterFactor * Math.pow(factor, i);
+      console.log(`[fetchWithRetry] Retry ${i + 1}/${attempts - 1} after ${delay.toFixed(0)}ms`);
+      await new Promise(r => setTimeout(r, delay));
     }
   }
 }
@@ -815,7 +821,7 @@ async function requestQuote() {
         cache: 'no-store',
         signal: state.quoteAbort.signal
       },
-      { timeoutMs: 15000, attempts: 2 }  // Reduced timeout to 15s, 2 attempts for faster feedback
+      { timeoutMs: 20000 }  // 20s timeout (uses default 3 attempts)
     );
     // If a newer request started, ignore this response
     if (thisRequestId !== state.activeQuoteRequestId) {
@@ -846,7 +852,8 @@ async function requestQuote() {
       );
       
       if (isWarmup) {
-        throw new Error("market data warming up; please retry shortly");
+        // Provide user-friendly message that includes retry info
+        throw new Error("Broker is initializing market data. Please wait a moment and try again.");
       }
       
       throw new Error(errorDetail);
@@ -901,10 +908,10 @@ async function requestQuote() {
       err.name === "AbortError" || 
       err.message === "SLA" || 
       /abort|timeout/i.test(errMessage) ||
-      /warming up/i.test(errMessage)
+      /warming up|market data|pricing unavailable|broker is initializing/i.test(errMessage)
     );
     const message = warmup
-      ? "Broker is warming up. Please retry in a moment."
+      ? "Broker is initializing market data. This usually takes a few seconds. Please try again."
       : errMessage || "Quote request failed. Please try again.";
     
     if (status) {
@@ -1730,21 +1737,61 @@ async function init() {
   state.pricesLoading = true;
   renderPricingTable();
   
-  // CRITICAL: Load env/treasury FIRST before restoring quote
+  // CRITICAL: Load env/treasury FIRST - this is required for the app to function
+  let envLoaded = false;
   try {
+    // Try combined endpoint first
     const combinedLoaded = await loadEnvAndPrices();
-    if (!combinedLoaded) {
-      await Promise.all([loadEnv(), fetchPrices()]);
+    if (combinedLoaded) {
+      envLoaded = true;
+    } else {
+      // Fallback to separate loads
+      await loadEnv();
+      envLoaded = true;
+      // Prices can fail without breaking the app
+      fetchPrices().catch(err => {
+        console.warn('[init] Prices fetch failed (non-critical):', err);
+        // Will retry in background
+      });
     }
   } catch (err) {
     console.error('[init] Failed to load env/prices:', err);
-    // Try fallback load
+    // Try fallback load - prioritize env/treasury over prices
     try {
-      await Promise.all([loadEnv(), fetchPrices()]);
-    } catch (fallbackErr) {
-      console.error('[init] Fallback load also failed:', fallbackErr);
-      throw new Error(`Failed to initialize: ${err.message || err}`);
+      await loadEnv();
+      envLoaded = true;
+      // Prices are non-critical - continue even if they fail
+      fetchPrices().catch(err => {
+        console.warn('[init] Fallback prices fetch failed (non-critical):', err);
+      });
+    } catch (envErr) {
+      console.error('[init] Critical: Failed to load env/treasury:', envErr);
+      // Only throw if treasury/env fails - this is critical
+      throw new Error(`Failed to initialize: ${envErr.message || envErr}`);
     }
+  }
+  
+  // Ensure prices are loaded in background even if initial load failed
+  if (!state.prices || Object.keys(state.prices).length === 0) {
+    console.log('[init] Prices not loaded, attempting background fetch');
+    // Retry prices with exponential backoff
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryPrices = async () => {
+      try {
+        await fetchPrices();
+      } catch (err) {
+        retryCount++;
+        if (retryCount < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+          console.log(`[init] Prices retry ${retryCount}/${maxRetries} in ${delay}ms`);
+          setTimeout(retryPrices, delay);
+        } else {
+          console.warn('[init] Prices failed after all retries - app will continue');
+        }
+      }
+    };
+    setTimeout(retryPrices, 1000);
   }
   
   // Now that treasury is loaded, we can safely restore quote
@@ -1779,6 +1826,10 @@ async function init() {
   
   schedulePriceRefresh();
   updateVerifyButtonState();
+  
+  // Mark initialization as complete even if prices aren't loaded
+  state.pricesLoading = false;
+  console.log('[init] Initialization complete (env loaded:', envLoaded, ', prices:', !!state.prices && Object.keys(state.prices).length > 0, ')');
 }
 
 // Centralized initialization - eliminates duplication between loading/loaded states
@@ -1787,7 +1838,19 @@ function initializeApp() {
   setQuoteButtonState(true, "Get Quote");
   init().catch(err => {
     console.error('[init] initialization failed', err);
-    showAlert($("quote-status"), "error", "Initialization error. Please refresh the page.");
+    // Only show critical error if treasury/env failed - prices are non-critical
+    const isCritical = err.message && (err.message.includes('treasury') || err.message.includes('env') || err.message.includes('Failed to initialize'));
+    if (isCritical) {
+      showAlert($("quote-status"), "error", "Server configuration unavailable. Please refresh the page.");
+    } else {
+      // Non-critical error - show warning but allow app to continue
+      showAlert($("quote-status"), "warning", "Some features may be limited. Market data loading in background...");
+      // Try to load prices in background
+      setTimeout(() => {
+        fetchPrices().catch(e => console.warn('[init] Background prices fetch failed:', e));
+      }, 2000);
+    }
+    // Always enable quote button - backend will handle pricing
     setQuoteButtonState(true, "Get Quote");
   });
 }
