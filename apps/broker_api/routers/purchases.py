@@ -376,6 +376,8 @@ def purchases_stream(purchase_id: str) -> StreamingResponse:
     def _gen():
         last_status = None
         last_heartbeat = time.time()
+        not_found_count = 0
+        MAX_NOT_FOUND_RETRIES = 3
         while True:
             try:
                 now = time.time()
@@ -388,9 +390,15 @@ def purchases_stream(purchase_id: str) -> StreamingResponse:
                         _select(Purchase).where(Purchase.purchase_id == purchase_id)
                     ).first()  # type: ignore[misc]
                     if purchase is None:
+                        not_found_count += 1
                         yield "event: error\n" + "data: not found\n\n"
+                        if not_found_count >= MAX_NOT_FOUND_RETRIES:
+                            yield "event: error\n" + "data: purchase not found after multiple attempts, terminating stream\n\n"
+                            break
                         time.sleep(3)
                         continue
+                    # Reset counter when purchase is found
+                    not_found_count = 0
                     if purchase.status != last_status:
                         payload = {
                             "purchaseId": purchase.purchase_id,

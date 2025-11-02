@@ -183,6 +183,8 @@ def bids_stream(bid_id: str) -> StreamingResponse:
         from datetime import datetime as _dt
         last_status = None
         last_heartbeat = time.time()
+        not_found_count = 0
+        MAX_NOT_FOUND_RETRIES = 3
         while True:
             try:
                 # Send heartbeat comment every 30 seconds
@@ -199,9 +201,15 @@ def bids_stream(bid_id: str) -> StreamingResponse:
                 with next(_get_sess()) as s:  # type: ignore[call-arg]
                     r = s.exec(_sel(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
                     if r is None:
+                        not_found_count += 1
                         yield "event: error\n" + "data: not found\n\n"
+                        if not_found_count >= MAX_NOT_FOUND_RETRIES:
+                            yield "event: error\n" + "data: bid not found after multiple attempts, terminating stream\n\n"
+                            break
                         time.sleep(3)
                         continue
+                    # Reset counter when bid is found
+                    not_found_count = 0
                     max_usdc = _price_usdc_per_unit_from_asset(int(r.max_price), str(r.asset))
                     status, ctx = _classify_bid_status(max_usdc, now_s, int(r.expiry.timestamp()) if r.expiry else now_s)
                     if status != r.status:
