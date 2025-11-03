@@ -1,30 +1,35 @@
-run = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=dry REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+run = "bash -lc 'bash scripts/replit_run.sh dry'"
 language = "python3"
 entrypoint = "apps/broker-api/app.py"
 modules = ["python-3.10"]
 
+[env]
+CORS_ENABLED = "true"
+CORS_ALLOW_ORIGINS = "https://capacity-broker.replit.app"
+QUOTES_ENABLED = "true"
+PURCHASES_ENABLED = "true"
+REFLEX_ALLOW_INACTIVE_STAKE = "1"
+AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY = "1"
+AUTOSTART_BROKER_PORT = "8000"
+
 [[runnable]]
 name = "Stack (dry-run)"
-command = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=dry REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+command = "bash -lc 'bash scripts/replit_run.sh dry'"
 
 [[runnable]]
 name = "Stack (live)"
-command = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=live REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_ORCHESTRATOR_LIVE=1 AUTOSTART_STAKEMASTER_LIVE=1 AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+command = "bash -lc 'bash scripts/replit_run.sh live'"
 
 [deployment]
 run = [
   "bash",
   "-lc",
-  "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+  "bash scripts/replit_run.sh live",
 ]
 
 [nix]
 packages = ["libxcrypt"]
 channel = "stable-25_05"
-
-[[ports]]
-localPort = 8000
-externalPort = 80
 
 [[ports]]
 localPort = 8000
@@ -40,7 +45,7 @@ mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=dry REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY=${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+args = "bash scripts/replit_run.sh dry"
 
 [[workflows.workflow]]
 name = "Run Venice Stack (live)"
@@ -49,4 +54,7 @@ mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=live REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
+args = "bash scripts/replit_run.sh live"
+
+[agent]
+expertMode = true

@@ -8,15 +8,41 @@ from typing import Iterable, Optional, Sequence
 DEFAULT_INSTALL_HINT = "uv sync --extra broker --extra web3 --extra agentkit --extra graph --extra db"
 
 
+def _truthy(name: str) -> bool:
+    raw = os.getenv(name)
+    return bool(raw) and str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _agentkit_required() -> bool:
+    """Return True when the runtime explicitly needs AgentKit wallet support."""
+
+    if _truthy("AGENTKIT_REQUIRED"):
+        return True
+    mode = (os.getenv("RUN_STACK_MODE") or "").strip().lower()
+    if mode == "live":
+        return True
+    if _truthy("AUTOSTART_ORCHESTRATOR_LIVE") or _truthy("AUTOSTART_STAKEMASTER_LIVE"):
+        return True
+    return False
+
+
 def ensure_agentkit_installed(logger: Optional[object] = None, install_hint: Optional[str] = None) -> None:
     """Raise RuntimeError with guidance when coinbase-agentkit is missing."""
 
     try:
         importlib.import_module("coinbase_agentkit.wallet_providers")
     except ModuleNotFoundError as exc:  # noqa: PERF203
+        if not _agentkit_required():
+            missing = exc.name or "coinbase-agentkit dependency"
+            msg = (
+                f"coinbase-agentkit check skipped: missing optional dependency '{missing}'.  "
+                "Wallet actions are disabled in dry runs; enable AgentKit extras before live trading."
+            )
+            _emit(logger, msg, level="warning")
+            return
         hint = install_hint or DEFAULT_INSTALL_HINT
         msg = (
-            "coinbase-agentkit is required for Base wallet operations. "
+            "coinbase-agentkit is required for Base wallet operations.  "
             f"Install the extras bundle via `{hint}` or `pip install '.[agentkit,broker,web3,graph,db]'`."
         )
         _emit(logger, msg, level="error")

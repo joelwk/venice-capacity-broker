@@ -26,6 +26,7 @@ if [ -n "${UV_EXTRAS:-}" ]; then
   done
 fi
 
+export UV_PYTHON="${UV_PYTHON:-python3}"
 uv sync $EXTRA_FLAGS
 
 export AUTOSTART_BROKER_API=${AUTOSTART_BROKER_API:-1}
