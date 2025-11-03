@@ -24,11 +24,7 @@ command = "bash -lc 'bash scripts/replit_run.sh live'"
 run = [
   "bash",
   "-lc",
-<<<<<<< HEAD
   "bash scripts/replit_run.sh live",
-=======
-  "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=live AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh",
->>>>>>> dbb5644c4deb9f8e80428a514da2702722713ff6
 ]
 
 [nix]
@@ -58,11 +54,8 @@ mode = "sequential"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-<<<<<<< HEAD
 args = "bash scripts/replit_run.sh live"
 
 [agent]
 expertMode = true
-=======
-args = "CORS_ENABLED=${CORS_ENABLED:-true} CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app} QUOTES_ENABLED=${QUOTES_ENABLED:-true} PURCHASES_ENABLED=${PURCHASES_ENABLED:-true} RUN_STACK_MODE=live REFLEX_ALLOW_INACTIVE_STAKE=${REFLEX_ALLOW_INACTIVE_STAKE:-1} AUTOSTART_ORCHESTRATOR_LIVE=${AUTOSTART_ORCHESTRATOR_LIVE:-1} AUTOSTART_STAKEMASTER_LIVE=${AUTOSTART_STAKEMASTER_LIVE:-1} AUTOSTART_BROKER_PORT=${AUTOSTART_BROKER_PORT:-${PORT:-8000}} bash scripts/run_stack_entry.sh"
->>>>>>> dbb5644c4deb9f8e80428a514da2702722713ff6
+80428a514da2702722713ff6
