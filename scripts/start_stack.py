@@ -23,6 +23,13 @@ class CommandSpec:
     env: Optional[Dict[str, str]] = None
 
 
+def _truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
     """Check if a TCP port is open and accepting connections."""
     try:
