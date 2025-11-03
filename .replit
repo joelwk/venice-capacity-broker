@@ -1,6 +1,6 @@
 run = "bash -lc 'bash scripts/replit_run.sh dry'"
 language = "python3"
-entrypoint = "apps/broker-api/app.py"
+entrypoint = "apps/broker_api/app.py"
 modules = ["python-3.10"]
 
 [env]
@@ -10,7 +10,7 @@ QUOTES_ENABLED = "true"
 PURCHASES_ENABLED = "true"
 REFLEX_ALLOW_INACTIVE_STAKE = "1"
 AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY = "1"
-AUTOSTART_BROKER_PORT = "8000"
+# AUTOSTART_BROKER_PORT set dynamically from $PORT by scripts/run_stack_entry.sh
 
 [[runnable]]
 name = "Stack (dry-run)"
@@ -28,7 +28,7 @@ run = [
 ]
 
 [nix]
-packages = ["libxcrypt"]
+packages = ["libxcrypt", "gnumake", "curl"]
 channel = "stable-25_05"
 
 [[ports]]

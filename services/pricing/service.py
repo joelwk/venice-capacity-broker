@@ -154,28 +154,32 @@ class PricingService:
                     # Nothing to warm; allow requests to proceed (they will retry)
                     self._marketdata_ready.set()
                     return
-                acquired = self._marketdata_lock.acquire(blocking=False)
+                attempt = 0
+                retry_delay = float(os.getenv("PRICING_WARMUP_RETRY_SECONDS") or "5.0")
+                max_attempts_env = os.getenv("PRICING_WARMUP_MAX_ATTEMPTS")
                 try:
-                    if acquired:
-                        try:
+                    max_attempts = int(max_attempts_env) if max_attempts_env not in (None, "") else 0
+                except Exception:
+                    max_attempts = 0
+                while not self._marketdata_ready.is_set():
+                    attempt += 1
+                    try:
+                        with self._marketdata_lock:
                             provider.prices(self._marketdata_symbols)
-                            self._marketdata_ready.set()
-                            logger.info("market data warm-up completed successfully")
-                        except Exception as warm_exc:  # noqa: BLE001
-                            logger.warning("market data warm-up failed; will retry on demand: %s", warm_exc)
-                            # Still set ready flag to allow graceful degradation
-                            if self._warmup_retry_enabled:
-                                self._marketdata_ready.set()
-                    else:
-                        # Lock already held (another warm in progress); wait briefly for readiness
-                        self._marketdata_ready.wait(timeout=300)
-                finally:
-                    if acquired:
-                        self._marketdata_lock.release()
-                    if not self._marketdata_ready.is_set():
-                        # Ensure callers are not blocked forever; subsequent requests will warm inline.
-                        logger.info("market data warm-up timed out; allowing requests to proceed with inline warmup")
                         self._marketdata_ready.set()
+                        logger.info("market data warm-up completed successfully (attempt=%s)", attempt)
+                        return
+                    except Exception as warm_exc:  # noqa: BLE001
+                        logger.warning("market data warm-up attempt %s failed: %s", attempt, warm_exc)
+                        if max_attempts and attempt >= max_attempts:
+                            break
+                        sleep_seconds = max(retry_delay, 1.0)
+                        try:
+                            time.sleep(min(sleep_seconds * attempt, 30.0))
+                        except Exception:
+                            break
+                if not self._marketdata_ready.is_set():
+                    logger.error("market data warm-up failed after %s attempt(s); quotes remain gated", attempt)
 
             Thread(target=_warm_marketdata, name="pricing-marketdata-warm", daemon=True).start()
         else:
@@ -346,54 +350,36 @@ class PricingService:
 
                     # Wait for warm-up to complete before proceeding (configurable timeout)
                     warmup_ready = self._marketdata_ready.wait(timeout=self._warmup_timeout)
-                    if not warmup_ready:
-                        # Warm-up hasn't completed, but try to proceed anyway for graceful degradation
-                        logger.warning("market data warm-up incomplete after %s seconds; proceeding with inline fetch", self._warmup_timeout)
-                        # Try to fetch prices anyway - this allows the system to work even if warmup is slow
+                    if not warmup_ready or not self._marketdata_ready.is_set():
+                        logger.info("market data warm-up still in progress after %.1f seconds", self._warmup_timeout)
+                        raise RuntimeError("market data warming up; please retry shortly")
+
+                    # Warm-up completed, proceed with locked access
+                    lock_acquired = False
+                    start_lock_wait = time.perf_counter()
+
+                    while not lock_acquired and (time.perf_counter() - start_lock_wait) < self._lock_timeout:
+                        lock_acquired = self._marketdata_lock.acquire(blocking=False)
+                        if not lock_acquired:
+                            # Brief sleep before retry to avoid busy-waiting
+                            time.sleep(0.05)
+
+                    if not lock_acquired:
+                        logger.warning("market data lock acquisition timeout after %s seconds; proceeding without lock synchronization", self._lock_timeout)
                         try:
                             prefetched = mdp.prices(symbols) or {}
-                            prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
-                            # If we got prices, mark as ready for future requests
-                            if prefetched_prices:
-                                self._marketdata_ready.set()
-                                logger.info("inline market data fetch succeeded despite warmup timeout")
-                        except Exception as inline_exc:  # noqa: BLE001
-                            logger.error("inline market data fetch failed: %s", inline_exc)
-                            # Still allow the request to proceed - engine may have fallback prices
-                            prefetched_prices = {}
-                            raise RuntimeError("market data unavailable; please retry shortly") from inline_exc
+                        except Exception as no_lock_exc:  # noqa: BLE001
+                            logger.error("market data fetch failed without lock: %s", no_lock_exc)
+                            prefetched = {}
                     else:
-                        # Warm-up completed, proceed with locked access
-                        # Acquire lock for market data access with timeout to prevent blocking
-                        # Use non-blocking acquire with retry loop since threading.Lock doesn't support timeout
-                        lock_acquired = False
-                        start_lock_wait = time.perf_counter()
-                        
-                        while not lock_acquired and (time.perf_counter() - start_lock_wait) < self._lock_timeout:
-                            lock_acquired = self._marketdata_lock.acquire(blocking=False)
-                            if not lock_acquired:
-                                # Brief sleep before retry to avoid busy-waiting
-                                time.sleep(0.05)
-                        
-                        if not lock_acquired:
-                            # Lock acquisition timed out - proceed without lock but log warning
-                            logger.warning("market data lock acquisition timeout after %s seconds; proceeding without lock synchronization", self._lock_timeout)
-                            try:
-                                prefetched = mdp.prices(symbols) or {}
-                            except Exception as no_lock_exc:  # noqa: BLE001
-                                logger.error("market data fetch failed without lock: %s", no_lock_exc)
-                                prefetched = {}
-                        else:
-                            try:
-                                prefetched = mdp.prices(symbols) or {}
-                            finally:
-                                self._marketdata_lock.release()
-                        
-                        prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
-                        
-                        # Ensure ready flag is set after successful fetch
-                        if prefetched_prices:
-                            self._marketdata_ready.set()
+                        try:
+                            prefetched = mdp.prices(symbols) or {}
+                        finally:
+                            self._marketdata_lock.release()
+
+                    prefetched_prices = dict(prefetched) if isinstance(prefetched, dict) else {}
+                    if prefetched_prices:
+                        self._marketdata_ready.set()
                     mdp_stats = mdp.last_prices_stats()
                     if hasattr(self.engine, "set_prefetched_prices"):
                         self.engine.set_prefetched_prices(mdp, prefetched_prices)

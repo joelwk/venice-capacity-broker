@@ -23,6 +23,8 @@ const state = {
   pricesAbort: null,
   quoteAbort: null,
   activeQuoteRequestId: 0,
+  quoteWarmupTimer: null,
+  quoteWarmupAttempts: 0,
 };
 
 const assetDecimals = {
@@ -124,8 +126,8 @@ async function fetchWithRetry(url, options = {}, cfg = {}) {
     : url.includes('/quotes') 
       ? 20000  // 20s for quotes (increased for warmup timeouts)
       : 5000;  // 5s for other calls
-  // Increase attempts for quotes to handle warmup scenarios better
-  const defaultAttempts = url.includes('/quotes') ? 3 : 5;
+  // Quotes rely on backend warm-up gating; avoid redundant retries here.
+  const defaultAttempts = url.includes('/quotes') ? 1 : 5;
   const { attempts = defaultAttempts, baseMs = 400, factor = 2, jitter = 0.25, timeoutMs = cfg.timeoutMs || defaultTimeout } = cfg;
   for (let i = 0; i < attempts; i++) {
     const ac = new AbortController();
@@ -353,27 +355,28 @@ function renderPricingTable() {
       if (Number.isFinite(latencyRaw) && latencyRaw > 0) {
         metaParts.push(`last refresh ${Math.round(latencyRaw)} ms`);
       }
-      const hitRateRaw = Number(state.pricesMeta.cache_hit_rate ?? state.pricesMeta.cacheHitRate);
-      if (Number.isFinite(hitRateRaw) && hitRateRaw > 0 && hitRateRaw <= 1) {
-        metaParts.push(`cache hit ${(hitRateRaw * 100).toFixed(1)}%`);
-      }
-      // Add last updated timestamp
-      if (state.lastPricesAt) {
-        const ageSeconds = Math.floor((Date.now() - state.lastPricesAt) / 1000);
-        metaParts.push(`updated ${ageSeconds}s ago`);
-      }
-      // Readiness hint: show cache coverage when warming just finished
-      const ch = Number(state.pricesMeta.cache_hits);
-      const cm = Number(state.pricesMeta.cache_misses);
-      if (Number.isFinite(ch) && Number.isFinite(cm)) {
-        const total = ch + cm;
-        if (total > 0) {
-          const hitRate = ch / total;
-          if (hitRate >= 0.8 && ageSeconds <= 30) {
-            metaParts.push('ready');
+        const hitRateRaw = Number(state.pricesMeta.cache_hit_rate ?? state.pricesMeta.cacheHitRate);
+        if (Number.isFinite(hitRateRaw) && hitRateRaw > 0 && hitRateRaw <= 1) {
+          metaParts.push(`cache hit ${(hitRateRaw * 100).toFixed(1)}%`);
+        }
+        // Add last updated timestamp
+        let priceAgeSeconds = null;
+        if (state.lastPricesAt) {
+          priceAgeSeconds = Math.floor((Date.now() - state.lastPricesAt) / 1000);
+          metaParts.push(`updated ${priceAgeSeconds}s ago`);
+        }
+        // Readiness hint: show cache coverage when warming just finished
+        const ch = Number(state.pricesMeta.cache_hits);
+        const cm = Number(state.pricesMeta.cache_misses);
+        if (Number.isFinite(ch) && Number.isFinite(cm)) {
+          const total = ch + cm;
+          if (total > 0) {
+            const hitRate = ch / total;
+            if (hitRate >= 0.8 && priceAgeSeconds !== null && priceAgeSeconds <= 30) {
+              metaParts.push('ready');
+            }
           }
         }
-      }
       if (metaParts.length > 0) {
         const metaText = metaParts.join(', ');
         note.textContent = note.textContent ? `${note.textContent} (${metaText})` : metaText;
@@ -687,8 +690,16 @@ function applyQuote(result) {
   saveSessionToStorage();
 }
 
-async function requestQuote() {
-  console.log("[requestQuote] Quote request initiated");
+async function requestQuote(options = {}) {
+  const { warmupRetry = false } = options;
+  console.log("[requestQuote] Quote request initiated", { warmupRetry });
+  if (state.quoteWarmupTimer) {
+    clearTimeout(state.quoteWarmupTimer);
+    state.quoteWarmupTimer = null;
+  }
+  if (!warmupRetry) {
+    state.quoteWarmupAttempts = 0;
+  }
   const unitsInput = $("quote-units");
   const assetSelect = $("quote-asset");
   const refreshBtn = $("quote-refresh");
@@ -702,30 +713,29 @@ async function requestQuote() {
     details: !!details
   });
   
-  // Reset button state at the start to allow new quote requests
-  setQuoteButtonState(true, "Get Quote");
-  // Hide refresh button when starting a new quote request
-  if (refreshBtn) refreshBtn.hidden = true;
-  
-  if (details) details.classList.add("hidden");
-  stopQuoteTimer();
-  state.quote = null;
-  state.quoteUsdPerDiem = null;
-  state.quoteAsset = null;
-  const discountLine = $("quote-discount");
-  if (discountLine) {
-    discountLine.textContent = "";
-    discountLine.classList.add("hidden");
+  if (!warmupRetry) {
+    setQuoteButtonState(true, "Get Quote");
+    if (refreshBtn) refreshBtn.hidden = true;
+    if (details) details.classList.add("hidden");
+    stopQuoteTimer();
+    state.quote = null;
+    state.quoteUsdPerDiem = null;
+    state.quoteAsset = null;
+    const discountLine = $("quote-discount");
+    if (discountLine) {
+      discountLine.textContent = "";
+      discountLine.classList.add("hidden");
+    }
+    renderPricingTable();
+    enableStep2(false);
+    resetStep3();
+    clearAlert(status);
+    clearAlert($("verify-status"));
+    state.lastQuoteLatencyMs = null;
   }
-  renderPricingTable();
-  enableStep2(false);
-  resetStep3();
-  clearAlert(status);
-  clearAlert($("verify-status"));
-  state.lastQuoteLatencyMs = null;
 
   // Force reload env/prices if treasury is missing (could be stale cache)
-  if (!state.treasury) {
+  if (!state.treasury && !warmupRetry) {
     console.warn("[requestQuote] Treasury not loaded, forcing env refresh");
     try {
       await loadEnvAndPrices();
@@ -797,7 +807,7 @@ async function requestQuote() {
   const thisRequestId = state.activeQuoteRequestId;
 
     try {
-      setQuoteButtonState(false, "Getting quote...");
+      setQuoteButtonState(false, warmupRetry ? "Initializing..." : "Getting quote...");
       if (refreshBtn) refreshBtn.disabled = true;
 
     const params = new URLSearchParams();
@@ -890,6 +900,7 @@ async function requestQuote() {
     // Wrap applyQuote in try-catch for better error handling
     try {
       applyQuote(body);
+      state.quoteWarmupAttempts = 0;
       updateVerifyButtonState();
     } catch (applyErr) {
       console.error("[quote] applyQuote failed", applyErr, body);
@@ -913,9 +924,9 @@ async function requestQuote() {
     const message = warmup
       ? "Broker is initializing market data. This usually takes a few seconds. Please try again."
       : errMessage || "Quote request failed. Please try again.";
-    
+
     if (status) {
-      showAlert(status, "error", message);
+      showAlert(status, warmup ? "info" : "error", message);
       // Ensure error is visible
       if (status.classList.contains("hidden")) {
         console.warn("[requestQuote] Error alert still hidden, forcing visibility");
@@ -932,13 +943,36 @@ async function requestQuote() {
       if (retryContainer) {
         retryContainer.classList.remove("hidden");
       }
+      const attempts = Number(state.quoteWarmupAttempts) || 0;
+      const nextDelay = Math.min(30000, Math.pow(2, attempts) * 2000);
+      state.quoteWarmupAttempts = attempts + 1;
+      if (status) {
+        const seconds = Math.round(nextDelay / 1000);
+        const retryMessage = seconds > 0
+          ? `Broker is initializing market data. Retrying in ${seconds} second${seconds === 1 ? "" : "s"}...`
+          : "Broker is initializing market data. Retrying shortly...";
+        showAlert(status, "info", retryMessage);
+      }
+      setQuoteButtonState(false, "Initializing...");
+      state.quoteWarmupTimer = setTimeout(() => {
+        state.quoteWarmupTimer = null;
+        if (thisRequestId === state.activeQuoteRequestId) {
+          requestQuote({ warmupRetry: true }).catch((retryErr) => {
+            console.error("[requestQuote] Warmup retry failed", retryErr);
+          });
+        } else {
+          console.log("[requestQuote] Warmup retry skipped due to newer request");
+        }
+      }, nextDelay);
     }
   } finally {
     // Only reset UI if this is still the latest request
     if (thisRequestId === state.activeQuoteRequestId) {
       // Only re-enable if quote wasn't successfully applied (applyQuote sets it to disabled)
       const btn = $("quote-btn");
-      if (btn && btn.disabled && btn.textContent === "Quote Active") {
+      if (state.quoteWarmupTimer) {
+        setQuoteButtonState(false, "Initializing...");
+      } else if (btn && btn.disabled && btn.textContent === "Quote Active") {
         // Quote was successfully applied, keep it disabled
       } else {
         setQuoteButtonState(true, "Get Quote");
