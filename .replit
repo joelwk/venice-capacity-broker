@@ -27,6 +27,8 @@ run = [
   "bash scripts/replit_run.sh live",
 ]
 
+
+
 [nix]
 packages = ["libxcrypt", "gnumake", "curl"]
 channel = "stable-25_05"

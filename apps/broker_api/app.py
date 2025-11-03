@@ -194,6 +194,17 @@ def _setup_static_routes(app: FastAPI) -> None:
         def api_probe_head() -> PlainTextResponse:
             return PlainTextResponse("", status_code=200)
         
+        @app.get("/health", include_in_schema=False)
+        def health_check() -> dict:
+            """Health check endpoint for Replit deployments and load balancers."""
+            return {"status": "ok", "service": "broker", "version": "0.2.0"}
+        
+        @app.head("/health", include_in_schema=False)
+        def health_check_head() -> PlainTextResponse:
+            """HEAD health check for faster readiness probes."""
+            return PlainTextResponse("", status_code=200)
+
+        
         # Mount admin UI if present
         _admin_dir = Path(__file__).resolve().parent.parent / "control-plane"
         if _admin_dir.exists():

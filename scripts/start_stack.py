@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+
 
 from apps import _path as _app_path
 from libs.runtime.preflight import ensure_agentkit_installed
@@ -21,11 +23,28 @@ class CommandSpec:
     env: Optional[Dict[str, str]] = None
 
 
-def _truthy(name: str, default: bool = True) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+def _is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Check if a TCP port is open and accepting connections."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def _wait_for_port(host: str, port: int, max_wait: float = 30.0, check_interval: float = 0.5) -> bool:
+    """Wait for a port to become open, returning True if it opens within max_wait seconds."""
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        if _is_port_open(host, port, timeout=check_interval):
+            return True
+        time.sleep(check_interval)
+    return False
+
+
 
 
 def _detect_uv() -> Optional[str]:
@@ -120,6 +139,9 @@ class ProcessManager:
 
     def launch(self, specs: List[CommandSpec]) -> None:
         base_env = os.environ.copy()
+        broker_port = None
+        broker_host = None
+        
         for spec in specs:
             env = base_env.copy()
             if spec.env:
@@ -130,6 +152,23 @@ class ProcessManager:
                 raise RuntimeError(f"failed to launch {spec.name}: {exc}") from exc
             self.processes.append((spec.name, proc))
             print(f"[stack] started {spec.name} (pid={proc.pid}) -> {' '.join(spec.argv)}", flush=True)
+            
+            # Wait for broker API to bind to port before starting other processes
+            if spec.name == "broker-api":
+                broker_host = os.getenv("AUTOSTART_BROKER_HOST", os.getenv("BROKER_API_HOST", "0.0.0.0"))
+                broker_port_str = os.getenv("AUTOSTART_BROKER_PORT", os.getenv("BROKER_API_PORT", "8000"))
+                try:
+                    broker_port = int(broker_port_str)
+                except ValueError:
+                    broker_port = 8000
+                
+                # Wait up to 30 seconds for broker API to bind
+                print(f"[stack] waiting for broker API to bind to {broker_host}:{broker_port}...", flush=True)
+                if _wait_for_port("127.0.0.1", broker_port, max_wait=30.0):
+                    print(f"[stack] broker API ready on port {broker_port}", flush=True)
+                else:
+                    print(f"[stack] warning: broker API port {broker_port} not ready after 30s, continuing anyway", flush=True)
+
 
     def monitor(self) -> None:
         try:
