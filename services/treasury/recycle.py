@@ -49,7 +49,7 @@ def recycle_profits_to_stake(
 
     try:
         slippage = slippage_bps if slippage_bps is not None else int(os.getenv("RISK_MAX_SLIPPAGE_BPS", "150"))
-        min_usd = min_stake_usd if min_stake_usd is not None else float(os.getenv("STAKEMASTER_MIN_STAKE_USD", "10.0"))
+        min_usd = min_stake_usd if min_stake_usd is not None else float(os.getenv("STAKEMASTER_MIN_STAKE_USD", "1.0"))
 
         if amount_usdc_wei <= 0:
             result["status"] = "skipped"

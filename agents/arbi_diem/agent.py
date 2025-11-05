@@ -409,6 +409,7 @@ class ArbiDiem:
             if final_suggested != base_suggested:
                 rationale.update({"reserve_capped_units": int(final_suggested)})
             suggested = int(final_suggested)
+            rationale.update({"portfolioAdjustedUnits": int(suggested)})
             if suggested <= 0:
                 logger.info("Risk rejected mint/trade (suggested=0)")
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})
@@ -531,6 +532,7 @@ class ArbiDiem:
             if final_suggested != base_suggested:
                 rationale.update({"reserve_capped_units": int(final_suggested)})
             suggested = int(final_suggested)
+            rationale.update({"portfolioAdjustedUnits": int(suggested)})
             if suggested <= 0:
                 logger.info("Risk rejected buy/burn (suggested=0)")
                 rationale.update({"decision": "hold", "reason": "risk_rejected"})
