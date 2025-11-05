@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock
 
-import pytest
-
 from agents.capacity_broker.agent import CapacityBroker
 from services.venice_keys.manager import KeyManager
 
@@ -21,7 +19,7 @@ def test_broker_pricing_hysteresis():
     broker = CapacityBroker(keys=mock_keys)
     
     # First call with utilization above target
-    pricing1, failsafe1 = broker._derive_inventory_policy(0.70)
+    pricing1, _ = broker._derive_inventory_policy(0.70)
     assert pricing1 is not None
     assert "proposed" in pricing1
     price1 = pricing1["proposed"]
@@ -30,7 +28,7 @@ def test_broker_pricing_hysteresis():
     broker._last_price = price1
     
     # Second call with utilization just slightly above target (within hysteresis)
-    pricing2, failsafe2 = broker._derive_inventory_policy(0.68)
+    pricing2, _ = broker._derive_inventory_policy(0.68)
     assert pricing2 is not None
     assert "proposed" in pricing2
     price2 = pricing2["proposed"]
@@ -50,14 +48,14 @@ def test_broker_pricing_stepwise_adjustment():
     broker._last_price = 1.0
     
     # High utilization should increase price
-    pricing, failsafe = broker._derive_inventory_policy(0.80)
+    pricing, _ = broker._derive_inventory_policy(0.80)
     assert pricing is not None
     assert pricing["mode"] == "surge"
     assert pricing["proposed"] > broker._last_price
     
     # Low utilization should decrease price
     broker._last_price = 1.0
-    pricing, failsafe = broker._derive_inventory_policy(0.30)
+    pricing, _ = broker._derive_inventory_policy(0.30)
     assert pricing is not None
     assert pricing["mode"] == "discount"
     assert pricing["proposed"] < broker._last_price

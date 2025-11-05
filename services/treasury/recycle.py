@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-from libs.dex.routes import RoutePlan, make_route
+from libs.dex.routes import make_route
 from libs.telemetry.logger import get_logger
 
 try:
@@ -96,7 +96,7 @@ def recycle_profits_to_stake(
             result["errors"].append("no quote available from aggregator")
             return result
 
-        min_amount_out = quote.amount_out * (10_000 - slippage) // 10_000
+        min_amount_out = int(quote.amount_out * (10_000 - slippage) // 10_000)
         vvv_out = float(quote.amount_out) / (10.0 ** vvv_decimals)
 
         if dry_run:
@@ -106,6 +106,7 @@ def recycle_profits_to_stake(
                 "usdc_in": amount_usdc,
                 "vvv_out": vvv_out,
                 "slippage_bps": slippage,
+                "min_amount_out_wei": min_amount_out,
                 "route": list(route.tokens) if hasattr(route, "tokens") else None,
             }
             result["stake_result"] = {
@@ -122,6 +123,7 @@ def recycle_profits_to_stake(
             "tx_hash": swap_result.get("tx_hash"),
             "usdc_in": amount_usdc,
             "vvv_out": vvv_out,
+            "min_amount_out_wei": min_amount_out,
             "route": list(route.tokens) if hasattr(route, "tokens") else None,
         }
 

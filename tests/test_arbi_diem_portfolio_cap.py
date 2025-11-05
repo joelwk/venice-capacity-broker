@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from agents.arbi_diem.agent import ArbiDiem
 from services.diem.client import DIEMService
@@ -14,7 +11,7 @@ from services.risk.policy import RiskPolicy
 
 def test_arbi_diem_includes_portfolio_caps_in_rationale(monkeypatch):
     """Test that ArbiDiem includes portfolio caps and telemetry in rationale."""
-    os.environ["RISK_ENABLE_PORTFOLIO_CAP"] = "1"
+    monkeypatch.setenv("RISK_ENABLE_PORTFOLIO_CAP", "1")
     
     mock_aggregator = MagicMock()
     mock_diem = DIEMService(aggregator=mock_aggregator)
@@ -24,7 +21,7 @@ def test_arbi_diem_includes_portfolio_caps_in_rationale(monkeypatch):
     mock_market.prices.return_value = {"DIEM": 2.0, "VVV": 1.0, "USDC": 1.0}
     arbi.market = mock_market
     
-    result = arbi.evaluate_and_maybe_mint(
+    arbi.evaluate_and_maybe_mint(
         market_price=2.5,  # Premium over fair value
         mint_rate=1.0,
         current_inventory_usd=1000.0,
@@ -43,7 +40,7 @@ def test_arbi_diem_includes_portfolio_caps_in_rationale(monkeypatch):
 
 def test_arbi_diem_logs_trade_route(monkeypatch):
     """Test that ArbiDiem logs selected trade route."""
-    os.environ["RISK_ENABLE_PORTFOLIO_CAP"] = "1"
+    monkeypatch.setenv("RISK_ENABLE_PORTFOLIO_CAP", "1")
     
     mock_aggregator = MagicMock()
     mock_quote = MagicMock()
@@ -61,7 +58,7 @@ def test_arbi_diem_logs_trade_route(monkeypatch):
         from libs.dex.routes import make_route
         mock_routes.return_value = [make_route(["DIEM", "WETH", "USDC"])]
         
-        result = arbi.evaluate_and_maybe_mint(
+        arbi.evaluate_and_maybe_mint(
             market_price=2.5,
             mint_rate=1.0,
             simulate=True,

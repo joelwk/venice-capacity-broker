@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from services.portfolio.inventory import PortfolioInventory, PortfolioSnapshot
 
@@ -20,7 +17,7 @@ def test_portfolio_snapshot_empty_when_wallet_unavailable():
         assert len(snapshot.errors) > 0
 
 
-def test_portfolio_snapshot_computes_usd_valuation(monkeypatch):
+def test_portfolio_snapshot_computes_usd_valuation():
     """Test that snapshot computes USD valuations correctly."""
     mock_snapshot = {
         "address": "0x123",

@@ -5,8 +5,6 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock
 
-import pytest
-
 from agents.ai_treasurer.agent import AITreasurer
 
 
