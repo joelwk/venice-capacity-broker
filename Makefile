@@ -25,6 +25,8 @@ ENV_VALIDATION_ARGS = $(strip $(if $(filter json,$(ENV_VALIDATION_FORMAT)),--jso
 COMPOSE_CMD ?= docker compose
 COMPOSE_FILES ?= docker-compose.yml
 COMPOSE_FILE_ARGS = $(strip $(foreach file,$(COMPOSE_FILES),-f $(file)))
+COMPOSE_ENV_FILE ?= docker/.env.local
+COMPOSE_ENV_FILE_ARGS = $(if $(COMPOSE_ENV_FILE),--env-file $(COMPOSE_ENV_FILE),)
 DOCKER_PROFILES ?=
 DOCKER_PROFILE_ARGS = $(strip $(foreach profile,$(DOCKER_PROFILES),--profile $(profile)))
 DOCKER_DETACH ?= 0
@@ -137,26 +139,26 @@ replit-run:
 
 # --- Docker orchestration helpers ---
 docker-build:
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) build $(if $(filter 1,$(DOCKER_NO_CACHE)),--no-cache,) $(SERVICE)
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) build $(if $(filter 1,$(DOCKER_NO_CACHE)),--no-cache,) $(SERVICE)
 
 docker-up: validate-env
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) up $(if $(filter 1,$(DOCKER_BUILD)),--build,) $(if $(filter 1,$(DOCKER_DETACH)),-d,) $(DOCKER_PROFILE_ARGS) $(SERVICE)
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) up $(if $(filter 1,$(DOCKER_BUILD)),--build,) $(if $(filter 1,$(DOCKER_DETACH)),-d,) $(DOCKER_PROFILE_ARGS) $(SERVICE)
 
 docker-down:
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) down $(if $(filter 1,$(DOCKER_REMOVE_VOLUMES)),-v,)
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) down $(if $(filter 1,$(DOCKER_REMOVE_VOLUMES)),-v,)
 
 docker-logs:
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) logs -f $(SERVICE)
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) logs -f $(SERVICE)
 
 docker-ps:
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) ps $(SERVICE)
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) ps $(SERVICE)
 
 docker-shell:
 	@if [ -z "$(SERVICE)" ]; then \
 	  echo "Usage: make docker-shell SERVICE=broker [CMD=/bin/bash]"; \
 	  exit 1; \
 	fi
-	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) exec $(SERVICE) $${CMD:-/bin/bash}
+	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) exec $(SERVICE) $${CMD:-/bin/bash}
 
 deploy-docker:
 	@$(MAKE) docker-up DOCKER_DETACH=1 DOCKER_BUILD=1 $(if $(COMPOSE_FILES),COMPOSE_FILES="$(COMPOSE_FILES)",) $(if $(DOCKER_PROFILES),DOCKER_PROFILES="$(DOCKER_PROFILES)",) $(if $(SERVICE),SERVICE="$(SERVICE)",)

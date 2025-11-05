@@ -97,7 +97,17 @@ services:
       AUTOSTART_ORCHESTRATOR_LIVE: ${AUTOSTART_ORCHESTRATOR_LIVE:-0}
       SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-    command: bash -lc "python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 ${AUTOSTART_ORCHESTRATOR_LIVE:+--enable-live}"
+      # Portfolio inventory: Set RISK_ENABLE_PORTFOLIO_CAP=1 to enable
+      # Falls back to DIEM_INVENTORY_UNITS, VVV_INVENTORY_UNITS, USDC_INVENTORY_UNITS if wallet unavailable
+      RISK_ENABLE_PORTFOLIO_CAP: ${RISK_ENABLE_PORTFOLIO_CAP:-0}
+    command: >
+      sh -c "
+      if [ \"${AUTOSTART_ORCHESTRATOR_LIVE:-0}\" = \"1\" ]; then
+        python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 --enable-live
+      else
+        python apps/cli/main.py run:loop --sleep 15 --max-cycles 0
+      fi
+      "
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
@@ -117,7 +127,7 @@ services:
       SQL_DATABASE_URL: ${SQL_DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY: ${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-0}
-    command: bash -lc "python services/marketdata/token_watcher.py"
+    command: python services/marketdata/token_watcher.py
     volumes:
       - ./.env:/app/.env:ro
       - ./.env.docker:/app/.env.docker:ro
@@ -136,7 +146,7 @@ services:
       - .env.docker
       - docker/.env.local
     working_dir: /app
-    command: bash -lc "pytest -q"
+    command: sh -c "rm -f *.db test-*.db tmp*.db && pytest -q"
     profiles: [tests]
     volumes:
       - ./.env:/app/.env:ro

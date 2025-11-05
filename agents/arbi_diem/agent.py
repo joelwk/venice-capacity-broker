@@ -404,6 +404,7 @@ class ArbiDiem:
                 "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
                 "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
                 "vol_bps": (float(vol_bps) if vol_bps is not None else None),
+                "current_inventory_usd": (float(current_inventory_usd) if current_inventory_usd is not None else None),
             })
             if final_suggested != base_suggested:
                 rationale.update({"reserve_capped_units": int(final_suggested)})
@@ -441,8 +442,26 @@ class ArbiDiem:
                 rationale.update({"decision": "hold", "reason": "slippage_exceeded"})
                 setattr(self, "_last_rationale", rationale)
                 return False
+            # Track trade route for telemetry
+            trade_route_str = None
+            if routes and routes[0]:
+                try:
+                    route_tokens = routes[0].tokens if hasattr(routes[0], "tokens") else []
+                    trade_route_str = "->".join(str(t) for t in route_tokens) if route_tokens else None
+                except Exception:
+                    pass
+            
             if adjusted != suggested:
-                rationale.update({"liquidity_adjusted_units": int(adjusted)})
+                rationale.update({
+                    "liquidity_adjusted_units": int(adjusted),
+                    "portfolioAdjustedUnits": int(adjusted),
+                })
+            else:
+                rationale.update({"portfolioAdjustedUnits": int(adjusted)})
+            
+            if trade_route_str:
+                rationale.update({"tradeRoute": trade_route_str})
+            
             suggested = adjusted
             logger.info(f"Signal: Mint and sell DIEM (units={suggested}, want={want}) simulate={simulate}")
             rationale.update({"decision": "mint_sell"})
@@ -507,6 +526,7 @@ class ArbiDiem:
                 "pool_take_bps": (int(pool_take_bps) if pool_take_bps is not None else None),
                 "utilization_ratio": (float(utilization_ratio) if utilization_ratio is not None else None),
                 "vol_bps": (float(vol_bps) if vol_bps is not None else None),
+                "current_inventory_usd": (float(current_inventory_usd) if current_inventory_usd is not None else None),
             })
             if final_suggested != base_suggested:
                 rationale.update({"reserve_capped_units": int(final_suggested)})
@@ -533,8 +553,26 @@ class ArbiDiem:
                 rationale.update({"decision": "hold", "reason": "slippage_exceeded"})
                 setattr(self, "_last_rationale", rationale)
                 return False
+            # Track trade route for telemetry
+            trade_route_str = None
+            if routes and routes[0]:
+                try:
+                    route_tokens = routes[0].tokens if hasattr(routes[0], "tokens") else []
+                    trade_route_str = "->".join(str(t) for t in route_tokens) if route_tokens else None
+                except Exception:
+                    pass
+            
             if adjusted != suggested:
-                rationale.update({"liquidity_adjusted_units": int(adjusted)})
+                rationale.update({
+                    "liquidity_adjusted_units": int(adjusted),
+                    "portfolioAdjustedUnits": int(adjusted),
+                })
+            else:
+                rationale.update({"portfolioAdjustedUnits": int(adjusted)})
+            
+            if trade_route_str:
+                rationale.update({"tradeRoute": trade_route_str})
+            
             suggested = adjusted
             logger.info(f"Signal: Buy and burn DIEM (units={suggested}, want={want}) simulate={simulate}")
             rationale.update({"decision": "buy_burn"})

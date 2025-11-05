@@ -536,6 +536,7 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
     from services.memory import MemoryStore, ReflectionEngine
     from agents.reflex.guardian import ReflexGuardian
     from graph.workflows.orchestrator import SingleLoopOrchestrator
+    from services.portfolio.inventory import PortfolioInventory
 
     env_progressive = _env_flag("STAKEMASTER_PROGRESSIVE_ENABLE", True)
     arg_progressive = getattr(args, "progressive_live", None)
@@ -573,6 +574,8 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         allow_inactive = str(os.getenv("REFLEX_ALLOW_INACTIVE_STAKE", "")).strip().lower() in {"1", "true", "yes", "on"}
     reflex_guard = ReflexGuardian(require_active_stake=not allow_inactive)
 
+    portfolio_inventory = PortfolioInventory(marketdata_provider=market) if live_target else None
+
     orchestrator = SingleLoopOrchestrator(
         stake_master=stake_agent,
         arbi=arbi_agent,
@@ -584,6 +587,7 @@ def cmd_run_loop(args: argparse.Namespace) -> None:
         memory_store=memory_store,
         reflection=reflection,
         reflex_guard=reflex_guard,
+        portfolio_inventory=portfolio_inventory,
     )
 
     orchestrator.run_loop(
@@ -1363,11 +1367,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser(
         "run:loop",
-        help="Run minimal loop with StakeMaster heartbeat; supports sleep/max-cycles/enable-live",
+        help="Run v1 single-loop orchestrator (StakeMaster → ArbiDiem → CapacityBroker); supports sleep/max-cycles/enable-live",
     )
     sp.add_argument("--sleep", default=15, type=float, help="Seconds to sleep between cycles")
     sp.add_argument("--max-cycles", default=3, type=int, help="Maximum cycles to run")
-    sp.add_argument("--enable-live", action="store_true", default=False, help="Allow live actions (claim)")
+    sp.add_argument("--enable-live", action="store_true", default=False, help="Allow live actions (claim, mint, burn)")
+    sp.add_argument("--dry-run", action="store_true", default=False, help="Run without on-chain actions (default)")
     sp.add_argument("--allow-inactive-stake", action="store_true", default=False, help="Skip reflex active-stake requirement (testing)")
     sp.add_argument("--progressive-live", dest="progressive_live", action="store_true", help="Enable progressive live escalation after healthy heartbeats")
     sp.add_argument("--no-progressive-live", dest="progressive_live", action="store_false", help="Disable progressive live escalation explicitly")
@@ -1614,17 +1619,61 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- Startup DEX probe (Etherscan v2) ---
     def cmd_startup_probe(args: argparse.Namespace) -> None:
-        """Validate DEX pairs along TRADE_PATH using Etherscan v2 proxy.
-
-        Prints a one-screen report with discovered pairs and reserves
-        for Uniswap V2 and Aerodrome (stable/volatile).
+        """Validate environment, Venice API config, DEX pairs, and system readiness.
+        
+        Checks:
+        - Venice API base URL includes /api/v1
+        - Portfolio inventory service readiness
+        - DEX pairs along TRADE_PATH (if ETHERSCAN_API_KEY available)
+        - Market data price health
         """
+        issues = []
+        warnings = []
+        
+        # Validate Venice API base URL
+        venice_base = os.getenv("VENICE_API_BASE_URL", "")
+        if not venice_base:
+            msg = "VENICE_API_BASE_URL is not set"
+            if args.warn_only:
+                warnings.append(msg)
+            else:
+                issues.append(msg)
+        else:
+            cleaned = venice_base.rstrip("/")
+            if "/api/v1" not in cleaned:
+                msg = f"VENICE_API_BASE_URL must include '/api/v1'; got: {cleaned}"
+                hint = f"Use: VENICE_API_BASE_URL={cleaned}/api/v1"
+                if args.warn_only:
+                    warnings.append(f"{msg} ({hint})")
+                else:
+                    issues.append(f"{msg} ({hint})")
+            else:
+                logger.info(f"Venice API base URL validated: {cleaned}")
+        
+        # Test portfolio inventory if live mode requested
+        if args.check_live:
+            try:
+                from services.portfolio.inventory import PortfolioInventory
+                from services.marketdata.provider import MarketDataProvider
+                
+                market = MarketDataProvider()
+                inventory = PortfolioInventory(marketdata_provider=market)
+                snapshot = inventory.snapshot(include_eth=False)
+                
+                if snapshot.errors:
+                    warnings.extend(f"Portfolio inventory: {err}" for err in snapshot.errors)
+                else:
+                    logger.info(f"Portfolio inventory ready: {snapshot.inventory_usd:.2f} USD total")
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Portfolio inventory check failed: {exc}")
+        
+        # Validate DEX pairs if Etherscan key available
         es_key = os.getenv("ETHERSCAN_API_KEY")
         if not es_key:
-            logger.warning("ETHERSCAN_API_KEY is not set; skipping DEX startup probe.")
-            return
-        fee_tiers: Optional[List[Optional[int]]] = None
-        route_tokens: List[str] = []
+            logger.debug("ETHERSCAN_API_KEY not set; skipping DEX startup probe.")
+        else:
+            fee_tiers: Optional[List[Optional[int]]] = None
+            route_tokens: List[str] = []
 
         tp = os.getenv("TRADE_PATH")
         if tp:
@@ -1734,8 +1783,27 @@ def build_parser() -> argparse.ArgumentParser:
                     )
         except Exception:
             logger.debug("startup probe sanity check skipped", exc_info=True)
+        
+        # Print summary
+        if issues:
+            print("\n=== Issues Found ===")
+            for issue in issues:
+                print(f"❌ {issue}")
+        if warnings:
+            print("\n=== Warnings ===")
+            for warning in warnings:
+                print(f"⚠️  {warning}")
+        
+        if issues and not args.warn_only:
+            raise SystemExit(1)
+        elif issues or warnings:
+            print("\n⚠️  Startup probe completed with warnings")
+        else:
+            print("\n✅ Startup probe passed")
 
-    sp = sub.add_parser("startup:probe", help="Validate DEX pairs via Etherscan for current TRADE_PATH and print a compact report")
+    sp = sub.add_parser("startup:probe", help="Validate environment, Venice API config, and system readiness")
+    sp.add_argument("--check-live", action="store_true", default=False, help="Also validate live operation requirements")
+    sp.add_argument("--warn-only", action="store_true", default=False, help="Treat issues as warnings instead of errors")
     sp.set_defaults(func=cmd_startup_probe)
 
     # Broker admin commands

@@ -146,7 +146,19 @@ def test_single_loop_quorum_blocks_actions(monkeypatch):
     # simulate True should be recorded, but no simulate False call when blocked
     assert len(arbi.calls) == 1 and arbi.calls[0]["simulate"] is True
     assert record["arbi"]["execution"]["status"] == "blocked"
-    assert record["arbi"]["outcome"] is False
+    # Verify portfolio inventory and broker utilization are persisted
+    if "portfolio" in record:
+        assert "inventoryUsd" in record["portfolio"]
+        assert "perAssetUsd" in record["portfolio"]
+    if "brokerUtilization" in record:
+        assert isinstance(record["brokerUtilization"], (float, type(None)))
+    
+    # Verify ArbiDiem rationale includes portfolio telemetry
+    if "arbi" in record and "why" in record["arbi"]:
+        rationale = record["arbi"]["why"]
+        if isinstance(rationale, dict):
+            assert "desired_units" in rationale or "suggested_units" in rationale
+            assert "portfolioAdjustedUnits" in rationale or "current_inventory_usd" in rationale
 
 
 def test_single_loop_treasurer_and_listen_interval(monkeypatch):

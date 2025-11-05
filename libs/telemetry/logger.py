@@ -284,7 +284,9 @@ def _ensure_console_capture() -> None:
             return
         target_path = _resolve_log_path()
         mirror = None
-        capture_flag = str(os.getenv("LOG_CAPTURE_CONSOLE", "1")).strip().lower()
+        # Auto-detect pytest to avoid conflicts with pytest's capture mechanism
+        _is_pytest = "pytest" in sys.modules or "_pytest" in sys.modules
+        capture_flag = str(os.getenv("LOG_CAPTURE_CONSOLE", "1" if not _is_pytest else "0")).strip().lower()
         capture_enabled = capture_flag not in {"0", "false", "off", "no"}
         if capture_enabled and target_path is not None:
             try:

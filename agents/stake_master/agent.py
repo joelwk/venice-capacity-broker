@@ -624,6 +624,98 @@ class StakeMaster:
                 pass
         return False
 
+    def stake_vvv(self, amount_wei: int, reason: str = "manual") -> Dict[str, Any]:
+        """
+        Stake a specific amount of VVV tokens.
+
+        Args:
+            amount_wei: Amount in base units (18 decimals)
+            reason: Reason for staking (for logging/telemetry)
+
+        Returns:
+            Dict with status, tx, and any errors
+        """
+        result: Dict[str, Any] = {
+            "status": "pending",
+            "executed": False,
+            "tx": None,
+            "reason": reason,
+            "amount_wei": amount_wei,
+            "errors": [],
+        }
+
+        try:
+            if amount_wei <= 0:
+                result["status"] = "skipped"
+                result["errors"].append("amount_wei must be positive")
+                return result
+
+            min_stake_usd = float(os.getenv("STAKEMASTER_MIN_STAKE_USD", "10.0"))
+            vvv_price = 0.0
+            if self.market:
+                try:
+                    prices = self.market.prices(["VVV"]) or {}
+                    vvv_price = float(prices.get("VVV", 0.0))
+                except Exception:
+                    pass
+
+            if vvv_price > 0:
+                vvv_decimals = 18
+                try:
+                    vvv_decimals = int(os.getenv("VVV_DECIMALS", "18"))
+                except Exception:
+                    pass
+                amount_vvv = float(amount_wei) / (10.0 ** vvv_decimals)
+                amount_usd = amount_vvv * vvv_price
+                if amount_usd < min_stake_usd:
+                    result["status"] = "skipped"
+                    result["errors"].append(f"amount {amount_usd:.2f} USD below minimum {min_stake_usd:.2f} USD")
+                    return result
+
+            gas_estimate = self._estimate_claim_cost()
+            if gas_estimate:
+                gas_usd = float(gas_estimate.get("gas_usd", 0.0))
+                if vvv_price > 0:
+                    vvv_decimals = 18
+                    try:
+                        vvv_decimals = int(os.getenv("VVV_DECIMALS", "18"))
+                    except Exception:
+                        pass
+                    amount_vvv = float(amount_wei) / (10.0 ** vvv_decimals)
+                    stake_usd = amount_vvv * vvv_price
+                    if gas_usd > 0 and stake_usd > 0 and gas_usd >= stake_usd * 0.1:
+                        result["status"] = "skipped"
+                        result["errors"].append(f"gas cost {gas_usd:.2f} USD exceeds 10% of stake value {stake_usd:.2f} USD")
+                        return result
+
+            try:
+                res = self.staking.stake(amount_wei)
+                result["status"] = "completed"
+                result["executed"] = True
+                result["tx"] = res
+                logger.info(f"Staked {amount_wei} VVV: {res}")
+                try:
+                    _emit_event(
+                        "staking.stake_vvv",
+                        {
+                            "status": res.get("status") if isinstance(res, dict) else "ok",
+                            "units": amount_wei,
+                            "reason": reason,
+                        },
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Stake execution failed: {exc}")
+                result["status"] = "error"
+                result["errors"].append(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("stake_vvv failed")
+            result["status"] = "error"
+            result["errors"].append(str(exc))
+
+        return result
+
     def _wallet_vvv_balance(self) -> Optional[int]:
         actions = getattr(self.staking, "actions", None)
         if actions is None:

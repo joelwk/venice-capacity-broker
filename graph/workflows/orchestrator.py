@@ -144,22 +144,34 @@ class Orchestrator:
                 import os as _os
 
                 if (_os.getenv("RISK_ENABLE_PORTFOLIO_CAP") or "false").strip().lower() in {"1", "true", "yes", "on"}:
-                    # Read inventory units from env (token base units)
-                    def _i(name: str) -> int:
-                        v = _os.getenv(name)
+                    # Try portfolio inventory service first, fallback to env vars
+                    inventory_usd: Optional[float] = None
+                    if hasattr(self, "portfolio_inventory") and self.portfolio_inventory is not None:
                         try:
-                            return int(v) if v is not None and str(v).strip() != "" else 0
+                            portfolio_snapshot = self.portfolio_inventory.snapshot(include_eth=False)
+                            inventory_usd = portfolio_snapshot.inventory_usd
                         except Exception:
-                            return 0
+                            pass
+                    
+                    # Fallback to env vars if portfolio service unavailable
+                    if inventory_usd is None or inventory_usd <= 0:
+                        def _i(name: str) -> int:
+                            v = _os.getenv(name)
+                            try:
+                                return int(v) if v is not None and str(v).strip() != "" else 0
+                            except Exception:
+                                return 0
 
-                    diem_u = _i("DIEM_INVENTORY_UNITS")
-                    vvv_u = _i("VVV_INVENTORY_UNITS")
-                    usdc_u = _i("USDC_INVENTORY_UNITS")
-                    # Use arbi.risk exposure calculation
-                    total_usd, _ = self.arbi.risk.exposure_usd(
-                        diem_units=diem_u, vvv_units=vvv_u, usdc_units=usdc_u, prices_usd=prices
-                    )
-                    current_inventory_usd = float(total_usd)
+                        diem_u = _i("DIEM_INVENTORY_UNITS")
+                        vvv_u = _i("VVV_INVENTORY_UNITS")
+                        usdc_u = _i("USDC_INVENTORY_UNITS")
+                        # Use arbi.risk exposure calculation
+                        total_usd, _ = self.arbi.risk.exposure_usd(
+                            diem_units=diem_u, vvv_units=vvv_u, usdc_units=usdc_u, prices_usd=prices
+                        )
+                        inventory_usd = float(total_usd)
+                    
+                    current_inventory_usd = inventory_usd
             except Exception:
                 current_inventory_usd = None
 
@@ -323,6 +335,7 @@ class SingleLoopOrchestrator:
     memory_store: Optional[Any] = None
     reflection: Optional[Any] = None
     reflex_guard: Optional[Any] = None
+    portfolio_inventory: Optional[Any] = None
 
     def __post_init__(self) -> None:
         self._last_listen_interval: Optional[float] = None
@@ -1019,23 +1032,36 @@ class SingleLoopOrchestrator:
         current_inventory_usd: Optional[float] = None
         if not dry_run and _env_flag("RISK_ENABLE_PORTFOLIO_CAP", False):
             try:
-                def _i(name: str) -> int:
-                    v = os.getenv(name)
+                # Try portfolio inventory service first, fallback to env vars
+                inventory_usd: Optional[float] = None
+                if hasattr(self, "portfolio_inventory") and self.portfolio_inventory is not None:
                     try:
-                        return int(v) if v is not None and str(v).strip() != "" else 0
+                        portfolio_snapshot = self.portfolio_inventory.snapshot(include_eth=False)
+                        inventory_usd = portfolio_snapshot.inventory_usd
                     except Exception:
-                        return 0
+                        pass
+                
+                # Fallback to env vars if portfolio service unavailable
+                if inventory_usd is None or inventory_usd <= 0:
+                    def _i(name: str) -> int:
+                        v = os.getenv(name)
+                        try:
+                            return int(v) if v is not None and str(v).strip() != "" else 0
+                        except Exception:
+                            return 0
 
-                diem_u = _i("DIEM_INVENTORY_UNITS")
-                vvv_u = _i("VVV_INVENTORY_UNITS")
-                usdc_u = _i("USDC_INVENTORY_UNITS")
-                total_usd, _ = self.arbi.risk.exposure_usd(
-                    diem_units=diem_u,
-                    vvv_units=vvv_u,
-                    usdc_units=usdc_u,
-                    prices_usd=prices,
-                )
-                current_inventory_usd = float(total_usd)
+                    diem_u = _i("DIEM_INVENTORY_UNITS")
+                    vvv_u = _i("VVV_INVENTORY_UNITS")
+                    usdc_u = _i("USDC_INVENTORY_UNITS")
+                    total_usd, _ = self.arbi.risk.exposure_usd(
+                        diem_units=diem_u,
+                        vvv_units=vvv_u,
+                        usdc_units=usdc_u,
+                        prices_usd=prices,
+                    )
+                    inventory_usd = float(total_usd)
+                
+                current_inventory_usd = inventory_usd
             except Exception:
                 current_inventory_usd = None
 
@@ -1278,6 +1304,26 @@ class SingleLoopOrchestrator:
         }
         if treasury_plan is not None:
             cycle_record["treasury"] = treasury_plan
+        
+        # Add portfolio inventory and broker utilization to cycle record
+        try:
+            if hasattr(self, "portfolio_inventory") and self.portfolio_inventory is not None:
+                portfolio_snapshot = self.portfolio_inventory.snapshot(include_eth=False)
+                cycle_record["portfolio"] = {
+                    "inventoryUsd": portfolio_snapshot.inventory_usd,
+                    "perAssetUsd": portfolio_snapshot.per_asset_usd,
+                    "address": portfolio_snapshot.address,
+                    "errors": portfolio_snapshot.errors,
+                }
+        except Exception:
+            pass
+        
+        # Extract broker utilization from capacity summary
+        broker_utilization = None
+        if isinstance(cap_summary, dict):
+            broker_utilization = cap_summary.get("utilization")
+        cycle_record["brokerUtilization"] = broker_utilization
+        
         cycle_record["agents"] = {
             "stake_master": stake_result,
             "arbi_diem": arbi_record,
