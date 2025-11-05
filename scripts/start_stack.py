@@ -43,12 +43,24 @@ def _is_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _wait_for_port(host: str, port: int, max_wait: float = 30.0, check_interval: float = 0.5) -> bool:
-    """Wait for a port to become open, returning True if it opens within max_wait seconds."""
+def _wait_for_port(
+    host: str,
+    port: int,
+    max_wait: float = 30.0,
+    check_interval: float = 0.5,
+    process: Optional[subprocess.Popen[str]] = None,
+) -> bool:
+    """
+    Wait for a port to become open, returning True if it opens within max_wait seconds.
+
+    Stops waiting early if the tracked process exits to avoid hanging on failed boots.
+    """
     deadline = time.time() + max_wait
     while time.time() < deadline:
         if _is_port_open(host, port, timeout=check_interval):
             return True
+        if process is not None and process.poll() is not None:
+            return False
         time.sleep(check_interval)
     return False
 
@@ -191,10 +203,20 @@ class ProcessManager:
                     wait_host = "::1"
 
                 print(f"[stack] waiting for broker API to bind to {broker_host}:{broker_port} (probe {wait_host})...", flush=True)
-                if _wait_for_port(wait_host, broker_port, max_wait=30.0):
+                raw_timeout = os.getenv("AUTOSTART_BROKER_WAIT_SECONDS") or os.getenv("BROKER_API_WAIT_SECONDS")
+                try:
+                    wait_seconds = float(raw_timeout) if raw_timeout is not None else 90.0
+                except ValueError:
+                    wait_seconds = 90.0
+
+                if _wait_for_port(wait_host, broker_port, max_wait=wait_seconds, process=proc):
                     print(f"[stack] broker API ready on {broker_host}:{broker_port}", flush=True)
                 else:
-                    print(f"[stack] warning: broker API {broker_host}:{broker_port} not ready after 30s, continuing anyway", flush=True)
+                    status = proc.poll()
+                    if status is not None:
+                        print(f"[stack] broker API process exited with code {status} before port {broker_host}:{broker_port} opened", flush=True)
+                    else:
+                        print(f"[stack] warning: broker API {broker_host}:{broker_port} not ready after {wait_seconds:.0f}s, continuing anyway", flush=True)
 
 
     def monitor(self) -> None:
