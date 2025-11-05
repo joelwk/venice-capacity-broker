@@ -5,6 +5,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -85,6 +86,21 @@ def _refresh_pool_catalog(uv_bin: Optional[str]) -> None:
         print(f"[stack] pool catalog refresh failed (exit={exc.returncode}); continuing startup", flush=True)
     except Exception as exc:  # noqa: BLE001
         print(f"[stack] pool catalog refresh raised {exc}; continuing startup", flush=True)
+
+
+def _refresh_pool_catalog_async(uv_bin: Optional[str]) -> None:
+    if not _truthy("MARKET_POOLS_REFRESH", True):
+        return
+
+    def runner() -> None:
+        print("[stack] refreshing pool catalog in background...", flush=True)
+        try:
+            _refresh_pool_catalog(uv_bin)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[stack] async pool catalog refresh raised {exc}; continuing startup", flush=True)
+
+    thread = threading.Thread(target=runner, name="pool-refresh", daemon=True)
+    thread.start()
 
 
 def build_command_specs(uv_bin: Optional[str] | None = None) -> List[CommandSpec]:
@@ -226,7 +242,7 @@ def main() -> None:
         sys.exit(2)
 
     uv_bin = _detect_uv()
-    _refresh_pool_catalog(uv_bin)
+    _refresh_pool_catalog_async(uv_bin)
     specs = build_command_specs()
     if not specs:
         print("[stack] no processes configured. Enable AUTOSTART_* env vars to launch components.")
