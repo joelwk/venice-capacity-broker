@@ -100,7 +100,13 @@ def test_single_loop_quorum_blocks_actions(monkeypatch):
             **kwargs,
         ) -> bool:
             self.calls.append({"simulate": simulate})
-            self._last_rationale = {"decision": "mint_sell"}
+            self._last_rationale = {
+                "decision": "mint_sell",
+                "desired_units": 1_000,
+                "suggested_units": 1_000,
+                "portfolioAdjustedUnits": 1_000,
+                "current_inventory_usd": 1000.0,
+            }
             return True
 
     class FakeQuorum:

@@ -14,6 +14,11 @@ def test_arbi_diem_includes_portfolio_caps_in_rationale(monkeypatch):
     monkeypatch.setenv("RISK_ENABLE_PORTFOLIO_CAP", "1")
     
     mock_aggregator = MagicMock()
+    mock_quote = MagicMock()
+    mock_quote.amount_in = 1_000_000
+    mock_quote.amount_out = 950_000
+    mock_aggregator.best_quote.return_value = mock_quote
+    mock_aggregator.trade_best_exact_out = MagicMock(return_value={"status": "ok"})
     mock_diem = DIEMService(aggregator=mock_aggregator)
     arbi = ArbiDiem(diem=mock_diem, risk=RiskPolicy.from_env())
     

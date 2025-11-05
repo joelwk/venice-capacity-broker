@@ -7,8 +7,14 @@ from unittest.mock import MagicMock
 from services.treasury.recycle import recycle_profits_to_stake
 
 
-def test_recycle_profits_dry_run():
+def _seed_tokens(monkeypatch) -> None:
+    monkeypatch.setenv("QUOTE_TOKEN_ADDRESS", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setenv("VVV_TOKEN_ADDRESS", "0x0000000000000000000000000000000000000002")
+
+
+def test_recycle_profits_dry_run(monkeypatch):
     """Test profit recycling in dry-run mode."""
+    _seed_tokens(monkeypatch)
     mock_aggregator = MagicMock()
     mock_quote = MagicMock()
     mock_quote.amount_out = 1_000_000_000_000_000_000  # 1 VVV
@@ -32,8 +38,9 @@ def test_recycle_profits_dry_run():
     assert mock_stake_master.stake_vvv.called is False
 
 
-def test_recycle_profits_skips_below_minimum():
+def test_recycle_profits_skips_below_minimum(monkeypatch):
     """Test that recycling skips when amount is below minimum."""
+    _seed_tokens(monkeypatch)
     mock_aggregator = MagicMock()
     mock_stake_master = MagicMock()
     
@@ -52,8 +59,9 @@ def test_recycle_profits_skips_below_minimum():
     assert "below minimum" in " ".join(result["errors"]).lower()
 
 
-def test_recycle_profits_skips_when_no_quote():
+def test_recycle_profits_skips_when_no_quote(monkeypatch):
     """Test that recycling skips when no quote available."""
+    _seed_tokens(monkeypatch)
     mock_aggregator = MagicMock()
     mock_aggregator.best_quote.return_value = None
     

@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from agents.capacity_broker.agent import CapacityBroker
 from services.venice_keys.manager import KeyManager
 
 
-def test_broker_pricing_hysteresis():
+def test_broker_pricing_hysteresis(monkeypatch):
     """Test that broker pricing uses hysteresis to prevent oscillation."""
-    os.environ["BROKER_UTIL_TARGET"] = "0.65"
-    os.environ["BROKER_HYSTERESIS_WINDOW"] = "0.05"
-    os.environ["BROKER_PRICE_STEP_BPS"] = "50"
+    monkeypatch.setenv("BROKER_UTIL_TARGET", "0.65")
+    monkeypatch.setenv("BROKER_HYSTERESIS_WINDOW", "0.05")
+    monkeypatch.setenv("BROKER_PRICE_STEP_BPS", "50")
+    monkeypatch.delenv("BROKER_UTIL_SURGE_THRESHOLD", raising=False)
     
     mock_keys = MagicMock(spec=KeyManager)
     broker = CapacityBroker(keys=mock_keys)
@@ -37,11 +38,12 @@ def test_broker_pricing_hysteresis():
     assert abs(price2 - price1) < price1 * 0.1  # Within 10%
 
 
-def test_broker_pricing_stepwise_adjustment():
+def test_broker_pricing_stepwise_adjustment(monkeypatch):
     """Test that broker pricing adjusts stepwise."""
-    os.environ["BROKER_UTIL_TARGET"] = "0.65"
-    os.environ["BROKER_PRICE_STEP_BPS"] = "50"
-    os.environ["BROKER_BASE_PRICE_USD"] = "1.0"
+    monkeypatch.setenv("BROKER_UTIL_TARGET", "0.65")
+    monkeypatch.setenv("BROKER_PRICE_STEP_BPS", "50")
+    monkeypatch.setenv("BROKER_BASE_PRICE_USD", "1.0")
+    monkeypatch.setenv("BROKER_UTIL_SURGE_THRESHOLD", "0.75")
     
     mock_keys = MagicMock(spec=KeyManager)
     broker = CapacityBroker(keys=mock_keys)
@@ -61,9 +63,36 @@ def test_broker_pricing_stepwise_adjustment():
     assert pricing["proposed"] < broker._last_price
 
 
-def test_broker_tracks_price_history():
+def test_broker_tracks_price_history(monkeypatch):
     """Test that broker tracks price history for rollback."""
+    monkeypatch.setenv("BROKER_BASE_PRICE_USD", "1.0")
+    monkeypatch.setenv("BROKER_PRICE_STEP_BPS", "50")
+    monkeypatch.setenv("BROKER_UTIL_TARGET", "0.65")
+    monkeypatch.setenv("BROKER_UTIL_SURGE_THRESHOLD", "0.80")
+    monkeypatch.setenv("BROKER_UTIL_RELAX_THRESHOLD", "0.40")
+    monkeypatch.setenv("BROKER_HYSTERESIS_WINDOW", "0.05")
+
     mock_keys = MagicMock(spec=KeyManager)
+    client = MagicMock()
+    client.config = SimpleNamespace(api_key="parent-key")
+
+    usage_iter = iter([70.0, 75.0, 65.0, 60.0])
+
+    def _usage():
+        try:
+            val = next(usage_iter)
+        except StopIteration:
+            val = 60.0
+        return {"dailyAverageDiem": val}
+
+    client.get_usage.side_effect = _usage
+    client.get_rate_limits.return_value = {
+        "data": [
+            {"consumptionLimit": {"diem": 100.0}, "expiresAt": "2099-01-01T00:00:00Z"}
+        ]
+    }
+    mock_keys.client = client
+
     broker = CapacityBroker(keys=mock_keys)
     
     # Run multiple cycles
