@@ -168,13 +168,17 @@ class ProcessManager:
                     broker_port = int(broker_port_str)
                 except ValueError:
                     broker_port = 8000
-                
-                # Wait up to 30 seconds for broker API to bind
-                print(f"[stack] waiting for broker API to bind to {broker_host}:{broker_port}...", flush=True)
-                if _wait_for_port("127.0.0.1", broker_port, max_wait=30.0):
-                    print(f"[stack] broker API ready on port {broker_port}", flush=True)
+                wait_host = broker_host
+                if wait_host in {"0.0.0.0", "", None}:
+                    wait_host = "127.0.0.1"
+                elif wait_host == "::":
+                    wait_host = "::1"
+
+                print(f"[stack] waiting for broker API to bind to {broker_host}:{broker_port} (probe {wait_host})...", flush=True)
+                if _wait_for_port(wait_host, broker_port, max_wait=30.0):
+                    print(f"[stack] broker API ready on {broker_host}:{broker_port}", flush=True)
                 else:
-                    print(f"[stack] warning: broker API port {broker_port} not ready after 30s, continuing anyway", flush=True)
+                    print(f"[stack] warning: broker API {broker_host}:{broker_port} not ready after 30s, continuing anyway", flush=True)
 
 
     def monitor(self) -> None:

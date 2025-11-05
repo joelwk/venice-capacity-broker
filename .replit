@@ -10,7 +10,7 @@ QUOTES_ENABLED = "true"
 PURCHASES_ENABLED = "true"
 REFLEX_ALLOW_INACTIVE_STAKE = "1"
 AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY = "1"
-# AUTOSTART_BROKER_PORT set dynamically from $PORT by scripts/run_stack_entry.sh
+# AUTOSTART_BROKER_PORT set dynamically from $REPLIT_SERVER_PORT/$PORT by scripts/run_stack_entry.sh
 
 [[runnable]]
 name = "Stack (dry-run)"
@@ -60,4 +60,3 @@ args = "bash scripts/replit_run.sh live"
 
 [agent]
 expertMode = true
-

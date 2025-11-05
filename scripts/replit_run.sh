@@ -8,7 +8,10 @@ if [[ "$MODE" != "dry" && "$MODE" != "live" ]]; then
 fi
 
 export RUN_STACK_MODE="$MODE"
-export AUTOSTART_BROKER_PORT="${AUTOSTART_BROKER_PORT:-${PORT:-8000}}"
+REPLIT_HTTP_PORT="${REPLIT_SERVER_PORT:-${PORT:-8000}}"
+REPLIT_HTTP_HOST="${REPLIT_SERVER_HOST:-0.0.0.0}"
+export AUTOSTART_BROKER_PORT="${AUTOSTART_BROKER_PORT:-$REPLIT_HTTP_PORT}"
+export AUTOSTART_BROKER_HOST="${AUTOSTART_BROKER_HOST:-$REPLIT_HTTP_HOST}"
 
 # Shared runtime defaults; allow external overrides when present.
 export CORS_ENABLED="${CORS_ENABLED:-true}"
