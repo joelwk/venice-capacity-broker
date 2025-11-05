@@ -28,6 +28,7 @@ dependencies = [
   "python-dotenv>=1.0",
   "web3>=6.15",
   "eth-account>=0.10",
+  "pycryptodome>=3.18",
 ]
 
 [project.urls]
