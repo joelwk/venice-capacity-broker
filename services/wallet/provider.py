@@ -4,8 +4,25 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol
 
-from libs.agentkit_ext.agentkit_wallet import get_agentkit_wallet
 from libs.agentkit_ext.web3_utils import build_eip1559_tx, get_contract, get_web3
+
+try:
+    from libs.agentkit_ext.agentkit_wallet import get_agentkit_wallet as _agentkit_wallet_factory
+except ModuleNotFoundError as exc:  # noqa: BLE001
+    _agentkit_wallet_factory = None
+    _AGENTKIT_IMPORT_ERROR = exc
+else:
+    _AGENTKIT_IMPORT_ERROR = None
+
+
+def get_agentkit_wallet():
+    """Proxy to the AgentKit wallet factory with a helpful fallback."""
+
+    if _agentkit_wallet_factory is None:
+        raise ModuleNotFoundError(
+            "coinbase-agentkit wallet provider unavailable; install dependencies or set WALLET_PROVIDER stubs"
+        ) from _AGENTKIT_IMPORT_ERROR
+    return _agentkit_wallet_factory()
 
 
 class WalletError(Exception):
@@ -26,7 +43,10 @@ class TransactionSigner(Protocol):
 
 
 def _to_checksum(address: str) -> str:
-    from web3 import Web3  # type: ignore
+    try:
+        from web3 import Web3  # type: ignore
+    except ModuleNotFoundError as exc:  # noqa: BLE001
+        raise WalletError("web3 is required for address normalization") from exc
 
     try:
         return Web3.to_checksum_address(address)

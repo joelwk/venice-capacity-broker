@@ -1161,6 +1161,8 @@ class MarketDataProvider:
 
     def _ensure_warm_thread(self) -> None:
         cls = type(self)
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            return
         env_symbols = os.getenv("MARKETDATA_WARM_SYMBOLS", "")
         raw_symbols = [s.strip().upper() for s in env_symbols.split(",") if s.strip()]
         if not raw_symbols:
