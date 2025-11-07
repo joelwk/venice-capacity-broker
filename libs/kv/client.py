@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urljoin, quote
 import requests
+import logging
 
 # Optional env + metrics
 try:
@@ -49,10 +50,26 @@ class KVStore:
 		# Optional Redis backend for atomic counters
 		self.redis_url = os.getenv("REDIS_URL") or os.getenv("KV_REDIS_URL")
 		self._redis = None
+		self._last_backend_error: Optional[str] = None
 
 		# Enforce durable backend in production
 		if is_production() and not (self.redis_url or self.base_url):
 			raise RuntimeError("Production requires durable KV (REDIS_URL or REPLIT_DB_URL)")
+
+		self._logger = logging.getLogger("kv.store")
+
+	def _record_backend_error(self, source: str, error: Exception | None = None) -> None:
+		msg = source
+		if error:
+			msg = f"{source}: {error}"
+		self._last_backend_error = msg
+		try:
+			self._logger.debug("kv backend error: %s", msg)
+		except Exception:
+			pass
+
+	def _clear_backend_error(self) -> None:
+		self._last_backend_error = None
 
 	def _get_redis(self):
 		if not self.redis_url:
@@ -96,7 +113,8 @@ class KVStore:
 	# --- In-memory fallback implementation ---
 	def _ensure_inmem_allowed(self) -> None:
 		if is_production() or not env_flag("ALLOW_INMEMORY_KV_FALLBACK", False):
-			raise RuntimeError("In-memory KV fallback disabled; configure REDIS_URL or REPLIT_DB_URL")
+			detail = self._last_backend_error or "configure REDIS_URL or REPLIT_DB_URL"
+			raise RuntimeError(f"In-memory KV fallback disabled; {detail}")
 
 	def _mem_get(self, key: str) -> Optional[str]:
 		self._ensure_inmem_allowed()
@@ -137,9 +155,11 @@ class KVStore:
 		r = self._get_redis()
 		if r is not None:
 			try:
-				return r.get(k)
-			except Exception:
-				pass
+				value = r.get(k)
+				self._clear_backend_error()
+				return value
+			except Exception as exc:
+				self._record_backend_error("redis get failed", exc)
 		if self.base_url:
 			# Best-effort remote get; support simple Replit DB style API
 			try:
@@ -178,12 +198,15 @@ class KVStore:
 					headers=headers,
 				)
 				if r.status_code == 404:
+					self._clear_backend_error()
 					return None
 				if r.ok:
+					self._clear_backend_error()
 					return r.text
-			except Exception:
+				r.raise_for_status()
+			except Exception as exc:
 				# fall back to in-mem on network errors
-				pass
+				self._record_backend_error("http get failed", exc)
 		return self._mem_get(k)
 
 	def set(self, key: str, value: Any, ttl_s: Optional[int] = None) -> None:
@@ -195,9 +218,10 @@ class KVStore:
 					r.set(k, str(value), ex=int(ttl_s))
 				else:
 					r.set(k, str(value))
+				self._clear_backend_error()
 				return
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("redis set failed", exc)
 		if self.base_url:
 			try:
 				# Replit DB: PUT /key with raw body
@@ -220,9 +244,10 @@ class KVStore:
 					)
 					if not exp_resp.ok:
 						exp_resp.raise_for_status()
+				self._clear_backend_error()
 				return
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("http set failed", exc)
 		self._mem_set(k, value, ttl_s)
 
 	def incrby(self, key: str, by: int = 1, ttl_s: Optional[int] = None) -> int:
@@ -237,9 +262,10 @@ class KVStore:
 				new_v, cur_ttl = pipe.execute()
 				if ttl_s and ttl_s > 0 and (cur_ttl is None or int(cur_ttl) < 0):
 					r.expire(k, int(ttl_s))
+				self._clear_backend_error()
 				return int(new_v)
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("redis incrby failed", exc)
 		if self.base_url:
 			# Not atomic on Replit DB; best-effort read-modify-write
 			try:
@@ -250,9 +276,10 @@ class KVStore:
 					cur_v = 0
 				new_v = cur_v + int(by)
 				self.set(key, new_v, ttl_s=ttl_s)
+				self._clear_backend_error()
 				return new_v
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("http incrby failed", exc)
 		return self._mem_incrby(k, by, ttl_s)
 
 	def delete(self, key: str) -> None:
@@ -261,9 +288,10 @@ class KVStore:
 		if r is not None:
 			try:
 				r.delete(k)
+				self._clear_backend_error()
 				return
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("redis delete failed", exc)
 		if self.base_url:
 			try:
 				requests.delete(
@@ -271,8 +299,9 @@ class KVStore:
 					timeout=3,
 					headers=self._request_headers() or None,
 				)
-			except Exception:
-				pass
+				self._clear_backend_error()
+			except Exception as exc:
+				self._record_backend_error("http delete failed", exc)
 		with self._lock:
 			self._mem.pop(k, None)
 
@@ -298,9 +327,10 @@ class KVStore:
 					# Strip namespace/prefix to return logical keys
 					logical = k_str[len(self._k("")) :] if k_str.startswith(self._k("")) else k_str
 					out.append(logical)
+				self._clear_backend_error()
 				return out
-			except Exception:
-				pass
+			except Exception as exc:
+				self._record_backend_error("redis keys failed", exc)
 
 		# Replit DB style HTTP
 		if self.base_url:
@@ -320,9 +350,11 @@ class KVStore:
 							k_str = str(k)
 							logical = k_str[len(self._k("")) :] if k_str.startswith(self._k("")) else k_str
 							out.append(logical)
+						self._clear_backend_error()
 						return out
-			except Exception:
-				pass
+				r.raise_for_status()
+			except Exception as exc:
+				self._record_backend_error("http keys failed", exc)
 
 		# In-memory fallback (dev-only)
 		self._ensure_inmem_allowed()
