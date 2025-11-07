@@ -34,6 +34,7 @@ _ENGINE_ATTEMPTS: List[Dict[str, Any]] = []
 _ENGINE_CACHE: Any = None
 _ENGINE_CACHE_KEY: Any = None
 _SESSION_FACTORY: Any = None
+_OPTIONAL_SQLMODEL_WARNED = False
 
 
 def get_engine_attempts() -> List[Dict[str, Any]]:
@@ -293,7 +294,7 @@ def _cache_key(url: str, kwargs: Dict[str, Any]) -> Any:
 
 
 def get_engine():
-	global _ENGINE_CACHE, _ENGINE_CACHE_KEY
+	global _ENGINE_CACHE, _ENGINE_CACHE_KEY, _OPTIONAL_SQLMODEL_WARNED
 
 	_reset_engine_attempts()
 	echo = (os.getenv("DATABASE_ECHO") or "false").strip().lower() == "true"
@@ -301,16 +302,18 @@ def get_engine():
 	raw_url = _db_url(add_connect_timeout=False)
 	is_sqlite = _is_sqlite(raw_url)
 	placeholder = _looks_like_placeholder(raw_url)
+	production = is_production()
+	allow_sqlite = env_flag("ALLOW_SQLITE_FALLBACK", False)
 
 	# Enforce Postgres in production; forbid placeholders and SQLite unless explicitly allowed in dev/test
-	if is_production():
+	if production:
 		if placeholder or is_sqlite:
 			logger.critical("Production requires Postgres: url=%s placeholder=%s sqlite=%s", raw_url, placeholder, is_sqlite)
 			_metrics_inc("sql_connect_errors_total", labels={"reason": "prod_sqlite_or_placeholder"})
 			raise RuntimeError("Production requires Postgres (non-placeholder DSN); SQLite/placeholder not allowed")
 	else:
 		# Non-production: allow SQLite only when explicitly enabled
-		if is_sqlite and not env_flag("ALLOW_SQLITE_FALLBACK", False):
+		if is_sqlite and not allow_sqlite:
 			logger.warning("SQLite URL detected but ALLOW_SQLITE_FALLBACK is false; raising to avoid silent drift")
 			raise RuntimeError("SQLite backend disallowed without ALLOW_SQLITE_FALLBACK")
 		if placeholder and not is_sqlite:
@@ -319,7 +322,15 @@ def get_engine():
 	url = raw_url if is_sqlite else _with_connect_timeout(raw_url)
 	kwargs: Dict[str, Any] = {"echo": echo}
 
-	_ensure_sqlmodel()
+	try:
+		_ensure_sqlmodel()
+	except RuntimeError as exc:
+		if is_sqlite and not production and allow_sqlite:
+			if not _OPTIONAL_SQLMODEL_WARNED:
+				logger.warning("sqlmodel/sqlalchemy not installed; continuing with SQLite fallback only: %s", exc)
+				_OPTIONAL_SQLMODEL_WARNED = True
+		else:
+			raise
 
 	if is_sqlite:
 		kwargs.update(_sqlite_connect_kwargs())
@@ -355,7 +366,7 @@ def get_engine():
 	except ModuleNotFoundError as exc:
 		message = str(exc).lower()
 		if "psycopg2" in message and not is_sqlite:
-			if is_production() or not env_flag("ALLOW_SQLITE_FALLBACK", False):
+			if production or not allow_sqlite:
 				logger.critical("psycopg2 missing and fallback disallowed; refusing to start")
 				_metrics_inc("sql_connect_errors_total", labels={"reason": "psycopg_missing"})
 				raise
@@ -367,7 +378,7 @@ def get_engine():
 		raise
 	except Exception:
 		if not is_sqlite:
-			if is_production() or not env_flag("ALLOW_SQLITE_FALLBACK", False):
+			if production or not allow_sqlite:
 				logger.critical("database connection failed; fallback disallowed; refusing to start", exc_info=True)
 				_metrics_inc("sql_connect_errors_total", labels={"reason": "connect_failed"})
 				raise
