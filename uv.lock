@@ -3135,6 +3135,7 @@ name = "venice-capacity-broker"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "alembic" },
     { name = "eth-account" },
     { name = "fastapi" },
     { name = "pycryptodome" },
@@ -3186,6 +3187,7 @@ web3 = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.12" },
     { name = "alembic", marker = "extra == 'broker'", specifier = ">=1.12" },
     { name = "alembic", marker = "extra == 'dev'", specifier = ">=1.12" },
     { name = "cdp-sdk", marker = "extra == 'agentkit'", specifier = ">=0.10" },

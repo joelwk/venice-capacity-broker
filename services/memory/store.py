@@ -145,7 +145,7 @@ class MemoryStore:
 	# ------------------------------------------------------------------
 	def _record_sql(self, entry: Dict[str, Any]) -> None:
 		# Lazy imports to avoid hard deps for non-SQL paths
-		from datetime import datetime, timezone, timedelta
+		from datetime import datetime, timezone
 		from uuid import uuid4
 		from sqlmodel import Session
 		from db.session import get_engine
@@ -182,7 +182,6 @@ class MemoryStore:
 
 	def _prune_sql_retention(self, session) -> None:  # type: ignore[no-untyped-def]
 		from datetime import datetime, timezone, timedelta
-		from sqlmodel import select
 		from db.models import AgentMemory
 		import sqlalchemy as sa  # type: ignore
 

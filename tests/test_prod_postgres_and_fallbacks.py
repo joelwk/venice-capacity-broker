@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import importlib
-import contextlib
 import pytest
 
 

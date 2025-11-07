@@ -41,7 +41,7 @@ except ImportError:
 try:
 	from . import lifespan as lifespan_module
 	from . import marketdata, rate_limit
-	from libs.telemetry.metrics import render_prom as _metrics_render  # type: ignore
+	from .services import bids as bids_helpers, clearing as clearing_helpers, pricing as pricing_helpers
 except ImportError:
 	# Fallback for direct module loading (e.g., in tests)
 	import sys
@@ -51,7 +51,13 @@ except ImportError:
 		sys.path.insert(0, str(broker_api_path.parent.parent))
 	from apps.broker_api import lifespan as lifespan_module
 	from apps.broker_api import marketdata, rate_limit
+	from apps.broker_api.services import bids as bids_helpers, clearing as clearing_helpers, pricing as pricing_helpers
+
+try:
 	from libs.telemetry.metrics import render_prom as _metrics_render  # type: ignore
+except Exception:  # pragma: no cover
+	def _metrics_render(prefix: str = "vvv") -> str:  # type: ignore
+		return ""
 
 logger = logging.getLogger("broker.api")
 
@@ -163,11 +169,10 @@ def create_app() -> FastAPI:
 	@app.get("/metrics", include_in_schema=False)
 	def metrics() -> PlainTextResponse:
 		try:
-			from libs.telemetry.metrics import render_prom as _render  # type: ignore
-		except Exception:
-			def _render(prefix: str = "vvv") -> str:  # type: ignore
-				return ""
-		return PlainTextResponse(_render())
+			return PlainTextResponse(_metrics_render())
+		except Exception as exc:  # noqa: BLE001
+			logger.warning("metrics render failed: %s", exc)
+			return PlainTextResponse("")
 	
 	# Wire all routers
 	_wire_routers(app, deps)
