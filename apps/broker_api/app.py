@@ -20,6 +20,49 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+# Ensure repository root is on sys.path for auxiliary imports (mirrors CLI entrypoint).
+try:
+	from apps._path import REPO_ROOT
+except Exception:  # pragma: no cover - fallback for direct module execution
+	REPO_ROOT = Path(__file__).resolve().parents[1]
+
+def _load_runtime_env() -> None:
+	"""Best-effort loading of repo-level dotenv files for API runtime.
+
+	Replit Deployments and bare uvicorn launches do not automatically populate os.environ
+	with values from .env/.env.docker, so we mirror the CLI bootstrap logic here.
+	"""
+
+	if os.getenv("DISABLE_RUNTIME_DOTENV"):
+		return
+
+	docker_env = REPO_ROOT / ".env.docker"
+	local_env = REPO_ROOT / "docker" / ".env.local"
+
+	try:
+		from libs.env import load_dotenv_if_present  # type: ignore
+	except Exception:
+		try:
+			from dotenv import load_dotenv
+		except Exception:
+			return
+
+		load_dotenv(dotenv_path=str(REPO_ROOT / ".env"), override=False)
+		if docker_env.exists():
+			load_dotenv(dotenv_path=str(docker_env), override=True)
+		if local_env.exists():
+			load_dotenv(dotenv_path=str(local_env), override=True)
+		return
+
+	load_dotenv_if_present(path=str(REPO_ROOT / ".env"), override=False)
+	if docker_env.exists():
+		load_dotenv_if_present(path=str(docker_env), override=True)
+	if local_env.exists():
+		load_dotenv_if_present(path=str(local_env), override=True)
+
+
+_load_runtime_env()
+
 if TYPE_CHECKING:
 	from typing import Any
 
