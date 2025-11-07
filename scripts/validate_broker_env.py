@@ -14,6 +14,7 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+from urllib.parse import urlparse
 
 # Ensure repo root is importable when executed as a script (`python scripts/...`).
 CURRENT_FILE = Path(__file__).resolve()
@@ -160,6 +161,29 @@ def record_stage_check(
 ) -> None:
     for stage in stages:
         stage_checks.setdefault(stage, []).append(StageCheck(name=name, ok=ok, detail=detail))
+
+
+def _is_placeholder_replit_kv_url(url: str) -> bool:
+    """Detect Replit KV URLs that are missing the signed token segment.
+
+    Valid Replit DB URLs look like: https://kv.replit.com/v0/<token>
+    Anything that stops at /v0/ or lacks a second path segment cannot authenticate.
+    """
+    if not url:
+        return True
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return True
+    host = (parsed.netloc or "").strip().lower()
+    if host not in {"kv.replit.com"}:
+        return False
+    segments = [seg for seg in parsed.path.strip("/").split("/") if seg]
+    if not segments:
+        return True
+    if segments[0] != "v0":
+        return False
+    return len(segments) < 2
 
 
 # --- Helpers: SQL connectivity & Alembic head detection ---
@@ -372,14 +396,29 @@ def validate_env() -> Dict[str, Any]:
 
     redis_stages = ("core_infra", "broker_api", "orchestrator_dry_run", "orchestrator_live", "token_watcher")
     redis_url = env_value("REDIS_URL") or env_value("KV_REDIS_URL")
-    kv_fallback_url = env_value("KV_URL") or env_value("REPLIT_DB_URL")
+    kv_url = env_value("KV_URL")
+    replit_db_url = env_value("REPLIT_DB_URL")
+    kv_placeholder_reason: str | None = None
+    kv_fallback_url = ""
+
+    if replit_db_url:
+        if _is_placeholder_replit_kv_url(replit_db_url):
+            kv_placeholder_reason = "REPLIT_DB_URL missing /v0/<token>"
+        else:
+            kv_fallback_url = replit_db_url
+    elif kv_url:
+        if _is_placeholder_replit_kv_url(kv_url):
+            kv_placeholder_reason = "KV_URL points to https://kv.replit.com/v0/ without token"
+        else:
+            kv_fallback_url = kv_url
 
     if redis_url:
         record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", True)
     elif kv_fallback_url:
         record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", True, "kv fallback")
     else:
-        record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", False, "missing")
+        detail = kv_placeholder_reason or "missing"
+        record_stage_check(stage_checks, redis_stages, "REDIS_URL configured", False, detail)
         add_issue(
             issues,
             severity="high",
@@ -394,6 +433,23 @@ def validate_env() -> Dict[str, Any]:
                 "key": "REDIS_URL",
                 "value": "redis://redis:6379/0",
                 "reason": "REDIS_URL is not configured",
+            }
+        )
+    if kv_placeholder_reason:
+        add_issue(
+            issues,
+            severity="high",
+            category="storage",
+            message="Replit KV URL is a placeholder",
+            impact="Requests hit https://kv.replit.com/v0/ without the signed token and return 403, so StakeMaster cannot send heartbeats or enforce rate limits.",
+            remediation="Set REPLIT_DB_URL to the full value from `echo $REPLIT_DB_URL` (includes /v0/<token>) or provide REDIS_URL/KV_REDIS_URL.",
+            affects=redis_stages,
+        )
+        suggestions.append(
+            {
+                "key": "REPLIT_DB_URL",
+                "value": "<copy-from-echo-$REPLIT_DB_URL>",
+                "reason": kv_placeholder_reason,
             }
         )
 
