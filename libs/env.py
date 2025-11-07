@@ -6,18 +6,18 @@ from typing import Optional
 
 
 def load_dotenv_if_present(path: Optional[str] = None, override: bool = False) -> bool:
-	"""Load a .env file into os.environ if present.
+    """Load a .env file into os.environ if present.
 
-	- Uses python-dotenv when installed.
+    - Uses python-dotenv when installed.
     - Falls back to a tiny parser supporting KEY=VALUE and `export KEY=VALUE`.
     - Ignores comments and blank lines.
-	- Returns True if a file was found and parsed (even if no vars changed).
-	- Does not override existing vars unless `override=True`.
-	"""
-	if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("DISABLE_DOTENV"):
-		return False
+    - Returns True if a file was found and parsed (even if no vars changed).
+    - Does not override existing vars unless `override=True`.
+    """
+    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("DISABLE_DOTENV"):
+        return False
 
-	dotenv_path = Path(path or ".env").resolve()
+    dotenv_path = Path(path or ".env").resolve()
 
     # Prefer python-dotenv if available
     try:
