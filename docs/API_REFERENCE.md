@@ -48,6 +48,8 @@ All endpoints follow RESTful conventions with JSON request/response bodies.
 
 ### Environment Variables
 
+For the canonical environment list and mode toggles, see `docs/CONFIGURATION.md`.
+
 ```python
 VENICE_API_BASE_URL=https://api.venice.ai/api/v1  # Required
 VENICE_API_KEY=sk-...                              # Parent key for subkey creation

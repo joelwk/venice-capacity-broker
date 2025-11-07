@@ -1,32 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="${1:-dry}"
-if [[ "$MODE" != "dry" && "$MODE" != "live" ]]; then
-  echo "Usage: $0 [dry|live]" >&2
-  exit 1
+mode="${1:-dry}"
+
+# Ensure prestart tasks on Replit (migrations + env validation)
+if [ -f "scripts/replit_prestart.sh" ]; then
+	bash scripts/replit_prestart.sh
 fi
 
-export RUN_STACK_MODE="$MODE"
-REPLIT_HTTP_PORT="${REPLIT_SERVER_PORT:-${PORT:-8000}}"
-REPLIT_HTTP_HOST="${REPLIT_SERVER_HOST:-0.0.0.0}"
-export AUTOSTART_BROKER_PORT="${AUTOSTART_BROKER_PORT:-$REPLIT_HTTP_PORT}"
-export AUTOSTART_BROKER_HOST="${AUTOSTART_BROKER_HOST:-$REPLIT_HTTP_HOST}"
+# Derive APP_ENV=production for Replit Deployments
+export APP_ENV="production"
 
-# Shared runtime defaults; allow external overrides when present.
-export CORS_ENABLED="${CORS_ENABLED:-true}"
-export CORS_ALLOW_ORIGINS="${CORS_ALLOW_ORIGINS:-https://capacity-broker.replit.app}"
-export QUOTES_ENABLED="${QUOTES_ENABLED:-true}"
-export PURCHASES_ENABLED="${PURCHASES_ENABLED:-true}"
-export REFLEX_ALLOW_INACTIVE_STAKE="${REFLEX_ALLOW_INACTIVE_STAKE:-1}"
-export AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY="${AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY:-1}"
-
-if [[ "$MODE" == "live" ]]; then
-  export AUTOSTART_ORCHESTRATOR_LIVE=1
-  export AUTOSTART_STAKEMASTER_LIVE=1
+# Decide stack process set
+if [ "$mode" = "live" ]; then
+	# Start broker API and orchestrator live
+	exec bash -lc "uvicorn apps.broker_api.app:app --host 0.0.0.0 --port \\${AUTOSTART_BROKER_PORT:-8000} & python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 --enable-live & wait"
 else
-  export AUTOSTART_ORCHESTRATOR_LIVE=0
-  export AUTOSTART_STAKEMASTER_LIVE=0
+	# Dry-run (no on-chain actions)
+	exec bash -lc "uvicorn apps.broker_api.app:app --host 0.0.0.0 --port \\${AUTOSTART_BROKER_PORT:-8000} & python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 --dry-run & wait"
 fi
-
-exec bash scripts/run_stack_entry.sh

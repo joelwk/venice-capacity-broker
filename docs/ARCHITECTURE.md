@@ -202,20 +202,7 @@ Five specialized models vote on agent decisions:
 
 ### Run Modes
 
-- **Dry-run** (default) - Safe simulation
-- **Progressive-live** - Staged rollout after healthy cycles
-- **Enable-live** - Immediate execution
-
-```bash
-# Dry-run
-uv run python apps/cli/main.py run:loop --sleep 15
-
-# Progressive (recommended)
-uv run python apps/cli/main.py run:loop --progressive-live
-
-# Immediate live
-uv run python apps/cli/main.py run:loop --enable-live
-```
+See `docs/DEPLOYMENT.md` for the canonical commands and guidance on dry-run, progressive-live, and enable-live.
 
 ## Key Services
 
@@ -259,50 +246,18 @@ uv run python apps/cli/main.py run:loop --enable-live
 
 ## Deployment
 
-### Docker Compose
+Deployment steps, environment layering, and post-deploy checks have moved to `docs/DEPLOYMENT.md`.
 
-```yaml
-services:
-  broker:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - BROKER_ADMIN_TOKEN
-      - VENICE_PARENT_KEY
-      - BASE_RPC_URL
-      
-  orchestrator:
-    build: .
-    command: ["python", "apps/cli/main.py", "run:loop", "--progressive-live"]
-    depends_on:
-      - broker
-```
-
-### Replit
-
-1. Import repository
-2. Add secrets via Secrets panel
-3. Click Run (auto-detects `.replit`)
-4. Deploy via Deployments panel
-
-### Environment Variables
-
-Critical settings:
-- `BROKER_ADMIN_TOKEN` - Admin authentication
-- `VENICE_PARENT_KEY` - Venice API parent key
-- `BASE_RPC_URL` - Base mainnet RPC
-- `VVV_TOKEN_ADDRESS` - VVV token contract
-- `DIEM_TOKEN_ADDRESS` - DIEM token contract
-- `TREASURY_ADDRESS` - Payment destination
+For a single source of truth on environment variables, see `docs/CONFIGURATION.md`.
 
 ## References
 
 ### Documentation
 
-- **Agent Implementation** - `docs/implementation-plan-agents.md`
-- **Broker Implementation** - `docs/implementation-plan-broker.md`
+- **Agent Implementation** - `docs/appendices/design/implementation-plan-agents.md`
+- **Broker Implementation** - `docs/appendices/design/implementation-plan-broker.md`
 - **Deployment Guide** - `docs/DEPLOYMENT.md`
+- **Configuration** - `docs/CONFIGURATION.md`
 - **Tokenomics** - `docs/venice-diem-tokenomics.md`
 - **Agent Catalog** - `AGENTS.md`
 - **Migration History** - `BROKER_MIGRATION.md`

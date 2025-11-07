@@ -14,6 +14,8 @@ It supersedes prior drafts where details conflict, but **v1 scope and stop-lines
 
 * Multi-agent architecture rationale and quorum design: `Autonomous Multi-Agent Architecture for VVV (Venice Token) on Base.pdf`.
 
+See also: `docs/CONFIGURATION.md`, `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md` for the canonical operator guides.
+
 ## WRITING STYLE
 
 * Each long sentence should be followed by **two newline characters**.

@@ -162,6 +162,55 @@ def record_stage_check(
         stage_checks.setdefault(stage, []).append(StageCheck(name=name, ok=ok, detail=detail))
 
 
+# --- Helpers: SQL connectivity & Alembic head detection ---
+
+def _sql_live_connection_ok() -> Tuple[bool, str | None]:
+    try:
+        from db.session import get_engine  # type: ignore
+        from sqlalchemy import text  # type: ignore
+        eng = get_engine()
+        with eng.connect() as c:
+            c.execute(text("SELECT 1"))
+        return True, None
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+def _alembic_head_revision() -> str | None:
+    versions_dir = REPO_ROOT / "db" / "migrations" / "versions"
+    if not versions_dir.exists():
+        return None
+    revs: list[str] = []
+    for p in versions_dir.glob("*.py"):
+        try:
+            text = p.read_text(encoding="utf-8")
+            m = re.search(r"revision\s*=\s*[\"']([^\"']+)[\"']", text)
+            if m:
+                revs.append(m.group(1).strip())
+        except Exception:
+            continue
+    if not revs:
+        return None
+    # Prefer max lexicographically which works for zero-padded numeric ids (e.g., 0001, 0002)
+    try:
+        return sorted(revs)[-1]
+    except Exception:
+        return revs[-1]
+
+
+def _alembic_db_revision() -> Tuple[str | None, str | None]:
+    try:
+        from db.session import get_engine  # type: ignore
+        eng = get_engine()
+        with eng.connect() as c:
+            # Try common alembic version table name
+            res = c.exec_driver_sql("SELECT version_num FROM alembic_version")
+            row = res.first()
+            return (row[0] if row else None), None
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
 def validate_env() -> Dict[str, Any]:
     issues: List[Issue] = []
     suggestions: List[Dict[str, str]] = []
@@ -278,6 +327,48 @@ def validate_env() -> Dict[str, Any]:
             )
         else:
             record_stage_check(stage_checks, STAGES.keys(), "Postgres backend in use", True)
+
+    # Live connection check
+    ok, err = _sql_live_connection_ok()
+    record_stage_check(stage_checks, STAGES.keys(), "Postgres live connection", ok, None if ok else str(err or "failed"))
+    if not ok:
+        add_issue(
+            issues,
+            severity="critical",
+            category="storage",
+            message="Database connection failed (SELECT 1)",
+            impact="Production must not start without a live Postgres connection",
+            remediation="Verify SQL_DATABASE_URL credentials and network; ensure Postgres reachable",
+            affects=tuple(STAGES.keys()),
+        )
+
+    # Alembic head consistency
+    head = _alembic_head_revision()
+    db_rev, db_err = _alembic_db_revision()
+    if head and db_rev:
+        match = head == db_rev
+        record_stage_check(stage_checks, STAGES.keys(), "Migrations at head", match, None if match else f"db={db_rev} head={head}")
+        if not match:
+            add_issue(
+                issues,
+                severity="high",
+                category="storage",
+                message="Alembic migrations are out of date",
+                impact="Schema drift can break persistence and queries; upgrade required",
+                remediation="Run: alembic upgrade head",
+                affects=tuple(STAGES.keys()),
+            )
+    elif head and not db_rev:
+        record_stage_check(stage_checks, STAGES.keys(), "Migrations at head", False, str(db_err or "missing alembic_version"))
+        add_issue(
+            issues,
+            severity="high",
+            category="storage",
+            message="Database missing alembic_version or unreadable",
+            impact="Migrations not applied; tables may be missing",
+            remediation="Run: alembic upgrade head",
+            affects=tuple(STAGES.keys()),
+        )
 
     redis_stages = ("core_infra", "broker_api", "orchestrator_dry_run", "orchestrator_live", "token_watcher")
     redis_url = env_value("REDIS_URL") or env_value("KV_REDIS_URL")

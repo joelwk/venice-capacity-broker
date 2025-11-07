@@ -15,6 +15,7 @@ uvicorn
 # Database (enable SQL-backed broker store)
 sqlmodel>=0.0.14
 psycopg2-binary>=2.9
+alembic>=1.12
 # Optional KV + tracing
 redis>=5.0
 langsmith>=0.1.38

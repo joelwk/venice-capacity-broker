@@ -34,7 +34,7 @@ def load_dotenv_if_present(path: Optional[str] = None, override: bool = False) -
                 if not line or line.startswith("#"):
                     continue
                 if line.startswith("export "):
-                    line = line[len("export "):]
+                    line = line[len("export ") :]
                 if "=" not in line:
                     continue
                 key, val = line.split("=", 1)
@@ -49,4 +49,28 @@ def load_dotenv_if_present(path: Optional[str] = None, override: bool = False) -
     except Exception:
         # Never crash; just act as if file not loaded
         return False
+
+
+# --- Environment helpers ---
+
+def get_app_env() -> str:
+    env = (os.getenv("APP_ENV") or os.getenv("ENV") or os.getenv("ENVIRONMENT") or "development").strip().lower()
+    if env in {"production", "prod"}:
+        return "production"
+    if env in {"staging", "stage"}:
+        return "staging"
+    if env in {"test", "testing", "ci"}:
+        return "test"
+    return "development"
+
+
+def is_production() -> bool:
+    return get_app_env() == "production"
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
 

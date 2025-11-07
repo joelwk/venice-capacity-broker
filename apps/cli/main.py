@@ -4,7 +4,7 @@ import argparse
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -1997,8 +1997,122 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--timeout", type=float, default=10.0, help="HTTP timeout seconds")
     sp.set_defaults(func=cmd_venice_probe_openapi)
 
+    # Data backfill: JSONL -> SQL AgentMemory
+    sp = sub.add_parser("data:backfill-memory", help="Backfill JSONL agent memory into SQL AgentMemory")
+    sp.add_argument("--path", required=False, default=None, help="Path to JSONL file (defaults to AGENT_MEMORY_PATH)")
+    sp.set_defaults(func=cmd_data_backfill_memory)
+
     return p
 
+def cmd_data_backfill_memory(args: argparse.Namespace) -> None:
+    """Load JSONL agent memory into SQL AgentMemory for analytics."""
+
+    from pathlib import Path
+    from uuid import uuid4
+    import json
+
+    path_value = args.path or os.getenv("AGENT_MEMORY_PATH") or "db/agent_memory.jsonl"
+    path = Path(path_value).expanduser()
+    if not path.exists():
+        logger.error("Agent memory log not found: %s", path)
+        return
+
+    try:
+        from sqlmodel import Session
+        from db.session import get_engine, create_db_and_tables
+        from db.models import AgentMemory
+    except Exception as exc:  # noqa: BLE001
+        logger.error("SQL backfill dependencies missing: %s", exc)
+        return
+
+    def _coerce_dt(*candidates: object) -> datetime:
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            if isinstance(candidate, (int, float)):
+                try:
+                    return datetime.fromtimestamp(candidate, tz=timezone.utc)
+                except Exception:
+                    continue
+            if isinstance(candidate, str):
+                raw = candidate.strip()
+                if not raw:
+                    continue
+                try:
+                    return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+                except Exception:
+                    pass
+                try:
+                    normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+                    return datetime.fromisoformat(normalized)
+                except Exception:
+                    continue
+        return datetime.now(timezone.utc)
+
+    def _extract_agent(payload: dict[str, object]) -> str:
+        for key in ("agent", "actor", "name"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+        agents = payload.get("agents")
+        if isinstance(agents, dict) and agents:
+            return str(next(iter(agents.keys())))
+        return "system"
+
+    def _extract_cycle_id(source: dict[str, object], payload: dict[str, object]) -> str | None:
+        for key in ("cycle_id", "cycleId", "cycleID"):
+            value = payload.get(key) or source.get(key)
+            if value:
+                return str(value)
+        return None
+
+    create_db_and_tables()
+    engine = get_engine()
+    inserted = 0
+    skipped = 0
+    errors = 0
+    batch_size = 256
+
+    with path.open("r", encoding="utf-8") as fh, Session(engine) as session:  # type: ignore[call-arg]
+        for line_no, raw_line in enumerate(fh, 1):
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as exc:
+                errors += 1
+                logger.warning("Skipping line %s (invalid JSON): %s", line_no, exc)
+                continue
+            if not isinstance(entry, dict):
+                skipped += 1
+                continue
+            payload = entry.get("cycle")
+            if not isinstance(payload, dict):
+                skipped += 1
+                continue
+            created_at = _coerce_dt(payload.get("created_at"), payload.get("ts"), entry.get("ts"))
+            row = AgentMemory(
+                id=uuid4().hex,
+                agent=_extract_agent(payload),
+                cycle_id=_extract_cycle_id(entry, payload),
+                decision_id=None,
+                created_at=created_at,
+                payload=payload,
+            )
+            session.add(row)
+            inserted += 1
+            if inserted % batch_size == 0:
+                session.commit()
+        session.commit()
+
+    logger.info(
+        "Agent memory backfill complete: inserted=%s skipped=%s errors=%s source=%s",
+        inserted,
+        skipped,
+        errors,
+        path,
+    )
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()

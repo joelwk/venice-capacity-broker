@@ -1,42 +1,38 @@
 FROM python:3.11-slim
 
-# Environment
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
-
+# Set working directory
 WORKDIR /app
 
-# Minimal system deps
+# System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    libsqlite3-0 \
-    sqlite3 \
- && rm -rf /var/lib/apt/lists/*
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Project files needed for install/runtime
-COPY pyproject.toml README.md alembic.ini ./
-COPY docker-compose.yml ./docker-compose.yml
-COPY apps ./apps
-COPY libs ./libs
-COPY services ./services
-COPY db ./db
-COPY abi ./abi
-COPY docs ./docs
-COPY scripts ./scripts
-COPY config ./config
-COPY agents ./agents
-COPY graph ./graph
-COPY tests ./tests
+# Python deps
+COPY pyproject.toml poetry.lock* requirements.txt* /app/
+RUN set -eux; \
+	if [ -f requirements.txt ]; then \
+		pip install --no-cache-dir -r requirements.txt; \
+	elif [ -f pyproject.toml ]; then \
+		pip install --no-cache-dir poetry && python -m poetry config virtualenvs.create false && python -m poetry install --no-interaction --no-ansi; \
+	else \
+		echo "No requirements.txt or pyproject.toml found" >&2; exit 1; \
+	fi
 
-# Install package with required extras
-ENV PYTHONPATH=/app
-RUN pip install --no-cache-dir .[agentkit,broker,web3,graph,db] && \
-    pip install --no-cache-dir pytest
+# App
+COPY . /app
 
-RUN chmod +x /app/scripts/docker_start_broker.sh
-
+# Expose default port
 EXPOSE 8000
 
-# Run validation, migrations, tests, then start API
-CMD ["/app/scripts/docker_start_broker.sh"]
+# Default environment
+ENV APP_ENV=production \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Prestart and entrypoint
+RUN chmod +x scripts/prestart.sh scripts/docker_entrypoint.sh
+
+ENTRYPOINT ["/bin/sh","scripts/docker_entrypoint.sh"]
+CMD ["uvicorn","apps.broker_api.app:app","--host","0.0.0.0","--port","8000"]

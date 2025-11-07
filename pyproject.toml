@@ -24,6 +24,7 @@ dependencies = [
   "pydantic>=2.6",
   "fastapi",
   "uvicorn",
+  "alembic>=1.12",
   # Load environment variables from .env when present
   "python-dotenv>=1.0",
   "web3>=6.15",

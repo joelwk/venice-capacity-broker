@@ -209,11 +209,11 @@ class Decision(SQLModel, table=True):  # type: ignore[call-arg]
     """Agent/orchestrator decision log for observability."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    agent: str
+    agent: str = Field(index=True)
     action: str
     correlation_id: Optional[str] = None
     details: Optional[str] = None  # JSON string with context
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
 
 
 class PriceTick(SQLModel, table=True):  # type: ignore[call-arg]
@@ -280,3 +280,23 @@ class Bid(SQLModel, table=True):  # type: ignore[call-arg]
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     context: Optional[str] = None  # JSON blob with extra info (e.g., last clearing price)
+
+
+# --- Agent memory (SQL-backed) ---
+class AgentMemory(SQLModel, table=True):  # type: ignore[call-arg]
+    """Agent cycle memory entries with retention policy.
+
+    Payload stores sanitized JSON context for the cycle.
+    """
+
+    # String UUID for portability without adding a hard dependency
+    id: Optional[str] = Field(default=None, primary_key=True)
+    agent: str = Field(index=True)
+    cycle_id: Optional[str] = None
+    # Foreign key to Decision when available (nullable)
+    decision_id: Optional[int] = Field(default=None, foreign_key="decision.id")
+    created_at: datetime = Field(default_factory=_utcnow, index=True)
+    if _HAS_SA:
+        payload: Optional[dict] = Field(default=None, sa_column=sa.Column(sa.JSON, nullable=True))  # type: ignore[call-arg]
+    else:
+        payload: Optional[str] = None  # fallback: store as JSON string when SA is absent
