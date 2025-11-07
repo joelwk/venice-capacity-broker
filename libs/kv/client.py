@@ -37,7 +37,9 @@ class KVStore:
 	"""
 
 	def __init__(self) -> None:
-		self.base_url = os.getenv("KV_URL") or os.getenv("REPLIT_DB_URL")
+		# Prefer Replit's managed KV when available so hosted deployments never rely on the
+		# placeholder KV_URL from .env. Redis remains the default in Docker via REDIS_URL.
+		self.base_url = os.getenv("REPLIT_DB_URL") or os.getenv("KV_URL")
 		self.api_token = os.getenv("KV_API_TOKEN")
 		self.api_header = os.getenv("KV_API_HEADER")
 		self.namespace = os.getenv("KV_NAMESPACE")

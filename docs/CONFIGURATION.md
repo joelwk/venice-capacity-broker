@@ -46,6 +46,7 @@ Environment toggles:
   - `ALLOW_SQLITE_FALLBACK=1` — allows SQLite engine when Postgres is absent.
   - `ALLOW_JSON_FALLBACK=1` — allows JSON tenant store and memory logs.
   - `ALLOW_INMEMORY_KV_FALLBACK=1` — allows in‑process KV for rate limiting.
+- Replit workspaces expose `REPLIT_DB_URL`; when present it automatically overrides `KV_URL` so hosted deployments use the managed KV while Docker Compose continues to rely on Redis.
 - Agent memory logs persist to SQL table `AgentMemory`. Retention is controlled by `MEMORY_RETENTION_DAYS` (default 30).
 - Decision inserts fail fast in production when persistence errors occur.
 
