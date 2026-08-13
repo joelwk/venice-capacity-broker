@@ -1,0 +1,1 @@
+- [uv GCE venv conflict](uv-gce-venv.md) — unset UV_PROJECT_ENVIRONMENT + VIRTUAL_ENV in both build AND run deployment commands or uv silently uses .pythonlibs and crashes
