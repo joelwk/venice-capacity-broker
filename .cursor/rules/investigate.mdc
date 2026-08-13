@@ -1,0 +1,80 @@
+---
+title: Comprehensive Post-Run Analysis and Troubleshooting Protocol for Agent-Based Orchestration
+---
+
+**Comprehensive Post-Run Analysis and Troubleshooting Protocol for Agent-Based Orchestration**
+
+**Objective**  
+Perform a thorough, evidence-based review of logs produced during the most recent execution cycle(s) to surface key issues, anomalies, and next-step recommendations before any production deployment. All analysis must be grounded strictly in provided artifacts to avoid hallucinations—do not invent file names, paths, contents, or project details.
+
+**Run Details**  
+* **Execution Command / Entry Point:** `<execution command>`  
+* **Cycle Count / Duration:** `<n cycles> / <time span>` (e.g., 5 cycles / 30 minutes)  
+* **Relevant Artifacts**  
+  - `<list of artifacts, e.g., log files>`  
+
+---
+
+### Analysis Protocol
+
+1. **Pre-Analysis Preparation** (Grounding Step)  
+   - List all available artifacts explicitly (e.g., log files, code snippets from provided documents).  
+   - Verify project structure: Cross-reference against known code (e.g., imports, functions, or concepts from provided documents). Note any uncertainties (e.g., "File path unknown based on provided data").  
+   - If needed, use tools like code_execution to inspect or simulate code snippets from provided documents—do not assume unprovided files exist.
+
+2. **Initial Review** (Limit to 5-10 minutes)  
+   - Scan console output and logs for immediate errors, warnings, or unexpected terminations.  
+   - Note key metrics from run details (e.g., iterations completed, total actions, average alignment).  
+   - Flag any high-level patterns (e.g., early termination in cycle 3) with direct quotes from artifacts.  
+   - Regressions to recent changes  
+
+3. **Log File Deep-Dive**  
+   - For each log, systematically identify:  
+     a. Recurrent error patterns (e.g., count frequency: "Error appeared 4 times").  
+     b. Inconsistent or unexpected output (e.g., mismatched state updates).  
+     c. Discrepancies across log sources (e.g., success in one log but failure in another).  
+   - Quantify where possible (e.g., "43 actions: 30 successful, 10 failed, 3 timed out").  
+   - Tie findings to provided code (e.g., if an error relates to a specific function, reference the function definition from provided documents).
+
+4. **Recent Changes Assessment**  
+   - Cross-reference recent changes with observed issues (e.g., "Change likely caused errors, as seen in log line 45").  
+   - If no direct link, note: "No evident correlation based on available data."
+
+5. **Cross-Reference with Provided Documents**  
+   - Map issues to known project elements (e.g., compare log errors to discussions or code in provided documents).  
+   - Identify gaps (e.g., "Log mentions undefined function—verified in provided code as defined in action space").
+
+6. **Success Metrics Review** (Balance Perspective)  
+   - Highlight what worked well (e.g., "Bootstrap Success: True indicates stable initialization").  
+   - Compare against expected behavior from documents (e.g., agentic loop functioning as described in provided materials).
+
+7. **File Investigation List**  
+   - Based solely on findings from steps 1-6, enumerate specific files for deeper inspection.  
+   - Only list files/paths explicitly mentioned in artifacts or provided documents. If a file is inferred but not confirmed, label as "Potential: [file] (unverified)". Do not invent paths.
+
+8. **Actionable Insights**  
+   - For every issue:  
+     a. **Exact Error / Message:** Copy verbatim from logs (e.g., "Error: Specific message at line 123").  
+     b. **Likely Cause:** Succinct, evidence-based hypothesis (e.g., "Caused by repeated calls without caching, per code in provided documents").  
+     c. **Recommended Next Step:** Targeted, prioritized follow-up (e.g., High Impact: Add limiting mechanism; inspect environment variables").  
+   - Prioritize insights: High (blocks execution), Medium (performance impact), Low (minor anomaly).
+
+9. **Anti-Hallucination QA Checkpoint** (Mandatory Final Step)  
+   - Review entire analysis: Verify every file path, function name, or project detail against provided artifacts (e.g., "Path confirmed in input documents").  
+   - Flag and correct any unsubstantiated claims (e.g., "Remove reference to non-existent file—no evidence in artifacts").  
+   - If data is insufficient for a claim, downgrade to "Speculative" or omit it.  
+   - Confirm: "All references are evidence-based; no hallucinations detected."
+
+---
+
+**Deliverables** (Use This Exact Template)  
+* **Files for Further Investigation**  
+  - Bullet list with paths and evidence (e.g., "- Document: Contains function referenced in log error at timestamp").  
+
+* **Issue Summaries**  
+  - Bullet list with concise descriptions, exact messages/codes, and evidence citations (e.g., "- Issue: Failure; Message: 'Error encountered' (from log, line 200); Evidence: Ties to function in provided documents").  
+
+* **Actionable Recommendations**  
+  - Numbered list with one-liner next steps per issue, prioritized (e.g., "1. High: Debug credentials in environment—cross-check with provided materials.").  
+
+> _Note: The goal is diagnostic insight only—no code changes should be made at this stage. All outputs must cite evidence from artifacts to ensure accuracy._

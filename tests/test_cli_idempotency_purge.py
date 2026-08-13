@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+TEST_TENANT_QUOTA = 100
+
+
+class SharedKV:
+    """Simple shared in-memory KV with a class-level store for tests."""
+
+    _store: dict[str, str] = {}
+
+    def __init__(self) -> None:
+        pass
+
+    def get(self, key: str):
+        return self._store.get(key)
+
+    def set(self, key: str, value, ttl_s=None):
+        self._store[key] = str(value)
+
+    def delete(self, key: str):
+        self._store.pop(key, None)
+
+    def keys(self, prefix: str) -> list[str]:
+        return [k for k in list(self._store.keys()) if k.startswith(prefix)]
+
+    def incrby(self, key: str, by: int = 1, ttl_s: int | None = None) -> int:
+        cur = int(self._store.get(key) or 0)
+        new_v = cur + int(by)
+        self._store[key] = str(new_v)
+        return new_v
+
+
+def _import_app_with_shared_kv(tmp_store: Path, monkeypatch):
+    # Monkeypatch KVStore before importing app so middleware/admin use shared KV
+    import importlib
+    import importlib.util
+
+    # Ensure fresh import of libs.kv so patch takes effect
+    import libs.kv as kvpkg
+
+    monkeypatch.setattr(kvpkg, "KVStore", SharedKV, raising=True)
+
+    os.environ["BROKER_STORE_BACKEND"] = "json"
+    os.environ["BROKER_STORE_FILE"] = str(tmp_store)
+    os.environ["IDEM_TTL_SECONDS"] = "60"
+    os.environ["RATE_LIMITS_ENABLED"] = "false"
+    os.environ["RATE_LIMIT_WINDOW_SECONDS"] = "60"
+    os.environ["RATE_LIMIT_MAX_REQUESTS"] = "1000"
+
+    app_path = Path("apps/broker_api/app.py").resolve()
+    spec = importlib.util.spec_from_file_location("broker_api_app_idem", str(app_path))
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    # Register module in sys.modules before exec_module so module code can access sys.modules[__name__]
+    import sys
+
+    sys.modules["broker_api_app_idem"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+    return mod
+
+
+def _seed_tenant(mod):
+    Tenant = mod.Tenant  # type: ignore[attr-defined]
+    tenant = Tenant(id="tX", label="Tx", subkey="sub-X", quota=TEST_TENANT_QUOTA)
+    mod.store.upsert(tenant)
+
+
+def test_idempotency_and_purge_cli(tmp_path, monkeypatch, capsys):
+    # Patch CLI to use shared KV as well
+    import libs.kv as kvpkg
+
+    monkeypatch.setattr(kvpkg, "KVStore", SharedKV, raising=True)
+
+    mod = _import_app_with_shared_kv(tmp_path / "tenants.json", monkeypatch)
+    _seed_tenant(mod)
+
+    from fastapi.testclient import TestClient
+
+    # Stub Venice client chat
+    def fake_chat(self, messages, model=None, **kw):
+        return {"status": "ok", "echo": messages}
+
+    from libs import venice_sdk
+
+    monkeypatch.setattr(
+        venice_sdk.client.VeniceClient, "chat_completions", fake_chat, raising=True
+    )
+
+    client = TestClient(mod.app)
+    os.environ["RATE_LIMITS_ENABLED"] = "false"
+    headers = {"Authorization": "Bearer sub-X"}
+    payload = {"messages": [{"role": "user", "content": "hello"}]}
+
+    # First request accepted
+    r1 = client.post("/v1/chat", headers=headers, json=payload)
+    assert r1.status_code == 200
+    assert r1.headers.get("X-Idempotency-Accepted") == "true"
+    # Second identical request should be rejected due to idempotency
+    r2 = client.post("/v1/chat", headers=headers, json=payload)
+    assert r2.status_code == 409
+    assert r2.headers.get("X-Idempotency-Accepted") == "false"
+    body = r2.json()
+    assert body.get("code") == "idempotency_replay"
+
+    # Now run CLI purge for this tenant and scope
+    from apps.cli.main import argparse, cmd_idem_purge
+
+    ns = argparse.Namespace(prefix="idem:chat:tX")
+    cmd_idem_purge(ns)
+    out = capsys.readouterr().out
+    assert "purge complete:" in out
+    assert "prefix=idem:chat:tX" in out
+
+    # Ensure keys are gone: next request should be accepted again
+    r3 = client.post("/v1/chat", headers=headers, json=payload)
+    assert r3.status_code == 200
+    assert r3.headers.get("X-Idempotency-Accepted") == "true"
+
+
+def test_purge_cli_deletes_seeded_keys_and_prints_summary(
+    tmp_path, monkeypatch, capsys
+):
+    # Make CLI use shared KV
+    import libs.kv as kvpkg
+
+    monkeypatch.setattr(kvpkg, "KVStore", SharedKV, raising=True)
+
+    # Seed some fake idempotency keys and one from another tenant
+    SharedKV._store.clear()
+    SharedKV._store.update(
+        {
+            "idem:chat:tX:abc:123": "1",
+            "idem:chat:tX:def:124": "1",
+            "idem:chat:other:zzz:125": "1",
+        }
+    )
+
+    from apps.cli.main import argparse, cmd_idem_purge
+
+    ns = argparse.Namespace(prefix="idem:chat:tX")
+    cmd_idem_purge(ns)
+    out = capsys.readouterr().out
+    assert "purge complete:" in out
+    assert "prefix=idem:chat:tX" in out
+    # Two keys deleted for tX; other tenant remains
+    assert "deleted=2" in out
+    # Verify remaining keys only for other tenant
+    remaining = [k for k in SharedKV._store.keys() if k.startswith("idem:")]
+    assert remaining == ["idem:chat:other:zzz:125"]

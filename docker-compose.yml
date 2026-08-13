@@ -1,0 +1,385 @@
+# Venice Capacity Broker - Docker Compose Configuration
+#
+# Environment Variable Precedence (later overrides earlier):
+#   1. .env                    - Base configuration (may contain placeholders)
+#   2. .env.docker             - Docker Compose defaults
+#   3. docker/.env.local       - Local development overrides (gitignored)
+#   4. environment: section    - Container-specific overrides only
+#
+# RPC URL Configuration:
+#   - Set BASE_RPC_URLS (plural) in docker/.env.local for production
+#   - BASE_RPC_URLS takes precedence over BASE_RPC_URL (singular)
+#   - Example: BASE_RPC_URLS=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY
+#   - The system will fail fast at startup if only public RPCs are detected
+#   - See docker/.env.local.example for template
+#
+# DATABASE_SCHEMA: Each service uses its own Postgres schema to avoid
+# Alembic version table collisions. Schemas are created automatically.
+#
+services:
+  postgres:
+    image: postgres:15
+    container_name: vvv-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: vvv-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  broker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: venice-broker:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+      - .env.docker
+      - docker/.env.local
+    environment:
+      # Schema isolation for Alembic migrations
+      DATABASE_SCHEMA: broker
+      RATE_LIMITS_ENABLED: "1"
+      # Database URL override: use Docker service name 'postgres' instead of localhost
+      # This overrides any SQL_DATABASE_URL from .env files to ensure containers connect correctly
+      SQL_DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      # Default Redis URL for local/docker; override via env for Replit KV or other backends
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      KV_REDIS_URL: ${KV_REDIS_URL:-redis://redis:6379/0}
+      # Container-specific overrides (most config inherited from env_file chain)
+      BROKER_API_HOST: 0.0.0.0
+      BROKER_API_PORT: 8000
+      # Fixes for routing and API
+      VENICE_API_BASE_URL: "https://api.venice.ai/api/v1"
+      VENICE_HEARTBEAT_MODEL: qwen3-4b
+      UNISWAP_V3_DEFAULT_FEE: "3000"
+      DEX_PROVIDERS: uniswap_v2,aerodrome,aerodrome_cl,uniswap_v3
+      DEX_EXEC_PROVIDERS: aerodrome_cl,aerodrome,uniswap_v2,uniswap_v3
+      AERODROME_EXACT_OUT_ENABLE: "0"
+      # Three-hop routing via WETH disabled until SlipStream support is implemented
+      # WETH routes disabled by default - bridge routes (DIEM↔VVV↔USDC) are preferred
+      DIEM_DISABLE_CANONICAL_WETH: "${DIEM_DISABLE_CANONICAL_WETH:-1}"
+      DIEM_ROUTE_AVOID_WETH: "${DIEM_ROUTE_AVOID_WETH:-1}"
+      DIEM_ENABLE_THREE_HOP_WETH: "${DIEM_ENABLE_THREE_HOP_WETH:-0}"
+      DIEM_MAX_ROUTE_HOPS: "${DIEM_MAX_ROUTE_HOPS:-2}"
+      # VVV/WETH pool config kept for future use (not used when three-hop disabled)
+      VVV_WETH_POOL_ADDRESS: "0x01784ef301d79e4b2df3a21ad9a536d4cf09a5ce"
+      VVV_WETH_POOL_FEE: "500"
+      VVV_WETH_BRIDGE_PROVIDER: "uniswap_v3"
+      # VVV/USDC pool configuration
+      VVV_USDC_POOL_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_V3_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_FEE: "3000"
+      DIEM_VVV_USDC_V3_SLOT0_FALLBACK_ENABLE: "1"
+      DIEM_VVV_USDC_V3_ANALYTIC_FALLBACK_ENABLE: "1"
+      BRIDGE_LEG2_TIMEOUT_SECONDS: "6.0"
+      BRIDGE_LEG2_MIN_VVV_UNITS: "50000000000000000"  # 0.05 VVV minimum
+      VVV_USDC_V2_FALLBACK_ENABLE: "1"
+      VVV_USDC_V2_FALLBACK_ONLY_FOR_BUYS: "0"
+      # DIEM/USDC Aerodrome SlipStream pool (highest liquidity direct route)
+      DIEM_USDC_POOL_ADDRESS: "0xBc3231036Ee1ECa03E5F67FEceDC640D21610823"
+      DIEM_USDC_POOL_FEE: "500"
+      DIEM_USDC_TICK_SPACING: "100"
+      DIEM_PREFER_DIRECT_ROUTE: "1"
+      DIEM_BUY_DIRECT_ONLY: "0"
+      DIEM_ACTIONS_BUY_FALLBACK_ENABLE: "1"
+      # DIEM reserve math fallback (enables bridge route quotes when router calls fail)
+      DIEM_ENABLE_PAIR_MATH_FALLBACK: "1"
+      # DIEM/VVV direct swap enable (bypasses router views for DIEM/VVV pairs)
+      DIEM_VVV_DIRECT_SWAP_ENABLE: "1"
+      # Route VVV->USDC through Aerodrome CL (SlipStream pool at 0x67A11022...)
+      # Note: uniswap_v3 quoter fails for this pool; aerodrome_cl works correctly
+      VVV_USDC_BRIDGE_PROVIDER: "aerodrome_cl"
+      # Base Mainnet Router Addresses
+      UNISWAP_V3_ROUTER_ADDRESS: "0x2626664c2603336E57B271c5C0b26F421741e481"
+      UNISWAP_V3_QUOTER_ADDRESS: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+      AERODROME_ROUTER_ADDRESS: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+      AERODROME_CL_ROUTER_ADDRESS: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5"
+
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
+      - ./logs:/app/logs
+
+  orchestrator:
+    image: venice-broker:latest
+    depends_on:
+      broker:
+        condition: service_started
+    env_file:
+      - .env
+      - .env.docker
+      - docker/.env.local
+    environment:
+      # Schema isolation for Alembic migrations
+      DATABASE_SCHEMA: orchestrator
+      # Database URL override: use Docker service name 'postgres' instead of localhost
+      # This overrides any SQL_DATABASE_URL from .env files to ensure containers connect correctly
+      SQL_DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      # Container-specific overrides
+      AUTOSTART_BROKER_API: "0"
+      AUTOSTART_ORCHESTRATOR: "1"
+      ORCHESTRATOR_MAX_CYCLE_SECONDS: "90"
+      # Fixes for routing and API
+      VENICE_API_BASE_URL: https://api.venice.ai/api/v1
+      VENICE_HEARTBEAT_MODEL: qwen3-4b
+      UNISWAP_V3_DEFAULT_FEE: "3000"
+      UNISWAP_V3_ROUTER_ADDRESS: "0x2626664c2603336E57B271c5C0b26F421741e481"
+      UNISWAP_V3_QUOTER_ADDRESS: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+      AERODROME_ROUTER_ADDRESS: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+      AERODROME_CL_ROUTER_ADDRESS: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5"
+      DEX_PROVIDERS: uniswap_v2,aerodrome,aerodrome_cl,uniswap_v3
+      DEX_EXEC_PROVIDERS: aerodrome_cl,aerodrome,uniswap_v2,uniswap_v3
+      AERODROME_EXACT_OUT_ENABLE: "0"
+      # Reduce DEX timeouts for faster cycling
+      DEX_PROVIDER_TIMEOUT_SECONDS: "5"
+      DEX_AGGREGATE_TIMEOUT_SECONDS: "8"
+      DEX_PROVIDER_TIMEOUT_SECONDS_DIEM: "8"
+      DEX_AGGREGATE_TIMEOUT_SECONDS_DIEM: "10"
+      # Exit quote aggregation as soon as first valid quote arrives
+      DEX_EARLY_EXIT_FIRST_QUOTE: "1"
+      # DIEM reserve math fallback (enables bridge route quotes when router calls fail)
+      DIEM_ENABLE_PAIR_MATH_FALLBACK: "1"
+      # DIEM/VVV direct swap enable (bypasses router views for DIEM/VVV pairs)
+      DIEM_VVV_DIRECT_SWAP_ENABLE: "1"
+      # Route VVV->USDC through Aerodrome CL (SlipStream pool at 0x67A11022...)
+      # Note: uniswap_v3 quoter fails for this pool; aerodrome_cl works correctly
+      VVV_USDC_BRIDGE_PROVIDER: "aerodrome_cl"
+      # Gas refuel configuration (auto-swap assets to ETH when gas is low)
+      # Base gas is ~0.001 gwei, swap costs ~0.0000003 ETH, so these values fund 100-1000 txs
+      GAS_REFUEL_ENABLE: "1"
+      GAS_REFUEL_MIN_ETH_WEI: "500000000000000"     # 0.0005 ETH (~$1.65) - trigger threshold (matches burn requirement)
+      GAS_REFUEL_TARGET_ETH_WEI: "1000000000000000"  # 0.001 ETH (~$3.30) - target after refuel
+      GAS_REFUEL_ASSET_PRIORITY: "USDC,USDBC,VVV,DIEM"
+      GAS_REFUEL_MAX_SLIPPAGE_BPS: "100"  # 1% max slippage
+      # Feature flags: enable recent orchestrator improvements
+      QUOTE_TOKEN_CONSOLIDATE_ENABLE: "1"
+      QUOTE_TOKEN_CONSOLIDATE_ON_STARTUP: "1"
+      ARBI_DIEM_INVENTORY_LIQUIDATE_ENABLE: "1"
+      ARBI_DIEM_INVENTORY_LIQUIDATE_FLOOR_MULT: "0.88"
+      # Trade sizing - target USD per trade (smaller trades to fit within wallet balance)
+      ARBI_DIEM_TRADE_USD: "0.50"
+      ARBI_DIEM_MIN_TRADE_USD: "0.25"
+      # Reduce slippage adjustment iterations (fewer RPC calls per cycle)
+      ARBI_DIEM_LIQUIDITY_MAX_ADJUST_STEPS: "3"
+      DIEM_PREMIUM_THRESHOLD: "1.25"
+      DIEM_DISCOUNT_THRESHOLD: "0.0"
+      QUORUM_WEIGHT_DEMAND: "0.5"
+      QUORUM_VALIDATE_HOLDS: "1"
+      # Slippage defaults (production posture)
+      RISK_MAX_SLIPPAGE_BPS: "500"
+      RISK_DIEM_SLIPPAGE_HARD_CAP_BPS: "500"  # Allow up to 5% slippage for direct DIEM/USDC trades
+      # DIEM mint slippage protection (minDiemOut based on expected output)
+      DIEM_MINT_DISABLE_SLIPPAGE: "false"
+      DIEM_MINT_SLIPPAGE_PCT: "25.0"
+      # Fair value calibration
+      DIEM_ADOPTION_BASE: "0.40"
+      DIEM_FAIR_VALUE_HORIZON_DAYS: "540"
+      # Claim batching (reduce claim spam; better align rewards vs. gas)
+      STAKEMASTER_MIN_CLAIM_INTERVAL_SECONDS: "7200"
+      # Disable debug logging by default
+      DIEM_DEBUG_ROUTES: "0"
+      MARKETDATA_DEBUG_SANITY: "0"
+      # StakeMaster claim gating: require rewards >= gas_cost * buffer_mult (USD).
+      STAKEMASTER_CLAIM_GAS_BUFFER_MULT: "2.0"
+      # NOTE: Do not set STAKEMASTER_MIN_CLAIM_USD here.
+      # Compose `environment:` overrides `.env` / `.env.docker` unconditionally.
+      # Keep it in `.env` (or `docker/.env.local`) so operators can tune without editing compose.
+      STAKEMASTER_MIN_CLAIM_UNITS: "0"  # Fallback only when pricing/estimation is unavailable
+      # StakeMaster auto-stake/compound settings
+      STAKEMASTER_AUTO_STAKE_IDLE_ENABLE: "true"
+      STAKEMASTER_WALLET_VVV_BUFFER_UNITS: "250000000000000000"  # 0.25 VVV buffer
+      STAKEMASTER_IDLE_STAKE_MAX_PER_CYCLE_UNITS: "10000000000000000000"  # 10 VVV max per cycle
+      STAKEMASTER_AUTO_COMPOUND_ENABLE: "true"
+      STAKEMASTER_COMPOUND_ONLY_IF_CLAIMED: "true"
+      # Skip DIEM dust that can't be traded
+      DIEM_MIN_SELL_UNITS: "1000000000000000"  # 0.001 DIEM = 1e15 wei
+      MARKETDATA_PRICE_SANITY_MAX_DRIFT: "0.30"
+      # Locked sVVV ratio cap: balance staked (unlocked) vs locked for minting
+      # Keeps enough unlocked to earn full emissions while allowing minting during premium
+      # When locked/total > cap, agent buys DIEM+burns (unlock) OR buys VVV+stakes (grow denom)
+      # Locked sVVV ratio controls - use env file values, with defaults
+      DIEM_LOCKED_SVVV_RATIO_CAP: "${DIEM_LOCKED_SVVV_RATIO_CAP:-0.65}"
+      DIEM_LOCKED_SVVV_RATIO_TARGET: "${DIEM_LOCKED_SVVV_RATIO_TARGET:-0.50}"
+      DIEM_LOCKED_SVVV_RATIO_MIN_TOTAL_SVVV_UNITS: "${DIEM_LOCKED_SVVV_RATIO_MIN_TOTAL_SVVV_UNITS:-50000000000000000000}"
+      VVV_FV_PREFER_STAKE_DISCOUNT_MULT: "1.15"  # Prefer stake recovery when VVV undervalued
+      # Three-hop routing via WETH (high-liquidity VVV/WETH Aerodrome pool)
+      # These use env file values so .env settings take precedence
+      DIEM_DISABLE_CANONICAL_WETH: "${DIEM_DISABLE_CANONICAL_WETH:-1}"
+      DIEM_ROUTE_AVOID_WETH: "${DIEM_ROUTE_AVOID_WETH:-1}"
+      DIEM_ENABLE_THREE_HOP_WETH: "${DIEM_ENABLE_THREE_HOP_WETH:-0}"
+      DIEM_MAX_ROUTE_HOPS: "${DIEM_MAX_ROUTE_HOPS:-2}"
+      VVV_WETH_POOL_ADDRESS: "0x01784ef301d79e4b2df3a21ad9a536d4cf09a5ce"
+      VVV_WETH_POOL_FEE: "500"
+      # Use uniswap_v3 for VVV/WETH quoting (SlipStream pools are V3-compatible)
+      VVV_WETH_BRIDGE_PROVIDER: "uniswap_v3"
+      # VVV/USDC pool configuration
+      VVV_USDC_POOL_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_V3_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_FEE: "3000"
+      DIEM_VVV_USDC_V3_SLOT0_FALLBACK_ENABLE: "1"
+      DIEM_VVV_USDC_V3_ANALYTIC_FALLBACK_ENABLE: "1"
+      BRIDGE_LEG2_TIMEOUT_SECONDS: "6.0"
+      BRIDGE_LEG2_MIN_VVV_UNITS: "50000000000000000"  # 0.05 VVV minimum
+      VVV_USDC_V2_FALLBACK_ENABLE: "1"
+      VVV_USDC_V2_FALLBACK_ONLY_FOR_BUYS: "0"
+      # DIEM/USDC Aerodrome SlipStream pool (highest liquidity direct route)
+      DIEM_USDC_POOL_ADDRESS: "0xBc3231036Ee1ECa03E5F67FEceDC640D21610823"
+      DIEM_USDC_POOL_FEE: "500"
+      DIEM_USDC_TICK_SPACING: "100"
+      DIEM_PREFER_DIRECT_ROUTE: "1"
+      DIEM_BUY_DIRECT_ONLY: "0"
+      DIEM_ACTIONS_BUY_FALLBACK_ENABLE: "1"
+      # Bridge live fallback: use reserve-based pricing when router quotes fail/incoherent
+      DIEM_BRIDGE_LIVE_FALLBACK_ENABLE: "1"
+      DIEM_BRIDGE_LIVE_FALLBACK_MAX_USD: "10.0"
+      DIEM_BRIDGE_LIVE_FALLBACK_SLIPPAGE_BPS: "100.0"
+      # Widen coherence threshold for recovery scenarios (observed rel_diff 229x due to probe size rounding)
+      DIEM_ROUTE_COHERENCE_MAX_REL_DIFF: "500.0"
+      # Skip coherence muting for bridge routes which use reserve math
+      DIEM_ROUTE_COHERENCE_SKIP_BRIDGE: "1"
+      # Mute routes that repeatedly fail to prevent wasted RPC calls
+      DIEM_ROUTE_REVERT_BAN_ENABLE: "1"
+      DIEM_ROUTE_REVERT_BAN_THRESHOLD: "2"
+      DIEM_ROUTE_REVERT_BAN_TTL_SECONDS: "1800"
+      # Capacity recovery sizing guardrails
+      DIEM_RECOVERY_MIN_TRADE_USD: "0.50"
+      DIEM_RECOVERY_MAX_TRADE_USD: "5.0"
+      # ArbiDiem pacing controls (prevents rapid-fire minting/recovery loops)
+      ARBI_DIEM_MIN_ACTION_INTERVAL_SECONDS: "300"
+      ARBI_DIEM_MAX_MINT_SELL_PER_HOUR: "12"
+      ARBI_DIEM_RECOVERY_BYPASS_INTERVAL: "0"
+      ARBI_DIEM_RECOVERY_PREFERRED_ACTION: "stake"
+      ARBI_DIEM_RECOVERY_MAX_SLIPPAGE_BPS: "500"
+      ARBI_DIEM_RECOVERY_SMALL_TRADE_USD: "2"
+      # Progressive-live mode: starts dry, flips to live after healthy heartbeats
+      STAKEMASTER_PROGRESSIVE_ENABLE: "${STAKEMASTER_PROGRESSIVE_ENABLE:-1}"
+      STAKEMASTER_PROGRESSIVE_CYCLES: "${STAKEMASTER_PROGRESSIVE_CYCLES:-5}"
+    command: >
+      sh -c "
+      PROG_ENABLE=$${STAKEMASTER_PROGRESSIVE_ENABLE:-0};
+      LIVE_ENABLE=$${AUTOSTART_ORCHESTRATOR_LIVE:-0};
+      if [ \"$$LIVE_ENABLE\" = \"1\" ] || [ \"$$LIVE_ENABLE\" = \"true\" ]; then
+        python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 --enable-live;
+      elif [ \"$$PROG_ENABLE\" = \"1\" ] || [ \"$$PROG_ENABLE\" = \"true\" ]; then
+        python apps/cli/main.py run:loop --sleep 15 --max-cycles 0 --progressive-live;
+      else
+        python apps/cli/main.py run:loop --sleep 15 --max-cycles 0;
+      fi
+      "
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
+      - ./logs:/app/logs
+
+  token-watcher:
+    image: venice-broker:latest
+    depends_on:
+      broker:
+        condition: service_started
+    env_file:
+      - .env
+      - .env.docker
+      - docker/.env.local
+    environment:
+      # Schema isolation for Alembic migrations
+      DATABASE_SCHEMA: token_watcher
+      # Database URL override: use Docker service name 'postgres' instead of localhost
+      # This overrides any SQL_DATABASE_URL from .env files to ensure containers connect correctly
+      SQL_DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+      # Fixes for routing
+      UNISWAP_V3_DEFAULT_FEE: "3000"
+      UNISWAP_V3_ROUTER_ADDRESS: "0x2626664c2603336E57B271c5C0b26F421741e481"
+      UNISWAP_V3_QUOTER_ADDRESS: "0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a"
+      AERODROME_ROUTER_ADDRESS: "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
+      AERODROME_CL_ROUTER_ADDRESS: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5"
+      DEX_PROVIDERS: uniswap_v2,aerodrome,aerodrome_cl,uniswap_v3
+      DEX_EXEC_PROVIDERS: aerodrome_cl,aerodrome,uniswap_v2,uniswap_v3
+      AERODROME_EXACT_OUT_ENABLE: "0"
+      # Three-hop routing via WETH disabled until SlipStream support is implemented
+      # WETH routes disabled by default - bridge routes (DIEM↔VVV↔USDC) are preferred
+      DIEM_DISABLE_CANONICAL_WETH: "${DIEM_DISABLE_CANONICAL_WETH:-1}"
+      DIEM_ROUTE_AVOID_WETH: "${DIEM_ROUTE_AVOID_WETH:-1}"
+      DIEM_ENABLE_THREE_HOP_WETH: "${DIEM_ENABLE_THREE_HOP_WETH:-0}"
+      DIEM_MAX_ROUTE_HOPS: "${DIEM_MAX_ROUTE_HOPS:-2}"
+      # VVV/WETH pool config kept for future use (not used when three-hop disabled)
+      VVV_WETH_POOL_ADDRESS: "0x01784ef301d79e4b2df3a21ad9a536d4cf09a5ce"
+      VVV_WETH_POOL_FEE: "500"
+      VVV_WETH_BRIDGE_PROVIDER: "uniswap_v3"
+      # VVV/USDC pool configuration
+      VVV_USDC_POOL_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_V3_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+      VVV_USDC_POOL_FEE: "3000"
+      DIEM_VVV_USDC_V3_SLOT0_FALLBACK_ENABLE: "1"
+      DIEM_VVV_USDC_V3_ANALYTIC_FALLBACK_ENABLE: "1"
+      BRIDGE_LEG2_TIMEOUT_SECONDS: "6.0"
+      BRIDGE_LEG2_MIN_VVV_UNITS: "50000000000000000"  # 0.05 VVV minimum
+      VVV_USDC_V2_FALLBACK_ENABLE: "1"
+      VVV_USDC_V2_FALLBACK_ONLY_FOR_BUYS: "0"
+      # DIEM/USDC Aerodrome SlipStream pool (highest liquidity direct route)
+      DIEM_USDC_POOL_ADDRESS: "0xBc3231036Ee1ECa03E5F67FEceDC640D21610823"
+      DIEM_USDC_POOL_FEE: "500"
+      DIEM_USDC_TICK_SPACING: "100"
+      DIEM_PREFER_DIRECT_ROUTE: "1"
+      DIEM_BUY_DIRECT_ONLY: "0"
+      DIEM_ACTIONS_BUY_FALLBACK_ENABLE: "1"
+    command: python services/marketdata/token_watcher.py
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
+      - ./logs:/app/logs
+
+  tests:
+    image: venice-broker:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+      - .env.docker
+      - docker/.env.local
+    environment:
+      # Database URL override: use Docker service name 'postgres' instead of localhost
+      # This overrides any SQL_DATABASE_URL from .env files to ensure containers connect correctly
+      SQL_DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/postgres
+    working_dir: /app
+    command: sh -c "rm -f *.db test-*.db tmp*.db && pytest -q"
+    profiles: [tests]
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./.env.docker:/app/.env.docker:ro
+      - ./docker/.env.local:/app/docker/.env.local:ro
+      - ./logs:/app/logs
+
+volumes:
+  pgdata:

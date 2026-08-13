@@ -1,0 +1,60 @@
+title = "Venice Capacity Broker - Gitleaks Config"
+
+# Allowlist specific non-secret patterns that are public on-chain addresses
+# and RPC endpoint configurations used in templates and documentation.
+[allowlist]
+description = "Ignore public chain addresses, RPC URL patterns, test values, and placeholders"
+regexes = [
+  # Env-style YAML entries: NAME: "0x..."
+  '(QUOTE_TOKEN_ADDRESS|VVV_TOKEN_ADDRESS|DIEM_TOKEN_ADDRESS|WETH_ADDRESS|UNISWAP_V2_ROUTER_ADDRESS|AERODROME_ROUTER_ADDRESS)\s*:\s*"0x[a-fA-F0-9]{40}"',
+  # Public Base RPC endpoints and env-style RPC assignments
+  'BASE_RPC_URL\s*=\s*https://[^\s]+',
+  'BASE_RPC_URLS\s*=\s*https://[^\s]+',
+  'RPC_URL\s*=\s*https://[^\s]+',
+  'RPC_URLS\s*=\s*https://[^\s]+',
+  # Public Base RPC hosts only — do not allowlist Alchemy /v2 API keys
+  'https://(base\.|mainnet\.base\.|base-rpc\.|base\.publicnode\.|base\.llamarpc\.|base\.meowrpc\.|base\.blockpi\.|base-mainnet\.public\.|gateway\.tenderly\.|base\.drpc\.|base\.diamondswap\.|base\.merkle\.)[^\s]+',
+  # Template placeholders
+  'YOUR_API_KEY',
+  'YOUR_FULL_API_KEY',
+  # Connection string examples (marked as examples)
+  'postgres://[^\s]+#\s*gitleaks:allow',
+  'postgresql\+psycopg2://[^\s]+#\s*gitleaks:allow',
+  # Test values and placeholders (common false positives)
+  # Match test values in assignments: VAR="test-token" or VAR='test-key'
+  "[\"'](test-token|test-key|test-secret|test-password|test-api-key|test-value)[\"']",
+  # Match placeholder values
+  "[\"']?(placeholder|changeme|xxxx|set-in-secrets|TODO|FIXME)[\"']?",
+  # Replit DB URLs (test and example values)
+  'https://kv\.replit\.com/v0/(test-token|test-[a-z0-9-]+)',
+  # Environment variable assignments with test/placeholder values
+  "(VENICE_API_KEY|VENICE_PARENT_KEY|BROKER_ADMIN_TOKEN|SESSION_SECRET|ETH_PRIVATE_KEY|REPLIT_DB_URL)\\s*[:=]\\s*[\"']?(test-|placeholder|changeme|xxxx|set-in-secrets)",
+  # Lines explicitly marked with gitleaks:allow comment (must be at end of line)
+  '.*#\s*gitleaks:allow\s*$',
+  # Common placeholder patterns in documentation and examples
+  "[\"'](sk-|pk-|AIza|AKIA)[a-zA-Z0-9_-]{10,}[\"']?\\s*#.*(example|test|placeholder|TODO|FIXME)",
+  # Ethereum addresses (0x followed by 40 hex chars) - these are public on-chain data
+  '0x[a-fA-F0-9]{40}',
+  # Contract addresses in config files (already public on-chain)
+  "(ADDRESS|_ADDRESS)\\s*[:=]\\s*[\"']?0x[a-fA-F0-9]{40}[\"']?",
+]
+
+# Allowlist entire config template files (they contain example URLs, not real secrets)
+# Paths should be an array of strings (regex patterns or file paths)
+paths = [
+  '\.env\.template$',
+  '\.env\.example$',
+  'config/.*\.template$',
+  'config/.*\.example$',
+  # Documentation files may contain example values
+  'docs/.*\.md$',
+  # Results files from security scans
+  'results\.sarif$',
+  '\.sarif$',
+  # Lock files (may contain checksums that look like secrets)
+  '.*\.lock$',
+  'uv\.lock$',
+  'poetry\.lock$',
+  'package-lock\.json$',
+]
+

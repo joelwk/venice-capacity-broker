@@ -1,0 +1,82 @@
+**Technical Implementation Plan – Remediation Roadmap**
+
+**Objective**  
+Design and justify a minimal-yet-complete set of fixes for every verified issue surfaced in the staging guide [ Staging   ], avoiding code bloat, redundancy, or ungrounded assumptions. All proposals must align with the agent's autonomous strategy (e.g., signal tracking, operations), ensuring persistent state management and safe execution.
+
+**Prerequisites**  
+* All items in the staging guide have been vetted as genuine defects (not environment- or test-induced). Cite evidence for each (e.g., log timestamps).  
+* Balance-related errors are intentionally **out of scope**—do not address them.  
+* Relevant Artifacts: Cross-reference provided documents (e.g., code with worker definitions, transcript on agentic loops, configuration files for behavioral guidelines).  
+* Assume a clean test environment (e.g., REPL with agent framework) for validation simulations.
+
+---
+
+### Plan Development Protocol
+
+1. **Pre-Planning Preparation** (Grounding Step)  
+   - List all verified issues from the staging document explicitly, with verbatim quotes (e.g., "Issue: Rate limit in plugin – from log line 123").  
+   - Verify against project artifacts: Map to known code (e.g., if issue ties to a function, reference its definition in provided documents). Note uncertainties (e.g., "File path unconfirmed in artifacts—speculative based on transcript").  
+   - If needed, simulate via tools (e.g., code_execution on snippets from provided code) to confirm root causes—do not assume unprovided details.
+
+2. **Solution Ideation** (Limit to 5-10 minutes per issue)  
+   - Enumerate ≥2 candidate fixes per issue, capturing multiple angles:  
+     a. Refactor (e.g., modularize function for better state persistence).  
+     b. Config tweak (e.g., update configuration thresholds).  
+     c. Dependency update (e.g., rate limiting in APIs).  
+     d. Agent-specific (e.g., add validation for operation safety).  
+   - Ensure ideas are minimal: Favor declarative changes that leverage existing tools (e.g., nodes for strategy refinement).
+
+3. **Critique & Scoring**  
+   - For each candidate, evaluate quantitatively (score 1-10) on:  
+     a. **Feasibility** – Effort level, tech debt, external constraints (e.g., no internet for installs).  
+     b. **Impact** – Scope of codebase change, regression risk (e.g., to autonomous loops).  
+     c. **Alignment** – Consistency with design goals (e.g., maximization, autonomous decision-making from configuration).  
+     d. **Risk** – Likelihood of new defects/performance hits (e.g., added latency in execution).  
+   - Agent-Specific Critique: Assess fit with agent behaviors (e.g., "Does this preserve signal correlation in priority elements?").
+
+4. **Refinement & Pruning**  
+   - Discard options that add unnecessary bulk, duplicate logic (e.g., avoid reimplementing existing observation recording), or miss root causes (cite evidence).  
+   - Consolidate overlapping ideas into a lean proposal (e.g., merge config tweaks into one update).  
+   - Balance Review: Note any non-issues or successes from the staging document (e.g., "Successful worker loop as per transcript— no fix needed").
+
+5. **Final Proposal**  
+   - Order by priority/dependency chain (e.g., High first, with graph: Fix A → Fix B).  
+   - For each retained solution, provide:  
+     a. **Issue ID / Symptom:** Verbatim from the staging document (e.g., "ID-001: Failed analysis in function").  
+     b. **Proposed Fix:** Concise description (e.g., "Add try-except for errors with fallback to cached data").  
+     c. **Implementation Steps:** File paths/functions from artifacts (e.g., "Update document: Modify function; add rollback in state function"). Include migration notes (e.g., "Test in REPL before broadcast").  
+     d. **Expected Outcome:** Behavioral change, performance delta, side-effects (e.g., "Reduces failures by 50%; no impact on trades; measurable via log alignment score >8/10").
+
+6. **Anti-Hallucination QA Checkpoint** (Mandatory Final Step)  
+   - Review entire plan: Verify every issue, fix, path, or detail against prerequisites/artifacts (e.g., "Path confirmed; function matches transcript").  
+   - Flag/correct unsubstantiated claims (e.g., "Remove invented fix for non-existent check—no evidence").  
+   - If data is insufficient, label as "Speculative" or omit. Confirm: "All references evidence-based; no hallucinations detected."
+
+---
+
+### Key Considerations
+* Ignore balance-related errors entirely—explicitly state if an issue borders this (e.g., "Out of scope per prerequisites").  
+* Verify each fix in a simulated clean environment (e.g., code_execution on isolated snippets) to rule out artifacts.  
+* Favor changes preserving intended behavior (e.g., autonomous patterns); avoid hacks—prioritize safety (e.g., validate operations).  
+* Minimize retries/loops unless specified in configuration prompts; ensure replayability from state checkpoints.
+
+---
+
+### Deliverables (Use This Exact Template)
+* **Implementation Plan Doc**  
+  - Structured outline of all proposals, ordered by priority (High/Medium/Low).  
+
+* **Solution Matrix**  
+  - Table format:  
+    | Issue ID | Symptom (Verbatim) | Chosen Fix | Priority | Evidence Citation |  
+    |----------|--------------------|------------|----------|-------------------|  
+    | (e.g., ID-001) | (quote) | (description) | High | (Staging Document, line X; document) |  
+
+* **Expected Outcomes**  
+  - Bullet list with measurable criteria per change (e.g., "- ID-001: Post-fix, analysis success rate >90%; validated via simulated run; aligns with maximization goal").  
+
+> _Next Step: Review & approve (`LGTM` / comments). Implementation begins once approved, with continuous validation against expected outcomes.
+description:
+globs:
+alwaysApply: false
+---

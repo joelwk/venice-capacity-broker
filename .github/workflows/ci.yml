@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Base / chain configuration
+      BASE_CHAIN_ID: "8453"
+      # Prefer repo/env vars or secrets for paid RPCs; fallback to public endpoints for CI only.
+      BASE_RPC_URLS: >-
+        ${{ vars.BASE_RPC_URLS || secrets.ALCHEMY_RPC_URLS || secrets.BASE_RPC_URLS || 'https://mainnet.base.org,https://base.publicnode.com,https://base.llamarpc.com,https://base.blockpi.network/v1/rpc/public,https://endpoints.omniatech.io/v1/base/mainnet/public,https://1rpc.io/base,https://base.meowrpc.com,https://base-mainnet.public.blastapi.io,https://gateway.tenderly.co/public/base,https://base.drpc.org' }}
+      # Provide a primary URL for components that don't read *_URLS
+      BASE_RPC_URL: >-
+        ${{ vars.BASE_RPC_URL || secrets.ALCHEMY_RPC_URL || secrets.BASE_RPC_URL || 'https://base.publicnode.com' }}
+      # DEX configuration (used by integration tests)
+      DEX_DISCOVERY_PROVIDERS: uniswap_v2,uniswap_v3
+      DEX_EXEC_PROVIDERS: uniswap_v2,uniswap_v3
+      DEX_PROVIDERS: uniswap_v2,aerodrome
+      UNISWAP_V2_ROUTER_ADDRESS: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24"
+      AERODROME_ROUTER_ADDRESS: "0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5"
+      AERODROME_STABLE: "false"
+      QUOTE_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      WETH_ADDRESS: "0x4200000000000000000000000000000000000006"
+      VVV_TOKEN_ADDRESS: "0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf"
+      DIEM_TOKEN_ADDRESS: "0xf4d97f2da56e8c3098f3a8d538db630a2606a024"
+      DIEM_USDC_POOL_ADDRESS: ${{ vars.DIEM_USDC_POOL_ADDRESS || secrets.DIEM_USDC_POOL_ADDRESS || '' }}
+      DIEM_VVV_PAIR_ADDRESS: "0xbB345D35450BF9Ee76F3D2cE214E8e7AC5e1071d"
+      VVV_USDC_POOL_ADDRESS: "0x67A11022B7B6ed66f81233F6C8Ed6e48F7826530"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Sync dependencies
+        run: |
+          uv venv
+          uv sync --extra dev
+      - name: Secrets scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+      - name: Formatting
+        run: |
+          uv run ruff format --check
+      - name: Debug env (safe)
+        run: |
+          if [ -n "${BASE_RPC_URLS:-}" ]; then
+            echo "BASE_RPC_URLS: set"
+          else
+            echo "BASE_RPC_URLS: NOT SET"
+          fi
+          if [ -n "${BASE_RPC_URL:-}" ]; then
+            echo "BASE_RPC_URL: set"
+          else
+            echo "BASE_RPC_URL: NOT SET"
+          fi
+      - name: Lint
+        run: |
+          uv run ruff check --output-format=github
+      - name: Tests
+        timeout-minutes: 30
+        run: |
+          uv run pytest -q --timeout=300
+      - name: CI security gate
+        env:
+          BROKER_REQUIRE_ADMIN_TOKEN: "true"
+        run: |
+          uv run python apps/cli/main.py ci:gate || exit 1

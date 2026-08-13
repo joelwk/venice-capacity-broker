@@ -1,0 +1,28 @@
+# Base mainnet addresses (fill with official values)
+
+contracts:
+  vvv_token: '0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf' # VVV token address (Base mainnet)
+  vvv_staking: '0x321b7ff75154472B18EDb199033fF4D116F340Ff' # VVV staking contract (Base mainnet)
+  diem_token: '0xf4d97f2da56e8c3098f3a8d538db630a2606a024' # DIEM token address (Base mainnet)
+
+dex:
+  # Dual provider configuration
+  uniswap_v2_router: '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24'  # Uniswap V2 Router02 (Base)
+  aerodrome_router: '0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43'  # Aerodrome V2 Router (Classic)
+  aerodrome_stable: false  # DIEM/USDC pool is volatile (standard) on Aerodrome
+  # Legacy single router (kept for reference/fallback)
+  router: '0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24'
+  # Optional commonly used quote token for trading routes, e.g., USDC
+  quote_token: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'  # USDC on Base mainnet
+
+# Liquidity pools for reference:
+# - DIEM/USDC (Aerodrome): 0xb1367773cb48ae6d910ae711012dbc5e7ceae615 (volatile, 0.3% fee)
+# - VVV/DIEM (Aerodrome): 0x80d995189ecc593672ad4703b250a5e82672eb1d (volatile, 0.3% fee)
+# - DIEM/USDC (Aerodrome SlipStream): 0xbc3231036ee1eca03e5f67fecedc640d21610823 (0.05% fee)
+
+# Token decimals:
+# - VVV: 18 decimals
+# - DIEM: 18 decimals  
+# - USDC: 6 decimals
+
+# After filling, either export env vars to override or load this YAML in your app init if desired.

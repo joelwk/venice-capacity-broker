@@ -1,0 +1,113 @@
+run = "bash -lc 'bash scripts/replit_run.sh dry'"
+language = "python3"
+entrypoint = "apps/broker_api/app.py"
+modules = ["python-3.10"]
+
+# ------------------------------------------------------------------------------
+# Environment Configuration
+# ------------------------------------------------------------------------------
+# Replit does NOT auto-load .env files. The run script (scripts/replit_run.sh)
+# loads .env at startup, with Replit Secrets taking precedence.
+#
+# Configuration hierarchy:
+#   1. Replit Secrets (highest priority) - for API keys, private keys, tokens
+#   2. [env] section below - runtime overrides for Replit deployments
+#   3. .env file - base configuration (copy from env.md template)
+#
+# Setup for Replit:
+#   1. Copy env.md to .env: cp env.md .env
+#   2. Set sensitive values (<set-in-secrets>) via Replit Secrets pane
+#
+# For local Docker: docker/.env.local provides secrets, .env for base config.
+# ------------------------------------------------------------------------------
+[env]
+CORS_ENABLED = "true"
+CORS_ALLOW_ORIGINS = "https://capacity-broker.replit.app"
+QUOTES_ENABLED = "true"
+PURCHASES_ENABLED = "true"
+PRICE_ENGINE = "market"
+AUTOSTART_TOKEN_WATCHER_ALLOW_NO_KEY = "1"
+SKIP_STARTUP_TASKS = "1"
+SPAWN_AGENT_STACK = "1"
+AUTOSTART_ORCHESTRATOR = "1"
+# Run Replit prestart (migrations + env checks) during runtime.
+SKIP_REPLIT_PRESTART = "0"
+# StakeMaster is run from the orchestrator loop; keep standalone stakemaster off.
+AUTOSTART_STAKEMASTER = "0"
+AUTOSTART_TOKEN_WATCHER = "1"
+STAKEMASTER_PROGRESSIVE_ENABLE = "1"
+# Disable stake rounding so sub-2 VVV balances can auto-stake.
+STAKEMASTER_STAKE_INCREMENT_UNITS = "0"
+BROKER_FAST_STARTUP = "1"
+# Marketdata warmup can exceed the UI-oriented default timeout during cold starts.
+# This ensures the startup warmers populate caches fully so /buy.html Market Snapshot
+# has ETH/USDC/WBTC/DIEM available quickly and reliably.
+BROKER_WARMUP_MARKETDATA_TIMEOUT_SECONDS = "30"
+# UI: keep market price batch timeout below frontend abort thresholds, but high enough
+# to survive first-run DEX/RPC init on Replit.
+MARKETDATA_PRICES_TIMEOUT_SECONDS = "20"
+# Constrain per-request worker fanout on smaller VMs.
+MARKETDATA_PRICE_FETCH_WORKERS = "4"
+# Use direct DIEM/USDC pool for buys (bypass unreliable bridge routes that cause health check failures)
+DIEM_BUY_DIRECT_ONLY = "1"
+# AUTOSTART_BROKER_PORT set dynamically from $REPLIT_SERVER_PORT/$PORT by scripts/run_stack_entry.sh
+# Logging configuration for workflows and deployments
+LOG_LEVEL = "INFO"
+LOG_DIR = "logs"
+LOG_BASENAME = "runtime.log"
+LOG_CAPTURE_CONSOLE = "1"
+# Set LOG_FORMAT=json for structured logs in cloud deployments (easier parsing in Replit logs)
+
+[[runnable]]
+name = "Stack (dry-run)"
+command = "bash -lc 'bash scripts/replit_run.sh dry'"
+
+[[runnable]]
+name = "Stack (live)"
+command = "bash -lc 'bash scripts/replit_run.sh live'"
+
+[deployment]
+# Match the "Run Venice Stack (live)" workflow behavior:
+# 1. SPAWN_AGENT_STACK=1 spawns orchestrator/token-watcher in background
+# 2. Broker API starts in foreground (waitForPort=8000)
+run = ["sh", "-c", "bash scripts/replit_run.sh live"]
+deploymentTarget = "gce"
+build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
+
+[nix]
+packages = ["curl", "gnumake", "libxcrypt"]
+channel = "stable-25_05"
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Run Venice Stack (dry)"
+author = 38779469
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/replit_run.sh dry"
+
+[[workflows.workflow]]
+name = "Run Venice Stack (live)"
+author = 38779469
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/replit_run.sh live"
+waitForPort = 8000
+
+[agent]
+expertMode = true
+
+[userenv]
+
+[userenv.shared]
+BROKER_REQUIRE_ADMIN_TOKEN = "true"

@@ -1,0 +1,16 @@
+.venv
+venv
+*.pyc
+__pycache__
+.git
+.pytest_cache
+*.log
+logs/
+db/agent_memory.jsonl
+.env.local
+docker/.env.local
+check_tenant.py
+check_tenant_subkey.py
+test_subkey.py
+rotate_tenant_key.py
+__pycache__/

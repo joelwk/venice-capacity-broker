@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+.env.*
+!.env.example
+!.env.docker.example
+!**/*.example
+.env.docker
+.pytest_cache/
+.tmp-test-admin-limit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Frontend (if added later)
+node_modules/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# Databases & runtime state
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+apps/broker_api/tenants.json
+db/agent_memory.jsonl
+db/agent_memory.jsonl.*
+
+# Test & coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+coverage/
+
+# Legacy Replit export
+local.json
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Logs
+logs/
+*.log
+
+# Transient local scratch files
+tmp_*
+tmp-*
+tmp*/
+*.jsonl
+# Cursor local debug logs (keep committed rules)
+.cursor/debug.log
+.cursor/*.log
+docker/.env.local
+gitleaks.exe
+*.sarif
+attached_assets/

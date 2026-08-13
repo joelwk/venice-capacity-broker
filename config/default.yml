@@ -1,0 +1,265 @@
+app:
+  name: vvv-agents
+  log_level: ${LOG_LEVEL:INFO}
+
+# Logging configuration
+# LOG_LEVEL: DEBUG, INFO, WARNING, ERROR (default: INFO)
+# LOG_FORMAT: empty for human-readable, "json" for structured JSON logs
+# LOG_DIR: directory for log files (default: logs)
+# LOG_BASENAME: log file name (default: runtime.log)
+# LOG_CAPTURE_CONSOLE: 1 to tee stdout/stderr to log file (default: 1)
+# LOG_FILE: explicit log file path (overrides LOG_DIR/LOG_BASENAME)
+logging:
+  level: ${LOG_LEVEL:INFO}
+  format: ${LOG_FORMAT:}  # empty = human-readable, "json" = structured JSON
+  dir: ${LOG_DIR:logs}
+  basename: ${LOG_BASENAME:runtime.log}
+  capture_console: ${LOG_CAPTURE_CONSOLE:1}
+  file: ${LOG_FILE:}  # Optional: explicit path (overrides dir/basename)
+
+network:
+  base:
+    rpc_url: ${BASE_RPC_URL:https://mainnet.base.org}
+    rpc_urls: ${BASE_RPC_URLS:}
+    chain_id: ${BASE_CHAIN_ID:8453}
+    rpc_rate_limit_cooldown_seconds: ${RPC_RATE_LIMIT_COOLDOWN_SECONDS:60}
+    rpc_backoff_base_seconds: ${RPC_BACKOFF_BASE_SECONDS:90}
+    rpc_backoff_max_seconds: ${RPC_BACKOFF_MAX_SECONDS:600}
+    rpc_backoff_multiplier: ${RPC_BACKOFF_MULTIPLIER:2.0}
+
+wallet:
+  default_provider: eth_account  # or: smart_wallet
+
+venice:
+  base_url: ${VENICE_API_BASE_URL:https://api.venice.ai/api/v1}
+  api_key: ${VENICE_API_KEY:}
+  endpoints:
+    create_root: ${VENICE_CREATE_ROOT_PATH:/api_keys/generate_web3_key}
+    create_subkey: ${VENICE_CREATE_SUBKEY_PATH:/api_keys}
+    revoke_key: ${VENICE_REVOKE_KEY_PATH:/api_keys/{key_id}}
+    challenge: ${VENICE_CHALLENGE_PATH:/api_keys/generate_web3_key}
+    usage: ${VENICE_USAGE_PATH:/api_keys/rate_limits/log}
+    rate_limits: ${VENICE_RATE_LIMITS_PATH:/api_keys/rate_limits}
+    quota: ${VENICE_QUOTA_PATH:/api_keys/rate_limits}
+    models: ${VENICE_MODELS_PATH:/models}
+    chat_completions: ${VENICE_CHAT_COMPLETIONS_PATH:/chat/completions}
+    vvv: ${VENICE_VVV_PATH:/vvv}
+    vvv_circulatingsupply: ${VENICE_VVV_CIRC_PATH:/vvv/circulatingsupply}
+    vvv_utilization: ${VENICE_VVV_UTIL_PATH:/vvv/utilization}
+    vvv_staking_yield: ${VENICE_VVV_YIELD_PATH:/vvv/staking_yield}
+
+contracts:
+  vvv_token: ${VVV_TOKEN_ADDRESS:0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf}
+  vvv_staking: ${VVV_STAKING_ADDRESS:0x321b7ff75154472b18edb199033ff4d116f340ff}
+  diem_token: ${DIEM_TOKEN_ADDRESS:0xf4d97f2da56e8c3098f3a8d538db630a2606a024}  # gitleaks:allow Base mainnet contract default
+  diem_market: ${DIEM_MARKET_ADDRESS:}
+
+diem_liquidity:
+  # Canonical DIEM/VVV and VVV/USDC pools for Base
+  # These are treated as sources of truth for DIEM routing
+  diem_token: ${DIEM_TOKEN_ADDRESS:0xf4d97f2da56e8c3098f3a8d538db630a2606a024}  # gitleaks:allow Base mainnet contract default
+  vvv_token: ${VVV_TOKEN_ADDRESS:0xacfE6019Ed1A7Dc6f7B508C02d1b04ec88cC21bf}
+  diem_vvv_pair: ${DIEM_VVV_PAIR_ADDRESS:0xbb345d35450bf9ee76f3d2ce214e8e7ac5e1071d}  # gitleaks:allow Base mainnet contract default
+  diem_vvv_factory: ${DIEM_VVV_FACTORY_ADDRESS:0x420dd381b31aef6683db6b902084cb0ffece40da}
+  diem_vvv_provider: ${DIEM_VVV_BRIDGE_PROVIDER:aerodrome}  # Pool is Aerodrome, not UniswapV2
+  vvv_usdc_pool: ${VVV_USDC_POOL_ADDRESS:0x67a11022b7b6ed66f81233f6c8ed6e48f7826530}
+  vvv_usdc_fee: ${VVV_USDC_POOL_FEE:3000}
+  vvv_usdc_factory: ${VVV_USDC_POOL_FACTORY:0x33128a8fc17869897dce68ed026d694621f6fdfd}
+  vvv_weth_pool: ${VVV_WETH_POOL_ADDRESS:0x01784ef301d79e4b2df3a21ad9a536d4cf09a5ce}
+  vvv_weth_provider: ${VVV_WETH_BRIDGE_PROVIDER:aerodrome}
+  vvv_weth_fee: ${VVV_WETH_POOL_FEE:3000}
+
+dex:
+  providers: ${DEX_PROVIDERS:[{"name":"uniswap_v2","router":"0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"},{"name":"aerodrome","router":"0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43","stable":false},{"name":"aerodrome_cl","router":"0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5","pool":"0xBc3231036Ee1ECa03E5F67FEceDC640D21610823","tick_spacing":100},{"name":"uniswap_v3","router":"0x2626664c2603336e57b271c5c0b26f421741e481","quoter":"0x3d4e44eb1374240ce5f1b871ab261cd16335b76a","default_fee":3000}]}
+  uniswap_v2_router: ${UNISWAP_V2_ROUTER_ADDRESS:0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24}
+  aerodrome_router: ${AERODROME_ROUTER_ADDRESS:0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43}
+  aerodrome_cl_router: ${AERODROME_CL_ROUTER_ADDRESS:0xBE6D8f0d05cC4be24d5167a3eF062215bE6D18a5}
+  aerodrome_stable: ${AERODROME_STABLE:false}  # Default to false for volatile pairs; DIEM/VVV pair is volatile
+  aerodrome_exact_out_enable: ${AERODROME_EXACT_OUT_ENABLE:0}  # Disabled by default until Aerodrome router issues are resolved
+  # Approval policy: infinite (max uint256) approvals prevent STF reverts on composite trades
+  approve_max: ${DEX_APPROVE_MAX:1}  # Enabled by default for reliable composite execution
+  uniswap_v3_approve_max: ${DEX_UNISWAP_V3_APPROVE_MAX:}  # Provider-specific override (empty = use approve_max)
+  router: ${ROUTER_ADDRESS:}  # legacy fallback for Uniswap V2
+  quote_token: ${QUOTE_TOKEN_ADDRESS:0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913}  # gitleaks:allow Base mainnet contract default
+  discovery_providers: ${DEX_DISCOVERY_PROVIDERS:}
+  exec_providers: ${DEX_EXEC_PROVIDERS:aerodrome_cl,aerodrome,uniswap_v2,uniswap_v3}
+  retry_attempts: ${DEX_RETRY_ATTEMPTS:5}
+  retry_base_ms: ${DEX_RETRY_BASE_MS:250}
+  retry_jitter_ms: ${DEX_RETRY_JITTER_MS:150}
+  provider_timeout_seconds: ${DEX_PROVIDER_TIMEOUT_SECONDS:5}
+  aggregate_timeout_seconds: ${DEX_AGGREGATE_TIMEOUT_SECONDS:8}
+  provider_timeout_seconds_diem: ${DEX_PROVIDER_TIMEOUT_SECONDS_DIEM:8}
+  aggregate_timeout_seconds_diem: ${DEX_AGGREGATE_TIMEOUT_SECONDS_DIEM:10}
+  early_exit_first_quote: ${DEX_EARLY_EXIT_FIRST_QUOTE:1}
+  rate_limit_qps: ${DEX_RATE_LIMIT_QPS:0}
+  rate_limit_burst: ${DEX_RATE_LIMIT_BURST:0}
+  slippage_bps: ${SLIPPAGE_BPS:200}
+  exact_in_fallback_enable: ${DIEM_EXACT_IN_FALLBACK_ENABLE:1}  # Enabled by default for DIEM routes
+  exact_in_fallback_max_usd: ${DIEM_EXACT_IN_FALLBACK_MAX_USD:10.0}  # Increased for better fallback coverage
+  exact_in_fallback_max_slippage_bps: ${DIEM_EXACT_IN_FALLBACK_MAX_SLIPPAGE_BPS:0}
+  debug_routes: ${DIEM_DEBUG_ROUTES:0}  # Disable diagnostics by default
+  # Fallback to on-chain reserve math when router quotes fail
+  pair_math_fallback_enable: ${DIEM_ENABLE_PAIR_MATH_FALLBACK:1}
+  # Slippage override from ArbiDiem agent
+  slippage_override_enable: ${DIEM_SLIPPAGE_OVERRIDE_ENABLE:0}  # Disabled by default for safety
+  slippage_override_max_bps: ${DIEM_SLIPPAGE_OVERRIDE_MAX_BPS:10000}  # Safety ceiling for override
+  # Provider routing
+  force_v2_for_canonical: ${DEX_FORCE_V2_FOR_CANONICAL:0}  # Force V2 provider for V2-compatible canonical routes (disabled by default to allow V3 fallback)
+  # Route revert guardrail
+  route_revert_ban_enable: ${DIEM_ROUTE_REVERT_BAN_ENABLE:1}  # Enabled by default for faster recovery
+  route_revert_ban_threshold: ${DIEM_ROUTE_REVERT_BAN_THRESHOLD:2}  # Number of reverts before mute
+  route_revert_ban_ttl_seconds: ${DIEM_ROUTE_REVERT_BAN_TTL_SECONDS:1800}  # TTL for mute (30 minutes default)
+  diem_usdc_pool_address: ${DIEM_USDC_POOL_ADDRESS:0xBc3231036Ee1ECa03E5F67FEceDC640D21610823}
+  diem_usdc_pool_fee: ${DIEM_USDC_POOL_FEE:500}
+  diem_usdc_tick_spacing: ${DIEM_USDC_TICK_SPACING:100}
+  diem_prefer_direct_route: ${DIEM_PREFER_DIRECT_ROUTE:1}  # Prefer direct DIEM/USDC route when available
+  diem_buy_direct_only: ${DIEM_BUY_DIRECT_ONLY:1}  # Skip bridge routes for buy operations when direct DIEM/USDC is available
+  # Bridge live fallback: use reserve-based pricing when router quotes fail/incoherent
+  diem_bridge_live_fallback_enable: ${DIEM_BRIDGE_LIVE_FALLBACK_ENABLE:1}
+  diem_bridge_live_fallback_max_usd: ${DIEM_BRIDGE_LIVE_FALLBACK_MAX_USD:10.0}
+
+diem_route_coherence:
+  mute_enable: ${DIEM_ROUTE_COHERENCE_MUTE_ENABLE:1}
+  max_rel_diff: ${DIEM_ROUTE_COHERENCE_MAX_REL_DIFF:2.0}
+  mute_ttl_seconds: ${DIEM_ROUTE_COHERENCE_MUTE_TTL_SECONDS:120}
+  # Coherence relaxation: when trades are tiny or a bridge leg provider is disabled, use
+  # bridge pricing as an alternative reference and avoid muting if it is sane.
+  bridge_min_usd: ${DIEM_COHERENCE_BRIDGE_MIN_USD:5.0}
+  # Route health probe sizing: prevents dust-sized probes that round to zero on multi-hop routes
+  health_probe_usd: ${DIEM_ROUTE_HEALTH_PROBE_USD:3.0}  # USD value for route health probes (default: 3 USD)
+  probe_amount_wei: ${DIEM_ROUTE_PROBE_AMOUNT_IN_WEI:}  # Override probe amount in base units (empty = use USD-based calculation)
+
+broker_api:
+  host: ${BROKER_API_HOST:127.0.0.1}
+  port: ${BROKER_API_PORT:8000}
+
+marketdata:
+  sanity_threshold: ${MARKETDATA_SANITY_THRESHOLD:0.15}
+  watcher_interval_seconds: ${MARKETDATA_WATCHER_INTERVAL:180}
+  debug_sanity: ${MARKETDATA_DEBUG_SANITY:0}  # Disable diagnostics by default
+  path_engine_timeout_seconds: ${MARKETDATA_PATH_ENGINE_TIMEOUT_SECONDS:10.0}  # Max 30.0s, default 10s for Base RPC latency
+
+path_engine:
+  # Route discovery cache TTL (seconds) - balances freshness vs. discovery overhead
+  route_cache_ttl_seconds: ${PATH_ENGINE_ROUTE_CACHE_TTL_SECONDS:60.0}  # Range: 5-600s
+  # Provider timeout tracking - consecutive timeouts before blocklisting
+  provider_timeout_threshold: ${PATH_ENGINE_PROVIDER_TIMEOUT_THRESHOLD:3}  # Min: 1
+  # Backoff duration (seconds) for blocked providers - prevents repeated queries to slow venues
+  provider_backoff_seconds: ${PATH_ENGINE_PROVIDER_BACKOFF_SECONDS:180.0}  # Min: 5s (3 minutes default)
+  # Minimum time budget (seconds) required per route before skipping - prevents starting quotes with insufficient time
+  min_route_budget_seconds: ${PATH_ENGINE_MIN_ROUTE_BUDGET_SECONDS:0.35}  # Range: 0.05-5.0s
+  # Soft timeout margin (seconds) - buffer subtracted from timeout to ensure completion
+  soft_timeout_margin_seconds: ${PATH_ENGINE_SOFT_TIMEOUT_MARGIN_SECONDS:0.75}  # Range: 0.05-5.0s
+  # Soft timeout override (seconds) - alternative to MARKETDATA_PATH_ENGINE_TIMEOUT_SECONDS for path engine budget
+  soft_timeout_seconds: ${PATH_ENGINE_SOFT_TIMEOUT_SECONDS:}  # Optional override, falls back to MARKETDATA_PATH_ENGINE_TIMEOUT_SECONDS
+  
+risk:
+  max_slippage_bps: ${RISK_MAX_SLIPPAGE_BPS:500}  # 5% default cap (soft cap for normal conditions)
+  slippage_hard_cap_bps: ${RISK_DIEM_SLIPPAGE_HARD_CAP_BPS:500}  # Hard cap for dynamic scaling (matches soft cap)
+  max_pool_take_bps: ${RISK_MAX_POOL_TAKE_BPS:10}  # 0.1% max pool impact (proportionally reduced with slippage cap)
+  max_diem_trade_usd: ${RISK_MAX_DIEM_TRADE_USD:100.0}  # Max notional per trade in USD
+  max_diem_inventory_usd: ${RISK_MAX_DIEM_INVENTORY_USD:100000.0}  # Max inventory cap in USD
+  max_diem_trade_units: ${RISK_MAX_DIEM_TRADE_UNITS:0}  # Absolute max units per trade (overrides USD, supports scientific notation)
+  max_stake_usd: ${RISK_MAX_STAKE_USD:0.0}  # Max stake in USD (0 = disabled, uses inventory cap)
+  util_alpha: ${RISK_UTIL_ALPHA:0.5}  # Utilization multiplier: 1 + alpha * utilization
+  max_volatility_bps: ${RISK_MAX_VOLATILITY_BPS:0}  # Max volatility cap in bps (0 = disabled)
+  diem_premium_threshold: ${DIEM_PREMIUM_THRESHOLD:1.25}  # Premium multiple to trigger mint/sell
+  diem_discount_threshold: ${DIEM_DISCOUNT_THRESHOLD:0.0}  # Discount multiple to trigger buy/burn (0 = uses premium_threshold)
+  # Volatility calculation settings
+  vol_history_max_samples: ${RISK_VOL_HISTORY_MAX_SAMPLES:16}
+  vol_max_price_jump_ratio: ${RISK_VOL_MAX_PRICE_JUMP_RATIO:0.5}
+
+arbi_diem:
+  premium_threshold: ${DIEM_PREMIUM_THRESHOLD:1.25}   # mint when market > 125% of fair value
+  discount_threshold: ${DIEM_DISCOUNT_THRESHOLD:0.0}  # 0 = uses premium_threshold
+  # Locked sVVV ratio cap: balance staked (unlocked) vs locked for minting
+  # When locked/total exceeds cap, trigger capacity recovery:
+  #   - Buy DIEM + burn to unlock sVVV, OR
+  #   - Buy VVV + stake to grow denominator (if VVV undervalued)
+  # This ensures enough sVVV remains unlocked for emissions while allowing minting
+  locked_svvv_ratio_cap: ${DIEM_LOCKED_SVVV_RATIO_CAP:0.65}  # Trigger recovery at 65% locked
+  locked_svvv_ratio_target: ${DIEM_LOCKED_SVVV_RATIO_TARGET:0.50}  # Recover down to 50% locked (hysteresis)
+  locked_svvv_ratio_min_total_units: ${DIEM_LOCKED_SVVV_RATIO_MIN_TOTAL_SVVV_UNITS:50000000000000000000}  # 50 sVVV minimum before ratio logic applies
+  # VVV fair-value preference: when VVV trades at discount to intrinsic, prefer buy+stake over buy+burn
+  vvv_fv_prefer_stake_discount_mult: ${VVV_FV_PREFER_STAKE_DISCOUNT_MULT:1.15}  # Prefer stake when FV/spot > 1.15x
+  # Action pacing (protect against rapid-fire loops)
+  # Applies to mint/sell and recovery actions (recovery can optionally bypass the interval).
+  min_action_interval_seconds: ${ARBI_DIEM_MIN_ACTION_INTERVAL_SECONDS:300}
+  max_mint_sell_per_hour: ${ARBI_DIEM_MAX_MINT_SELL_PER_HOUR:12}
+  recovery_bypass_interval: ${ARBI_DIEM_RECOVERY_BYPASS_INTERVAL:0}
+  recovery_preferred_action: ${ARBI_DIEM_RECOVERY_PREFERRED_ACTION:auto}
+  recovery_max_slippage_bps: ${ARBI_DIEM_RECOVERY_MAX_SLIPPAGE_BPS:500}
+  recovery_small_trade_usd: ${ARBI_DIEM_RECOVERY_SMALL_TRADE_USD:5}
+  liquidity_max_adjust_steps: ${ARBI_DIEM_LIQUIDITY_MAX_ADJUST_STEPS:3}
+  recovery_price_sanity_max_rel_diff: ${ARBI_DIEM_RECOVERY_PRICE_SANITY_MAX_REL_DIFF:0.75}
+  # Recovery can bypass reflex halt when locked ratio exceeds cap
+  recovery_bypass_reflex: ${ARBI_DIEM_RECOVERY_BYPASS_REFLEX:1}
+
+diem_contract:
+  # Contract addresses and ABI for DIEM operations
+  # Note: DIEM minting uses VVV_STAKING_ADDRESS (sVVV contract) by default
+  staking_address: ${DIEM_STAKING_ADDRESS:}  # Optional override for DIEM staking (defaults to VVV_STAKING_ADDRESS)
+  staking_abi: ${DIEM_STAKING_ABI:diem.json}  # ABI file for staking contract
+  # Contract function names on VVV_STAKING_ADDRESS (sVVV staking contract)
+  # mintDiem(uint256 sVVVAmountToLock, uint256 minDiemAmountOut) - locks sVVV to mint DIEM
+  # burnDiem(diemAmountToBurn) - burns DIEM to unlock sVVV
+  mint_fn: ${DIEM_MINT_FN:mintDiem}
+  burn_fn: ${DIEM_BURN_FN:burnDiem}
+  stake_fn: ${DIEM_STAKE_FN:stake}  # Function to stake DIEM for API credits
+  mint_gas_limit: ${DIEM_MINT_GAS_LIMIT:400000}
+  burn_gas_limit: ${DIEM_BURN_GAS_LIMIT:300000}
+  approve_gas_limit: ${DIEM_APPROVE_GAS_LIMIT:100000}
+  # Mint slippage protection - minDiemAmountOut = expected * (100 - slippage_pct) / 100
+  mint_slippage_pct: ${DIEM_MINT_SLIPPAGE_PCT:25.0}  # 25% slippage tolerance (75% min output)
+  mint_min_output: ${DIEM_MINT_MIN_OUTPUT:}  # Override calculated minDiemAmountOut (empty = use calculated)
+  # Mint retry logic for transient state changes
+  mint_max_retries: ${DIEM_MINT_MAX_RETRIES:3}  # Max retry attempts on revert/timeout
+  mint_retry_delay_sec: ${DIEM_MINT_RETRY_DELAY_SEC:2.0}  # Delay between retries
+  mint_wait_confirm: ${DIEM_MINT_WAIT_CONFIRM:1}  # Wait for tx confirmation (1=true, 0=fire-and-forget)
+  mint_confirm_timeout_sec: ${DIEM_MINT_CONFIRM_TIMEOUT_SEC:60}  # Confirmation timeout in seconds
+  # Mint enable/disable
+  mint_enabled: ${DIEM_MINT_ENABLED:1}  # Enable minting (1=enabled, 0=disabled)
+  # Minimum DIEM to sell (skip dust that can't be traded)
+  min_sell_units: ${DIEM_MIN_SELL_UNITS:1000000000000000}  # 0.001 DIEM = 1e15 wei
+
+orchestrator:
+  progressive_enable: ${STAKEMASTER_PROGRESSIVE_ENABLE:true}
+  progressive_cycles: ${STAKEMASTER_PROGRESSIVE_CYCLES:5}
+  price_guard_streak_max: ${ARBI_PRICE_GUARD_STREAK_MAX:15}
+  price_guard_min_streak: ${ARBI_PRICE_GUARD_MIN_STREAK:5}
+  price_guard_max_drift: ${ARBI_PRICE_GUARD_MAX_DRIFT:0.2}
+  price_guard_max_vol_bps: ${ARBI_PRICE_GUARD_MAX_VOL_BPS:25.0}
+  # Trade sizing - target USD per trade (smaller trades to fit within wallet balance)
+  arbi_diem_trade_usd: ${ARBI_DIEM_TRADE_USD:0.10}  # Target trade size in USD
+  arbi_diem_min_trade_usd: ${ARBI_DIEM_MIN_TRADE_USD:0.10}  # Minimum trade size in USD (floor)
+  arbi_diem_liquidity_min_trade_usd: ${ARBI_DIEM_LIQUIDITY_MIN_TRADE_USD:0.10}  # Minimum trade size in USD (floor)
+  # Low-balance mode: set ARBI_DIEM_MIN_TRADE_USD=0.10 and ARBI_DIEM_LIQUIDITY_MIN_TRADE_USD=0.10 in .env
+
+reflex:
+  # Reflex guardian settings
+  max_vol_bps: ${REFLEX_MAX_VOL_BPS:2000}  # Max volatility in bps before halting (increased from 450 to accommodate real DIEM volatility)
+  max_utilization: ${REFLEX_MAX_UTILIZATION:0.92}
+  max_drawdown: ${REFLEX_MAX_PRICE_DRAWDOWN:0.12}
+
+stakemaster:
+  # Auto-stake idle VVV above wallet buffer
+  auto_stake_idle_enable: ${STAKEMASTER_AUTO_STAKE_IDLE_ENABLE:true}
+  wallet_vvv_buffer_units: ${STAKEMASTER_WALLET_VVV_BUFFER_UNITS:250000000000000000}  # 0.25 VVV (keep small buffer in wallet)
+  idle_stake_max_per_cycle_units: ${STAKEMASTER_IDLE_STAKE_MAX_PER_CYCLE_UNITS:10000000000000000000}  # 10 VVV max per cycle
+  idle_stake_min_usd: ${STAKEMASTER_IDLE_STAKE_MIN_USD:0.20}  # Skip staking dust below this USD value
+  # Overflow backoff: shrink stake size when estimation panics (e.g., panic error 0x11).
+  idle_stake_overflow_max_retries: ${STAKEMASTER_IDLE_STAKE_OVERFLOW_MAX_RETRIES:4}
+  idle_stake_overflow_backoff_mult: ${STAKEMASTER_IDLE_STAKE_OVERFLOW_BACKOFF_MULT:0.25}
+  # Auto-compound: restake claimed rewards
+  auto_compound_enable: ${STAKEMASTER_AUTO_COMPOUND_ENABLE:true}
+  compound_only_if_claimed: ${STAKEMASTER_COMPOUND_ONLY_IF_CLAIMED:true}  # Only compound after successful claim
+  # Existing settings
+  min_stake_usd: ${STAKEMASTER_MIN_STAKE_USD:10.0}
+  auto_stake_max_attempts: ${STAKEMASTER_AUTO_STAKE_MAX_ATTEMPTS:3}
+  # Stake increment: round down stake amounts to this increment (0 disables rounding)
+  stake_increment_units: ${STAKEMASTER_STAKE_INCREMENT_UNITS:2000000000000000000}  # 2 VVV @ 18d
+  # Claim gating: require rewards to exceed estimated gas by a buffer.
+  # When market data or gas estimates are unavailable, `min_claim_units` is a fallback.
+  claim_gas_buffer_mult: ${STAKEMASTER_CLAIM_GAS_BUFFER_MULT:2.0}
+  min_claim_usd: ${STAKEMASTER_MIN_CLAIM_USD:0.05}
+  min_claim_units: ${STAKEMASTER_MIN_CLAIM_UNITS:0}

@@ -1,0 +1,177 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "venice-capacity-broker"
+version = "0.1.0"
+description = "Quorum-driven capacity broker and agent orchestration for Venice (VVV/DIEM) on Base using LangGraph and Coinbase AgentKit"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Environment :: Web Environment",
+]
+
+# Base runtime deps kept minimal; feature sets are extras below.
+dependencies = [
+  "requests>=2.31",
+  "pydantic>=2.6",
+  "fastapi",
+  "uvicorn",
+  "alembic>=1.12",
+  # Load environment variables from .env when present
+  "python-dotenv>=1.0",
+  "web3>=6.15",
+  "eth-account>=0.10",
+  "pycryptodome>=3.18",
+]
+
+[project.urls]
+Homepage = "https://venice-capacity-broker.replit.app/buy.html"
+Documentation = "https://github.com/joelwk/venice-capacity-broker"
+
+[project.optional-dependencies]
+broker = [
+  "sqlmodel>=0.0.14",
+  "psycopg2-binary>=2.9",
+  "redis>=5.0",
+  "langsmith>=0.1.38",
+  "alembic>=1.12",
+]
+db = ["sqlmodel>=0.0.14", "psycopg2-binary>=2.9"]
+kv = ["redis>=5.0"]
+tracing = ["langsmith>=0.1.38"]
+graph = ["langchain", "langgraph"]
+web3 = ["web3>=6.15", "eth-account>=0.10"]
+agentkit = ["coinbase-agentkit>=0.3", "cdp-sdk>=0.10"]
+dev = ["pytest", "pytest-asyncio", "pytest-timeout", "httpx", "alembic>=1.12", "playwright>=1.44", "ruff>=0.5.0"]
+
+[tool.uv]
+# uv configuration (no editable flag needed; uv installs project in editable mode for the workspace root).
+
+[tool.hatch.build]
+# Defensive: exclude non-runtime assets from built artifacts (sdist/wheel)
+exclude = [
+  "**/.env",
+  "**/*.env",
+  "**/*.key",
+  "**/*.pem",
+  "**/*.crt",
+  "**/*.pfx",
+  "**/.DS_Store",
+  "**/.pytest_cache/**",
+  "**/__pycache__/**",
+  "infra/**",
+  "tests/**",
+  "scripts/**",
+  "docker-compose.yml",
+  ".replit",
+  "replit.nix",
+]
+
+[tool.hatch.build.targets.sdist]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
+exclude = ["@tool.hatch.build.exclude"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["apps", "libs", "services", "agents", "graph", "db"]
+exclude = ["@tool.hatch.build.exclude"]
+
+[tool.ruff]
+exclude = [
+    "services/marketdata/provider.py",  # Corrupted binary file
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "DTZ", "T10", "EM", "ISC", "ICN", "G", "PIE", "T20", "PYI", "PT", "Q", "RSE", "RET", "SIM", "ARG", "PTH", "ERA", "PD", "PGH", "PL", "TRY", "NPY", "RUF"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# Agents with deliberate branching and lazy imports
+"agents/arbi_diem/agent.py" = ["E501", "I001", "F401", "TRY300", "PLC0415", "PLR0912", "PLR0915", "PLR0911", "PLR2004", "PGH003", "PGH004", "G004", "PLR0913", "ARG001", "ARG002", "ARG005", "RET504", "SIM105", "B007", "SIM102", "N806", "G201"]
+"apps/broker_api/app.py" = ["E501", "PLC0415", "PGH003", "ARG001", "PLW0603", "TRY400", "TRY301", "PLR0915", "PLR0912", "T201", "EM101", "TRY003", "ARG005", "N807"]
+"apps/broker_api/routers/*.py" = ["E501", "PLC0415", "PLW0603", "PLR0913", "PLR0915", "PLR0912", "DTZ003", "DTZ004", "B904", "PGH003", "PLR2004", "N806", "RUF046", "TRY301", "SIM105", "ARG001", "ARG002", "ARG005", "PLW2901", "N803", "TRY201", "TRY003", "EM101", "EM102", "SIM108", "TRY300", "B008", "RUF034"]
+"apps/broker_api/services/*.py" = ["PLC0415", "TRY003", "TRY301", "TRY400", "EM101", "EM102", "B904", "TRY300", "E501"]
+"apps/broker_api/store.py" = ["PGH003", "ARG001", "TRY300", "E501", "PLC0415", "N806", "EM101", "TRY003"]
+"services/wallet/provider.py" = ["PLC0415", "N806", "PLR0912", "PLR0915", "E501", "TRY003", "EM101", "TRY301", "TRY400", "PLR0911"]
+"apps/broker_api/config.py" = ["E501", "PLR0912"]
+"apps/broker_api/lifespan.py" = ["PLW0603", "SIM105", "E501", "PLC0415", "ARG001"]
+"apps/broker_api/marketdata.py" = ["PLW0603", "PLC0415"]
+"apps/broker_api/models.py" = ["N815"]
+"apps/broker_api/rate_limit.py" = ["PLC0415", "E501", "PLR0913"]
+"apps/broker_api/**/*.py" = ["E501", "PLC0415", "PLR0913", "PLR0915", "PLR0912", "PLR2004", "B904", "TRY201", "TRY003", "TRY301", "TRY400", "SIM102", "SIM105", "SIM108", "N806", "N803", "N814", "PGH003", "PGH004", "ARG001", "ARG002", "ARG004", "ARG005", "PLW0603", "DTZ003", "DTZ004", "DTZ007", "B008", "RUF034", "RUF046", "RUF059", "N807", "G004", "G201", "EM101", "EM102", "RET504", "SIM103", "PLW1641", "SIM118"]
+"services/**/*.py" = ["PLC0415", "N806", "PLR0912", "PLR0915", "PLR0911", "E501", "TRY003", "EM101", "EM102", "TRY301", "TRY300", "TRY201", "TRY400", "SIM105", "RET504", "PLR0913", "PGH003", "RUF002", "PLR2004", "PLW0603", "B904", "G004", "RUF046", "TRY203", "SIM103", "C408"]
+"apps/cli/main.py" = ["E501", "PLC0415", "PGH003", "TRY400", "G004", "PLR0912", "PLR0915", "SIM103", "SIM105", "ARG001", "T201", "DTZ004", "B904", "TRY003", "EM102", "N806", "TRY300", "B007", "PLR2004", "PIE810", "SIM118", "C416", "DTZ003", "B905", "RUF059", "TRY301", "EM101"]
+"core/config.py" = ["PLR0912", "E501", "PLW0603"]
+"db/migrations/**/*.py" = ["SIM105", "E501", "C408", "ERA001", "TRY300"]
+"db/migrations/env.py" = ["G201"]
+"db/**/*.py" = ["PGH003", "E501", "SIM105", "ARG001", "ARG002", "PLC0415", "TRY003", "EM101", "RUF002", "C408", "PLW0603", "N802", "PLR0912", "PLR0915", "SIM102", "SIM103", "TRY300"]
+"services/diem/client.py" = ["ARG001", "ARG002", "RUF059", "SIM102", "B007", "ERA001", "B025", "PLE1205", "F821", "RUF005", "G201", "B905", "PLR0912", "PLR0915", "PLR2004", "TRY003", "EM101", "EM102", "E501", "RUF034"]
+"services/marketdata/**/*.py" = ["B905", "SIM108", "G004", "PLR1714", "RUF003", "SIM102", "SIM101", "ARG001", "T201"]
+"services/marketdata/token_watcher.py" = ["TRY004"]
+"services/pricing/service.py" = ["ARG005", "C408", "RUF046"]
+"services/staking/client.py" = ["PLR2004", "PLR0911", "SIM103", "PLR0913"]
+"services/memory/store.py" = ["PLW2901", "ARG001"]
+"services/portfolio/inventory.py" = ["RUF005"]
+"services/treasury/recycle.py" = ["ARG001", "ARG002", "ARG005"]
+"scripts/**/*.py" = ["PTH120", "PTH100", "T201", "N806", "PLC0415", "E501", "TRY300", "RUF059", "PLR0912", "PLR0915", "PLR2004", "PLR0913", "SIM102", "SIM105", "PGH003", "PTH110", "PTH123", "C408", "G004", "TRY003", "EM101", "EM102", "TRY004", "TRY301", "TRY400", "B904", "B007", "PLW2901", "RUF003", "RUF001", "PT028", "RET504", "PLR0911", "ARG001", "ARG002", "ERA001", "DTZ004", "SIM108", "PT018", "PTH118", "RUF046"]
+"libs/**/*.py" = ["E501", "PLC0415", "G004", "TRY003", "EM101", "EM102", "TRY400", "TRY300", "TRY301", "TRY201", "PLR2004", "PLR0912", "PLR0915", "PLR0913", "PLR0911", "SIM108", "SIM105", "SIM102", "SIM103", "SIM117", "SIM109", "SIM118", "PGH003", "PGH004", "RUF046", "RUF059", "RUF003", "RUF001", "RUF012", "N806", "PLW0603", "PLW0602", "B904", "B007", "B023", "RUF005", "RUF002", "PIE810", "ARG001", "ARG002", "ARG005", "RUF034", "G201", "DTZ004", "ERA001", "RET504", "A004", "C416", "PLR1714", "UP007", "T201"]
+"graph/**/*.py" = ["PLC0415", "PGH003", "ARG001", "E501", "PLR0912", "PLR0915", "SIM102", "SIM105", "DTZ003", "SIM108", "G004", "PLR2004", "PLR0913", "RUF034", "PIE810", "G201", "PLR0911", "TRY300"]
+"graph/workflows/orchestrator.py" = ["PLR2004", "G004", "PLR0913", "RUF034", "PIE810", "G201", "PLR0911", "E501", "PLR0912", "PLR0915", "TRY300", "SIM108"]
+"libs/agentkit_ext/actions.py" = ["PGH003", "TRY003", "EM101", "EM102", "PLR0912", "PLR0915", "SIM108", "PLR0913", "N806", "E501", "SIM105", "RUF003", "TRY300"]
+"sitecustomize.py" = ["PTH112"]
+"tests/test_marketdata_prices.py" = ["PLC0415", "ARG001", "ARG005", "PLR2004", "SIM109", "PLR1714", "TRY003", "EM102", "RUF034", "E501"]
+"tests/test_marketdata_price_validation.py" = ["PLC0415", "ERA001", "PLR2004", "E501"]
+"tests/test_market_prices_timeout.py" = ["ARG001", "PLR2004"]
+"tests/test_market_prices_wbtc_sanity.py" = ["ARG001", "ARG005", "TRY003", "EM102", "PLR2004", "PT018"]
+"tests/test_marketdata_pools.py" = ["PGH003", "PLC0415", "C409", "ARG001", "ARG005"]
+"tests/test_logging_debug.py" = ["ARG002", "ARG005", "PLC0415"]
+"tests/test_liquidity_sizing.py" = ["ARG002", "PLC0415", "PT018", "PLR2004", "RUF059"]
+"tests/test_gas_refuel_aggregator.py" = ["PLC0415", "E501", "ARG002", "ARG005"]
+"tests/test_memory_and_reflex.py" = ["PLR2004", "ARG001"]
+"tests/**/*.py" = ["PLR2004", "ARG001", "ARG002", "ARG005", "PLC0415", "PT018", "PT012", "T201", "E501", "TRY003", "EM101", "EM102", "SIM109", "PLR1714", "C409", "RUF034", "SIM117", "RET504", "N807", "PLR0913", "ARG004", "N802", "N806", "C401", "C405", "RUF059", "PT011", "B007", "RUF012", "SIM118", "RUF003", "N814", "RUF046", "PGH003", "PLW1641", "N803", "N804"]
+"agents/arbi_diem/decider.py" = ["PLC0415"]
+"agents/capacity_broker/agent.py" = ["PGH003", "G004", "PLR0912", "PLR0915", "PLC0415", "PLR2004"]
+"agents/quorum/core.py" = ["ARG001", "PGH003", "SIM105"]
+"agents/quorum/models.py" = ["TRY003", "EM102", "SIM105"]
+"agents/reflex/guardian.py" = ["ARG001", "PGH003", "PLR0913", "PLR0912", "PLR0915", "SIM105"]
+"agents/stake_master/agent.py" = ["ARG001", "PGH003", "PLR0912", "PLR0915", "G004", "SIM105", "E501", "PLC0415", "N806", "PLR0913", "PLR0911", "PLR2004", "TRY300", "TRY301", "SIM102"]
+
+# Tests tolerate magic numbers, unused fixtures, and long strings
+"tests/test_memory_behavior.py" = ["PLR2004"]
+"tests/test_orchestrator_portfolio_cap.py" = ["ARG001", "ARG002", "PT018", "PLR2004"]
+"tests/test_orchestrator_util_vol.py" = ["ARG001", "ARG002", "PLR0913", "PLR2004", "PT018", "E501"]
+"tests/test_pathing_engine.py" = ["ARG002", "ARG005", "PLR2004"]
+"tests/test_portfolio_snapshot.py" = ["PLR2004"]
+"tests/test_prod_postgres_and_fallbacks.py" = ["PT012"]
+"tests/test_quorum_coordinator.py" = ["ARG001", "PLC0415"]
+"tests/test_reflex_env_propagation.py" = ["E501", "PLR2004"]
+"tests/test_risk_policy.py" = ["PLR2004"]
+"tests/test_rpc_health_tracking.py" = ["PLR2004"]
+"tests/test_settlement_preview_risk_hints.py" = ["PLR2004"]
+"tests/test_stake_master_autostake.py" = ["ARG005"]
+"tests/test_wallet_provider.py" = ["T201", "ARG001"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: marks tests as end-to-end UI tests",
+]
+# Skip integration tests by default in CI; run explicitly with: pytest -m integration
+addopts = "-m 'not integration'"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+timeout = 60
+
