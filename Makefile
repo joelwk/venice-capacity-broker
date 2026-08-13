@@ -25,8 +25,11 @@ ENV_VALIDATION_ARGS = $(strip $(if $(filter json,$(ENV_VALIDATION_FORMAT)),--jso
 COMPOSE_CMD ?= docker compose
 COMPOSE_FILES ?= docker-compose.yml
 COMPOSE_FILE_ARGS = $(strip $(foreach file,$(COMPOSE_FILES),-f $(file)))
-COMPOSE_ENV_FILE ?= docker/.env.local
-COMPOSE_ENV_FILE_ARGS = $(if $(COMPOSE_ENV_FILE),--env-file $(COMPOSE_ENV_FILE),)
+# Compose ${VAR} interpolation: later files win. Matches docker-compose.yml env_file order.
+# Set COMPOSE_ENV_FILE=path to force a single file, or COMPOSE_ENV_FILES="a b" for an explicit list.
+COMPOSE_ENV_FILE ?=
+COMPOSE_ENV_FILES ?= $(if $(strip $(COMPOSE_ENV_FILE)),$(COMPOSE_ENV_FILE),$(strip $(wildcard .env) $(wildcard .env.docker) $(wildcard docker/.env.local)))
+COMPOSE_ENV_FILE_ARGS = $(foreach f,$(COMPOSE_ENV_FILES),--env-file $(f))
 DOCKER_PROFILES ?=
 DOCKER_PROFILE_ARGS = $(strip $(foreach profile,$(DOCKER_PROFILES),--profile $(profile)))
 DOCKER_DETACH ?= 0
@@ -67,7 +70,7 @@ help:
 	@echo "  make run-broker                      - start uvicorn app:app with --app-dir"
 	@echo "  make run-stack                       - start API + orchestrator + staker + watcher"
 	@echo "  make docker-build                    - docker compose build (set SERVICE=name for scoped build)"
-	@echo "  make docker-up [DOCKER_DETACH=1]     - docker compose up (set DOCKER_PROFILES=helpers for full stack)"
+	@echo "  make docker-up [DOCKER_DETACH=1]     - compose up with .env chain; skips host validate-env (DB not up yet)"
 	@echo "  make docker-down [DOCKER_REMOVE_VOLUMES=1] - docker compose down"
 	@echo "  make docker-logs [SERVICE=broker]    - follow logs for a compose service"
 	@echo "  make docker-shell SERVICE=broker     - exec into a running compose service"
@@ -138,10 +141,13 @@ replit-run:
 	@REPLIT_MODE=$(REPLIT_MODE) SKIP_ENV_VALIDATION=1 bash scripts/run_stack_entry.sh
 
 # --- Docker orchestration helpers ---
+# Host validate-env is intentionally skipped: it needs a live Postgres, which docker-up starts.
+# Containers re-validate via scripts/prestart.sh after postgres/redis are healthy.
 docker-build:
 	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) build $(if $(filter 1,$(DOCKER_NO_CACHE)),--no-cache,) $(SERVICE)
 
-docker-up: validate-env
+docker-up:
+	@echo "[docker] Using compose env files: $(if $(COMPOSE_ENV_FILES),$(COMPOSE_ENV_FILES),(none))"
 	@$(COMPOSE_CMD) $(COMPOSE_FILE_ARGS) $(COMPOSE_ENV_FILE_ARGS) up $(if $(filter 1,$(DOCKER_BUILD)),--build,) $(if $(filter 1,$(DOCKER_DETACH)),-d,) $(DOCKER_PROFILE_ARGS) $(SERVICE)
 
 docker-down:
