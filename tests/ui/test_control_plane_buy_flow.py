@@ -49,58 +49,57 @@ class ControlPlaneHandler(SimpleHTTPRequestHandler):
 
         if path in {"/", "/buy.html"}:
             self.path = "/buy.html"
-            return super().do_GET()
+            super().do_GET()
+            return
 
+        payload = self._stub_get_payload(path, parsed)
+        if payload is not None:
+            self._send_json(payload)
+            return
+
+        super().do_GET()
+
+    def _stub_get_payload(self, path: str, parsed) -> dict | list | None:
         if path == "/v1/env":
             now = int(time.time())
-            self._send_json(
-                {
-                    "payments": {
-                        "treasury_address": TREASURY_ADDRESS,
-                        "accepted_assets": ["USDC"],
-                        "usdc_address": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-                    },
-                    "features": {
-                        "quotes": True,
-                        "purchases": True,
-                        "clearing": False,
-                        "bids": False,
-                    },
-                    "buyer": {"quote_ttl": 90, "last_updated": now},
-                }
-            )
-            return None
+            return {
+                "payments": {
+                    "treasury_address": TREASURY_ADDRESS,
+                    "accepted_assets": ["USDC"],
+                    "usdc_address": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                },
+                "features": {
+                    "quotes": True,
+                    "purchases": True,
+                    "clearing": False,
+                    "bids": False,
+                },
+                "buyer": {"quote_ttl": 90, "last_updated": now},
+            }
 
         if path == "/v1/quotes":
             params = parse_qs(parsed.query)
             asset = params.get("asset", ["USDC"])[0]
             units = float(params.get("units", ["0.10"])[0])
-            self._send_json(
-                {
-                    "quoteId": "q-demo",
-                    "asset": asset,
-                    "units": units,
-                    "unitPrice": 226600000,
-                    "totalPrice": 22660000,
-                    "acceptedMin": 0.01,
-                    "acceptedMax": 1000,
-                    "expiresAt": int(time.time()) + 90,
-                }
-            )
-            return None
+            return {
+                "quoteId": "q-demo",
+                "asset": asset,
+                "units": units,
+                "unitPrice": 226600000,
+                "totalPrice": 22660000,
+                "acceptedMin": 0.01,
+                "acceptedMax": 1000,
+                "expiresAt": int(time.time()) + 90,
+            }
 
         if path == "/v1/market/prices":
-            self._send_json(
-                {
-                    "prices": {"USDC": 1.0, "DIEM": 226.6, "ETH": 3000.0},
-                    "ratios": {},
-                }
-            )
-            return None
+            return {
+                "prices": {"USDC": 1.0, "DIEM": 226.6, "ETH": 3000.0},
+                "ratios": {},
+            }
 
         if path in {"/v1/tenants", "/v1/bids"}:
-            self._send_json([])
-            return None
+            return []
 
         if path in {
             "/v1/purchases/challenge",
@@ -109,24 +108,21 @@ class ControlPlaneHandler(SimpleHTTPRequestHandler):
             params = parse_qs(parsed.query)
             tx_hash = params.get("txHash", [""])[0]
             buyer = params.get("buyerAddress", [""])[0]
-            self._send_json(
-                {
-                    "message": (
-                        "Venice Capacity Broker Wallet Verification\n"
-                        f"Transaction: {tx_hash}\n"
-                        f"Buyer: {buyer}\n"
-                        "Nonce: demo-nonce\n"
-                        "Expires: 2099-01-01T00:00:00Z"
-                    ),
-                    "nonce": "demo-nonce",
-                    "expiresAt": "2099-01-01T00:00:00Z",
-                    "txHash": tx_hash,
-                    "buyerAddress": buyer,
-                }
-            )
-            return None
+            return {
+                "message": (
+                    "Venice Capacity Broker Wallet Verification\n"
+                    f"Transaction: {tx_hash}\n"
+                    f"Buyer: {buyer}\n"
+                    "Nonce: demo-nonce\n"
+                    "Expires: 2099-01-01T00:00:00Z"
+                ),
+                "nonce": "demo-nonce",
+                "expiresAt": "2099-01-01T00:00:00Z",
+                "txHash": tx_hash,
+                "buyerAddress": buyer,
+            }
 
-        return super().do_GET()
+        return None
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)

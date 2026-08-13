@@ -9,7 +9,6 @@ import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from dataclasses import dataclass
-from pathlib import Path
 from threading import Lock
 from typing import Any, TypeVar
 

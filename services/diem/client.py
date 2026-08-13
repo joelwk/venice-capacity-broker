@@ -7,7 +7,6 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib import import_module
-from pathlib import Path
 from typing import Any, ClassVar
 
 from core.config import ConfigError, get_config
