@@ -33,9 +33,7 @@ def upgrade() -> None:
     except Exception:
         pass
     try:
-        op.create_index(
-            "ix_purchase_tx_hash", "purchase", ["tx_hash"], unique=True
-        )
+        op.create_index("ix_purchase_tx_hash", "purchase", ["tx_hash"], unique=True)
     except Exception:
         pass
 
@@ -46,8 +44,6 @@ def downgrade() -> None:
     except Exception:
         pass
     try:
-        op.create_index(
-            "ix_purchase_tx_hash", "purchase", ["tx_hash"], unique=False
-        )
+        op.create_index("ix_purchase_tx_hash", "purchase", ["tx_hash"], unique=False)
     except Exception:
         pass

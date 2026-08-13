@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover - optional dependency
     class IntegrityError(Exception):  # type: ignore[no-redef]
         pass
 
+
 try:
     from eth_account import Account  # type: ignore
     from eth_account.messages import encode_defunct  # type: ignore

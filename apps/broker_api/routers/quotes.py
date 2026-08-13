@@ -63,7 +63,12 @@ def init_router(
     quotes_persist_enabled: bool,
     quotes_async_enabled: bool,
 ) -> APIRouter:
-    global _pricing, _logger, _quotes_enabled, _quotes_persist_enabled, _quotes_async_enabled
+    global \
+        _pricing, \
+        _logger, \
+        _quotes_enabled, \
+        _quotes_persist_enabled, \
+        _quotes_async_enabled
     global _quote_results, _quote_results_lock
 
     _quotes_enabled = bool(quotes_enabled)

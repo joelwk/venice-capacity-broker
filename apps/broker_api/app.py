@@ -684,7 +684,9 @@ def _build_dependencies(*, fast_startup: bool = False) -> dict[str, Any]:
     deps["quotes_async_enabled"] = (
         os.getenv("QUOTES_ASYNC_ENABLED") or "false"
     ).strip().lower() in {"1", "true", "yes", "on"}
-    deps["quotes_enabled"] = (os.getenv("QUOTES_ENABLED") or "true").strip().lower() in {
+    deps["quotes_enabled"] = (
+        os.getenv("QUOTES_ENABLED") or "true"
+    ).strip().lower() in {
         "1",
         "true",
         "yes",
