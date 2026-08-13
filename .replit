@@ -1,7 +1,7 @@
 run = "bash -lc 'bash scripts/replit_run.sh dry'"
 language = "python3"
 entrypoint = "apps/broker_api/app.py"
-modules = ["python-3.10"]
+modules = ["python-3.10", "nodejs-20", "bash", "web"]
 
 # ------------------------------------------------------------------------------
 # Environment Configuration
