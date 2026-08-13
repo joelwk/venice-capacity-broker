@@ -160,9 +160,11 @@ def test_should_skip_v2_allows_canonical_routes(monkeypatch):
         "Non-canonical DIEM route should skip V2"
     )
 
-    # V3 route (has fee tiers)
-    v3_route = make_route(["0xusdc", "0xweth", "0xdiem"], fees=[3000, 3000])
-    assert agg._should_skip_v2(v3_route), "V3 route should skip V2"
+    # Canonical USDC→WETH→DIEM stays V2-eligible even when hops carry fee tiers.
+    v3_tagged_canonical = make_route(["0xusdc", "0xweth", "0xdiem"], fees=[3000, 3000])
+    assert not agg._should_skip_v2(v3_tagged_canonical), (
+        "Canonical path should allow V2 even with fee tiers"
+    )
 
 
 def test_diem_provider_compatibility_allows_v2_for_canonical(monkeypatch):

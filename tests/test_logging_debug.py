@@ -53,6 +53,9 @@ def test_dex_aggregator_no_quotes_logs_route(monkeypatch):
         def info(self, msg, *args, **kwargs):
             records.append(msg % args if args else msg)
 
+        def debug(self, msg, *args, **kwargs):
+            records.append(msg % args if args else msg)
+
     monkeypatch.setattr(providers_mod, "_logger", CaptureLogger())
 
     agg = DexAggregator([])

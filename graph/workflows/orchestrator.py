@@ -1661,7 +1661,10 @@ class SingleLoopOrchestrator:
         utilization_source: str | None = None
         vol_bps: float | None = None
         util_vol_bps: float | None = None
-        effective_mint_rate = float(mint_rate)
+        try:
+            effective_mint_rate = float(mint_rate) if mint_rate is not None else 1.0
+        except (TypeError, ValueError):
+            effective_mint_rate = 1.0
         mint_rate_source = "param"
         prices: dict[str, float] = {}
         price_health: dict[str, Any] | None = None

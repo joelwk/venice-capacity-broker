@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 
 import pytest
 
@@ -28,6 +29,12 @@ def test_db_session_allows_sqlite_in_dev_with_flag(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("ALLOW_SQLITE_FALLBACK", "1")
     monkeypatch.delenv("SQL_DATABASE_URL", raising=False)
+    sqlalc = sys.modules.get("sqlalchemy")
+    if sqlalc is not None and not hasattr(sqlalc, "dialects"):
+        for name in list(sys.modules):
+            if name == "sqlalchemy" or name.startswith("sqlalchemy."):
+                sys.modules.pop(name, None)
+    sys.modules.pop("db.session", None)
     # no POSTGRES_HOST -> sqlite url path
     mod = importlib.import_module("db.session")
     importlib.reload(mod)

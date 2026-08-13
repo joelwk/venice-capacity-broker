@@ -67,20 +67,14 @@ DEFAULT_TOKEN_ENV = {
     "BASE_RPC_URL": os.getenv("BASE_RPC_URL")
     or _DOTENV_VALUES.get("BASE_RPC_URL")
     or "https://mainnet.base.org",
-    # Direct DIEM/USDC SlipStream pool (if available via .env)
-    "DIEM_USDC_POOL_ADDRESS": _DOTENV_VALUES.get(
-        "DIEM_USDC_POOL_ADDRESS", "0xBc3231036Ee1ECa03E5F67FEceDC640D21610823"
-    ),
-    "AERODROME_CL_ROUTER_ADDRESS": _DOTENV_VALUES.get(
-        "AERODROME_CL_ROUTER_ADDRESS", ""
-    ),
+    # Do not inject live pool/router addresses. Unit tests that need them
+    # set the vars themselves; a default pool makes CI hit Base RPC.
+    "DIEM_USDC_POOL_ADDRESS": "",
+    "AERODROME_CL_ROUTER_ADDRESS": "",
 }
 
 # Keep core env defaults available outside monkeypatch lifecycle (e.g. background tasks).
 os.environ.setdefault("BASE_RPC_URL", DEFAULT_TOKEN_ENV["BASE_RPC_URL"])
-os.environ.setdefault(
-    "DIEM_USDC_POOL_ADDRESS", DEFAULT_TOKEN_ENV["DIEM_USDC_POOL_ADDRESS"]
-)
 os.environ.setdefault("DIEM_TOKEN_ADDRESS", DEFAULT_TOKEN_ENV["DIEM_TOKEN_ADDRESS"])
 os.environ.setdefault("VVV_TOKEN_ADDRESS", DEFAULT_TOKEN_ENV["VVV_TOKEN_ADDRESS"])
 os.environ.setdefault("QUOTE_TOKEN_ADDRESS", DEFAULT_TOKEN_ENV["QUOTE_TOKEN_ADDRESS"])
@@ -105,6 +99,7 @@ os.environ.setdefault("VENICE_OFFLINE_SIGNALS", "1")
 os.environ.setdefault("MARKETDATA_EXTERNAL_PRICE_TTL_SECONDS", "0")
 os.environ.setdefault("MARKETDATA_VALIDATE_TRADE_PATHS", "0")
 os.environ.setdefault("BROKER_WARMUP_PING_DISABLE", "1")
+os.environ.setdefault("DIEM_BUY_DIRECT_ONLY", "0")
 
 # Ensure developer-specific database/KV env vars don't leak into tests.
 # Note: BASE_RPC_URL is intentionally NOT cleared here - it's set in DEFAULT_TOKEN_ENV
@@ -125,6 +120,11 @@ for _unset in (
     "RPC_URL_FALLBACK",
     "BASE_RPC_URLS",
     "BASE_RPC_URL_FALLBACK",
+    "DEX_DISCOVERY_PROVIDERS",
+    "DEX_EXEC_PROVIDERS",
+    "DIEM_USDC_POOL_ADDRESS",
+    "DIEM_VVV_PAIR_ADDRESS",
+    "VVV_USDC_POOL_ADDRESS",
 ):
     os.environ.pop(_unset, None)
 
@@ -148,10 +148,17 @@ def _reset_env_vars(monkeypatch):
         "RPC_URL_FALLBACK",
         "BASE_RPC_URLS",
         "BASE_RPC_URL_FALLBACK",
+        "DEX_DISCOVERY_PROVIDERS",
+        "DEX_EXEC_PROVIDERS",
+        "DIEM_USDC_POOL_ADDRESS",
+        "DIEM_VVV_PAIR_ADDRESS",
+        "VVV_USDC_POOL_ADDRESS",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DIEM_BUY_DIRECT_ONLY", "0")
     for key, value in DEFAULT_TOKEN_ENV.items():
-        monkeypatch.setenv(key, value)
+        if value:
+            monkeypatch.setenv(key, value)
 
 
 @pytest.fixture(autouse=True)

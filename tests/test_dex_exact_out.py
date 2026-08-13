@@ -154,6 +154,17 @@ def test_aggregator_best_quote_exact_out_picks_min_input():
     assert q.amount_in == 200 and q.amount_out == 100
 
 
+def test_aggregator_ignores_host_discovery_allowlist(monkeypatch):
+    """CI sets DEX_*_PROVIDERS; unit aggregators must not KeyError on missing names."""
+    monkeypatch.setenv("DEX_DISCOVERY_PROVIDERS", "uniswap_v2,uniswap_v3")
+    monkeypatch.setenv("DEX_EXEC_PROVIDERS", "uniswap_v2,uniswap_v3")
+    prov = FakeExactOutProvider()
+    agg = DexAggregator([prov])
+    q = agg.best_quote_exact_out(100, ["in", "out"])  # type: ignore[arg-type]
+    assert q is not None
+    assert q.provider == "fake_uni"
+
+
 def test_aggregator_trade_best_exact_out_uses_provider_with_slippage():
     prov = FakeExactOutProvider()
     agg = DexAggregator([prov])

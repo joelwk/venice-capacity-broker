@@ -6763,22 +6763,27 @@ class DexAggregator:
             os.getenv("DEX_DIEM_FORCE_UNISWAP_V2") or "0"
         ).strip().lower() in {"1", "true", "yes", "on"}
         discovery_raw_env = os.getenv("DEX_DISCOVERY_PROVIDERS")
-        self._discovery_providers = self._parse_provider_list_raw(
+        requested_discovery = self._parse_provider_list_raw(
             discovery_raw_env, list(self._provider_name_map.keys())
         )
+        # Env allowlists can name venues this instance does not have (CI / host
+        # leakage). Keep only providers that were actually constructed.
+        self._discovery_providers = {
+            name for name in requested_discovery if name in self._provider_name_map
+        }
         if not self._discovery_providers:
             self._discovery_providers = set(self._provider_name_map.keys())
 
         exec_raw_env = os.getenv("DEX_EXEC_PROVIDERS")
-        # Treat empty string same as unset - prevents accidental "no providers" config
-        exec_env_provided = exec_raw_env is not None and exec_raw_env.strip() != ""
         requested_execution = set(
             self._parse_provider_list_raw(exec_raw_env, list(self._discovery_providers))
         )
         filtered_execution = {
             name for name in requested_execution if name in self._discovery_providers
         }
-        if not exec_env_provided and not filtered_execution:
+        if not filtered_execution:
+            # Host/CI allowlists can name venues this instance does not have.
+            # Fall back to the providers that were actually constructed.
             filtered_execution = set(self._discovery_providers)
         self._execution_providers = filtered_execution
 
