@@ -72,7 +72,9 @@ command = "bash -lc 'bash scripts/replit_run.sh live'"
 # 2. Broker API starts in foreground (waitForPort=8000)
 run = ["sh", "-c", "bash scripts/replit_run.sh live"]
 deploymentTarget = "gce"
-build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
+# Unset UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV so uv creates a proper .venv
+# instead of trying to reuse .pythonlibs (which has no Python executable).
+build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
 
 [nix]
 packages = ["curl", "gnumake", "libxcrypt"]
