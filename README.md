@@ -2,7 +2,7 @@
 
 Buy scoped [Venice AI](https://venice.ai) inference credits with crypto, and run the agents that stake VVV, mint or burn DIEM, and meter tenant API keys.
 
-Live buyer page: [venice-capacity-broker.replit.app/buy.html](https://venice-capacity-broker.replit.app/buy.html)
+Live buyer page: [capacity-broker.replit.app/buy.html](https://capacity-broker.replit.app/buy.html)
 
 ## Frontend preview
 
