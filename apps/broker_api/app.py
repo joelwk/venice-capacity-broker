@@ -427,8 +427,14 @@ def _setup_static_routes(app: FastAPI) -> None:
         ).resolve()
 
         @app.get("/", include_in_schema=False)
-        async def index() -> RedirectResponse:
-            return RedirectResponse(url="/buy.html", status_code=307)
+        async def index() -> FileResponse:
+            # Serve buy.html directly (200) so GCE/Replit health-check probes pass.
+            # A 307 redirect causes the startup probe to fail the promote step.
+            if not _buy_html_path.exists():
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"status": "ok", "service": "broker"})
+            return FileResponse(_buy_html_path)
 
         @app.get("/buy.html", include_in_schema=False)
         async def buy_landing() -> FileResponse:

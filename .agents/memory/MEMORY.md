@@ -1,1 +1,2 @@
 - [uv GCE venv conflict](uv-gce-venv.md) — unset UV_PROJECT_ENVIRONMENT + VIRTUAL_ENV in both build AND run deployment commands or uv silently uses .pythonlibs and crashes
+- [GCE health check root redirect](gce-health-check-redirect.md) — GET / must return 200; a 307 redirect silently fails the promote-step probe causing 45-min timeout
