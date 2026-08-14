@@ -4,6 +4,12 @@ Buy scoped [Venice AI](https://venice.ai) inference credits with crypto, and run
 
 Live buyer page: [venice-capacity-broker.replit.app/buy.html](https://venice-capacity-broker.replit.app/buy.html)
 
+## Frontend preview
+
+<video src="assets/FrontEndPreview.mp4" controls width="100%" playsinline>
+  <a href="assets/FrontEndPreview.mp4">Watch the frontend preview</a>
+</video>
+
 ## What it does
 
 A FastAPI broker prices DIEM credits, verifies Base-chain payments to a treasury address, and issues a scoped Venice sub-key with `consumptionLimit` and `expiresAt`.
