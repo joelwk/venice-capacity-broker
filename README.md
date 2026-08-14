@@ -6,9 +6,7 @@ Live buyer page: [venice-capacity-broker.replit.app/buy.html](https://venice-cap
 
 ## Frontend preview
 
-<video src="assets/FrontEndPreview.mp4" controls width="100%" playsinline>
-  <a href="assets/FrontEndPreview.mp4">Watch the frontend preview</a>
-</video>
+![Frontend preview](assets/frontendpreview.gif)
 
 ## What it does
 
