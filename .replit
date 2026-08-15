@@ -71,10 +71,14 @@ command = "bash -lc 'bash scripts/replit_run.sh live'"
 # 1. SPAWN_AGENT_STACK=1 spawns orchestrator/token-watcher in background
 # 2. Broker API starts in foreground (waitForPort=8000)
 #
-# Unset UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV in both build and run so that uv
-# uses the .venv created during the build rather than .pythonlibs (which exists
-# in the Replit dev environment but has no Python executable in GCE containers).
-run = ["sh", "-c", "unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && bash scripts/replit_run.sh live"]
+# UV_PROJECT_ENVIRONMENT is set to .pythonlibs by Replit's Nix environment.
+# .pythonlibs is not a valid venv in GCE (no Python executable), so we unset
+# both UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV before any uv invocation.
+#
+# We re-run `uv sync` in the run command as a safety net: .venv is gitignored
+# so it may not survive from the build layer into the runtime container.
+# With packages already cached from the build step, uv sync is nearly instant.
+run = ["sh", "-c", "unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db && bash scripts/replit_run.sh live"]
 deploymentTarget = "gce"
 build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
 
