@@ -75,10 +75,11 @@ command = "bash -lc 'bash scripts/replit_run.sh live'"
 # .pythonlibs is not a valid venv in GCE (no Python executable), so we unset
 # both UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV before any uv invocation.
 #
-# We re-run `uv sync` in the run command as a safety net: .venv is gitignored
-# so it may not survive from the build layer into the runtime container.
-# With packages already cached from the build step, uv sync is nearly instant.
-run = ["sh", "-c", "unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db && bash scripts/replit_run.sh live"]
+# NOTE: do NOT add `uv sync` to the run command — the package-firewall used
+# during builds may not be accessible at runtime, causing uv sync to hang and
+# prevent uvicorn from binding (→ health-check timeout).  The build command
+# installs all packages; the runtime just uses the resulting .venv.
+run = ["sh", "-c", "unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && bash scripts/replit_run.sh live"]
 deploymentTarget = "gce"
 build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
 

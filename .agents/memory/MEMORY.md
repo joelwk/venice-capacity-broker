@@ -1,2 +1,3 @@
 - [uv GCE venv conflict](uv-gce-venv.md) — unset UV_PROJECT_ENVIRONMENT + VIRTUAL_ENV in both build AND run deployment commands or uv silently uses .pythonlibs and crashes
 - [GCE health check root redirect](gce-health-check-redirect.md) — GET / must return 200; a 307 redirect silently fails the promote-step probe causing 45-min timeout
+- [GCE KV check fatal exit](gce-kv-check-fatal-exit.md) — KV-not-found must warn (not exit 1) in SKIP_STARTUP_TASKS path; exit 1 kills the process before uvicorn binds → 44-min health-check timeout

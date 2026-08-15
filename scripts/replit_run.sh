@@ -140,8 +140,14 @@ if [ "${SKIP_STARTUP_TASKS:-0}" = "1" ]; then
 		fi
 
 		if [ "$HAS_KV_STORE" -eq 0 ]; then
-			echo "[replit_run] ERROR: Live mode requires durable KV store (REDIS_URL or REPLIT_DB_URL)" >&2
-			exit 1
+			# In GCE Reserved VM deployments, the Replit KV store may be accessed via
+			# KV_API_TOKEN rather than REPLIT_DB_URL or /tmp/replitdb.  Do NOT exit —
+			# a fatal exit here prevents uvicorn from binding and causes the 44-minute
+			# health-check timeout.  Log a warning and let the app handle KV errors at
+			# runtime (the broker falls back to in-memory KV or logs the failure).
+			echo "[replit_run] WARNING: No REDIS_URL / REPLIT_DB_URL / /tmp/replitdb found." >&2
+			echo "[replit_run] KV store may be provided via KV_API_TOKEN; continuing startup." >&2
+			export ALLOW_INMEMORY_KV_FALLBACK="${ALLOW_INMEMORY_KV_FALLBACK:-1}"
 		fi
 	fi
 
