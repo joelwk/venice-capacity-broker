@@ -491,28 +491,45 @@ def purchases_recover(req: PurchaseRecoverRequest) -> dict:
     return _execute_verified_purchase(verify_req)
 
 
+_PAYMENT_ASSETS = ("USDC", "ETH", "WBTC")
+_BASE_WETH_ADDRESS = "0x4200000000000000000000000000000000000006"
+_BASE_USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+
+def _env_address(*names: str) -> str | None:
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _asset_to_token_address(asset: str) -> str | None:
     """Map asset symbol (ETH, USDC, WBTC) to token address."""
     asset_upper = asset.upper().strip()
     if asset_upper == "ETH":
-        # WETH on Base
-        return _get_env("WETH_ADDRESS") or "0x4200000000000000000000000000000000000006"
-    if asset_upper == "USDC":
-        # USDC on Base
         return (
-            _get_env("USDC_ADDRESS")
-            or _get_env("QUOTE_TOKEN_ADDRESS")
-            or "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            _env_address("WETH_ADDRESS", "WETH_TOKEN_ADDRESS") or _BASE_WETH_ADDRESS
+        )
+    if asset_upper == "USDC":
+        return (
+            _env_address("USDC_ADDRESS", "QUOTE_TOKEN_ADDRESS") or _BASE_USDC_ADDRESS
         )
     if asset_upper == "WBTC":
-        # WBTC on Base (if needed)
-        return _get_env("WBTC_ADDRESS") or None
+        # Market data, .env.example, and Replit templates use WBTC_TOKEN_ADDRESS.
+        # Keep WBTC_ADDRESS as a legacy alias so older secrets still verify.
+        return _env_address("WBTC_TOKEN_ADDRESS", "WBTC_ADDRESS")
     return None
 
 
 def payment_asset_supported(asset: str) -> bool:
     """True when payments in this asset can be verified on-chain."""
     return _asset_to_token_address(asset or "") is not None
+
+
+def configured_payment_assets() -> list[str]:
+    """Payment assets the buy page may offer given current env."""
+    return [asset for asset in _PAYMENT_ASSETS if payment_asset_supported(asset)]
 
 
 def _verify_tx(
@@ -1289,4 +1306,9 @@ def _get_env(name: str) -> str | None:
     return os.getenv(name)
 
 
-__all__ = ["init_router", "payment_asset_supported", "router"]
+__all__ = [
+    "configured_payment_assets",
+    "init_router",
+    "payment_asset_supported",
+    "router",
+]

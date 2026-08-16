@@ -353,9 +353,55 @@ def test_purchase_status_does_not_leak_subkey(monkeypatch, tmp_path):
     assert status.json().get("subkey") is None
 
 
+def test_env_does_not_leak_rpc_url(monkeypatch, tmp_path):
+    secret_rpc = "https://secret-rpc.example/v2/super-secret-key"
+    client, _mod = _bootstrap(monkeypatch, tmp_path, db_name="env-rpc-leak.db")
+    monkeypatch.setenv("BASE_RPC_URL", secret_rpc)
+    monkeypatch.setenv("BASE_RPC_URLS", secret_rpc)
+
+    env = client.get("/v1/env")
+    assert env.status_code == 200, env.text
+    body = env.json()
+    dumped = env.text.lower()
+    assert secret_rpc.lower() not in dumped
+    assert "super-secret-key" not in dumped
+    assert "base_rpc_url" not in body.get("network", {})
+    assert body["network"]["rpc_configured"] is True
+
+
+def _clear_wbtc_token_env(monkeypatch) -> None:
+    for name in ("WBTC_TOKEN_ADDRESS", "WBTC_ADDRESS"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_quote_rejects_wbtc_without_token_address(monkeypatch, tmp_path):
+    client, mod = _bootstrap(monkeypatch, tmp_path, db_name="wbtc-quote-closed.db")
+    _clear_wbtc_token_env(monkeypatch)
+
+    resp = client.get("/v1/quotes", params={"units": 1, "asset": "WBTC"})
+    assert resp.status_code == 400, resp.text
+    assert "payment token address not configured" in resp.json()["detail"]
+    env = client.get("/v1/env")
+    assert env.status_code == 200, env.text
+    assert "WBTC" not in env.json()["payments"]["accepted_assets"]
+
+
+def test_wbtc_token_address_unlocks_quotes_and_env_assets(monkeypatch, tmp_path):
+    client, mod = _bootstrap(monkeypatch, tmp_path, db_name="wbtc-token-alias.db")
+    _clear_wbtc_token_env(monkeypatch)
+    wbtc = "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c"
+    monkeypatch.setenv("WBTC_TOKEN_ADDRESS", wbtc)
+
+    assert mod.purchases.payment_asset_supported("WBTC")
+    assert mod.purchases._asset_to_token_address("WBTC") == wbtc
+    env = client.get("/v1/env")
+    assert env.status_code == 200, env.text
+    assert "WBTC" in env.json()["payments"]["accepted_assets"]
+
+
 def test_verify_fails_closed_for_unmapped_asset(monkeypatch, tmp_path):
     client, mod = _bootstrap(monkeypatch, tmp_path, db_name="wbtc-closed.db")
-    monkeypatch.delenv("WBTC_ADDRESS", raising=False)
+    _clear_wbtc_token_env(monkeypatch)
     tx_hash = "0x" + "7" * 64
 
     from datetime import UTC, datetime, timedelta

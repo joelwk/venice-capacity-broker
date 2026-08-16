@@ -511,8 +511,17 @@ def _build_env_status() -> dict[str, Any]:
             Dict with version, features, pricing, payments, etc.
     """
     treasury = (os.getenv("TREASURY_ADDRESS") or "").strip()
-    usdc_addr = (os.getenv("USDC_ADDRESS") or "").strip()
-    base_rpc = (os.getenv("BASE_RPC_URL") or "").strip()
+    usdc_addr = (
+        os.getenv("USDC_ADDRESS") or os.getenv("QUOTE_TOKEN_ADDRESS") or ""
+    ).strip()
+    rpc_configured = any(
+        (os.getenv(name) or "").strip()
+        for name in ("BASE_RPC_URL", "BASE_RPC_URLS", "RPC_URL", "RPC_URLS")
+    )
+
+    accepted_assets: list[str] = []
+    if treasury:
+        accepted_assets = purchases.configured_payment_assets()
 
     quotes_enabled = (os.getenv("QUOTES_ENABLED") or "true").strip().lower() in {
         "1",
@@ -566,7 +575,7 @@ def _build_env_status() -> dict[str, Any]:
         },
         "payments": {
             "treasury_address": treasury,
-            "accepted_assets": ["USDC", "ETH", "WBTC"] if treasury else [],
+            "accepted_assets": accepted_assets,
             "usdc_address": usdc_addr if usdc_addr else None,
         },
         "buyer": {
@@ -574,7 +583,7 @@ def _build_env_status() -> dict[str, Any]:
             "last_updated": int(time.time()),
         },
         "network": {
-            "base_rpc_url": base_rpc or None,
+            "rpc_configured": rpc_configured,
         },
     }
 
