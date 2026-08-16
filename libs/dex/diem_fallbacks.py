@@ -1247,50 +1247,6 @@ def build_diem_route_preferences(
     return routes
 
 
-def execute_two_tx_fallback(
-    token_in: str,
-    token_out: str,
-    amount_base_units: int,
-    aggregator: Any,
-    is_buy: bool,
-) -> Any | None:
-    """
-    Execute a two-transaction fallback: USDC↔VVV then VVV↔DIEM.
-
-    This is a last-resort fallback when atomic swaps fail.
-    Only enabled when DIEM_ENABLE_TWO_TX_FALLBACK=1.
-
-    Returns execution result or None if disabled/failed.
-    """
-    if os.getenv("DIEM_ENABLE_TWO_TX_FALLBACK", "0").strip().lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
-        return None
-
-    try:
-        from libs.dex.diem_fallbacks import build_two_stage_diem_route
-        from services.marketdata.pathing.env import load_env_config
-
-        config = load_env_config()
-        two_stage = build_two_stage_diem_route(token_in, token_out, config)
-        if not two_stage:
-            return None
-
-        stage1_route, stage2_route = two_stage
-
-        # Execute stage 1: USDC↔VVV or DIEM↔VVV
-        # This would need to be implemented with actual execution logic
-        # For now, return None to indicate it's not fully implemented
-        # The actual execution would go through aggregator.trade_best() for each stage
-
-        return None  # Placeholder - actual implementation would execute both stages
-    except Exception:
-        return None
-
-
 def check_reserve_fallback_available() -> dict:
     """
     Self-check helper to verify reserve math fallback is enabled and working.

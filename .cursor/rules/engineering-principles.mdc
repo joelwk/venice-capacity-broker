@@ -1,0 +1,30 @@
+---
+description: Core engineering principles for all code changes in this repo
+alwaysApply: true
+---
+
+# Engineering principles
+
+These apply to every change. They do not expand v1 scope in `implementation-plan.md`.
+
+## Remove, do not shim
+
+Do not preserve backward compatibility in our code. Delete obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+
+Venice request/response shapes remain a hard external contract for the Broker proxy. That is API fidelity, not a reason to keep two internal implementations.
+
+If a deployment uses different Venice paths, set the existing `*_PATH` env override. Do not add a second code path.
+
+## Simplest thing that fully works
+
+Choose the simplest implementation that meets current requirements. Avoid speculative abstractions, configuration, and indirection.
+
+Lean on libraries already in this repo (`libs/venice_sdk`, `libs/dex`, services) before writing a new helper or adding a package. Prefer established, well-maintained libraries when they reduce complexity or improve reliability. Check docs and types before assuming a library cannot do the job.
+
+## Layered growth, durable architecture
+
+Grow in layers. Keep the single-loop orchestrator working end to end, then add capabilities on top of it. Never trade a working product for unfinished complexity.
+
+Keep components modular: StakeMaster, ArbiDiem, CapacityBroker, quorum, Treasurer.
+
+Make decisions for the long term. Do not ship a stopgap meant to be replaced later. Staged work (Treasurer execution, DIEM rentals) stays out of the live path until it is the real design.

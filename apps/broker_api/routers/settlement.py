@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from ..models import (
-    DexPreviewResponse,
-    PurchaseStatus,
-    PurchaseVerifyRequest,
-    SettleResponse,
-)
+from ..models import DexPreviewResponse, SettleResponse
+from ..services.bids import expiry_epoch
 
 router = APIRouter(prefix="/v1/settlement", tags=["settlement"])
 
@@ -21,8 +18,9 @@ _get_sess: Any
 _sel: Any
 _DbBid: Any
 _settle_pricing: Any
-_verify_purchase: Callable[[PurchaseVerifyRequest], dict]
 _get_marketdata_provider: Callable[[int], Any]
+_classify_bid_status: Callable[[float, int, int], tuple[str, dict]] | None
+_price_usdc_per_unit_from_asset: Callable[[int, str], float] | None
 _logger: Any
 
 
@@ -34,12 +32,14 @@ def init_router(
     select_func: Any,
     bid_model: Any,
     settle_pricing: Any,
-    verify_purchase: Callable[[PurchaseVerifyRequest], dict],
     get_marketdata_provider: Callable[[int], Any],
     logger: Any,
+    classify_bid_status: Callable[[float, int, int], tuple[str, dict]] | None = None,
+    price_usdc_per_unit_from_asset: Callable[[int, str], float] | None = None,
 ) -> APIRouter:
     global _settlement_enabled, _has_sql_bids, _get_sess, _sel, _DbBid
-    global _settle_pricing, _verify_purchase, _get_marketdata_provider, _logger
+    global _settle_pricing, _get_marketdata_provider, _logger
+    global _classify_bid_status, _price_usdc_per_unit_from_asset
 
     _settlement_enabled = settlement_enabled
     _has_sql_bids = has_sql_bids
@@ -47,24 +47,42 @@ def init_router(
     _sel = select_func
     _DbBid = bid_model
     _settle_pricing = settle_pricing
-    _verify_purchase = verify_purchase
     _get_marketdata_provider = get_marketdata_provider
+    _classify_bid_status = classify_bid_status
+    _price_usdc_per_unit_from_asset = price_usdc_per_unit_from_asset
     _logger = logger
     return router
 
 
-@router.post("/confirm", response_model=PurchaseStatus)
-def settlement_confirm(req: PurchaseVerifyRequest) -> dict:
-    """Alias for settlement confirm to purchase verify (shape-compatible)."""
-    if not _settlement_enabled:
-        raise HTTPException(status_code=404, detail="settlement disabled")
-    # Delegate to the same verification logic as /v1/purchases/verify
-    return _verify_purchase(req)
+def _quote_payload(row: Any) -> dict:
+    expires_at = row.expires_at
+    expires_ts = int(expires_at.timestamp()) if expires_at else int(time.time())
+    return {
+        "quoteId": row.quote_id,
+        "units": float(row.units),
+        "asset": row.asset,
+        "unitPrice": int(row.unit_price),
+        "totalPrice": int(row.total_price),
+        "expiresAt": expires_ts,
+    }
+
+
+def _load_persisted_quote(session: Any, quote_id: str) -> dict | None:
+    if not quote_id:
+        return None
+    try:
+        from db.models import Quote
+    except Exception:
+        return None
+    row = session.exec(_sel(Quote).where(Quote.quote_id == quote_id)).first()
+    if row is None:
+        return None
+    return _quote_payload(row)
 
 
 @router.post("/{bid_id}/settle", response_model=SettleResponse)
 def bids_settle(bid_id: str, asset: str | None = None) -> dict:
-    """Settle a bid and generate a quote."""
+    """Persist a quote for a bid and link it for the existing verify path."""
     if not _settlement_enabled:
         raise HTTPException(status_code=404, detail="settlement disabled")
     if _settle_pricing is None:
@@ -72,25 +90,70 @@ def bids_settle(bid_id: str, asset: str | None = None) -> dict:
     if not _has_sql_bids:
         raise HTTPException(status_code=503, detail="SQL dependencies unavailable")
 
+    from .purchases import payment_asset_supported
+
     now_s = int(time.time())
     with next(_get_sess()) as s:  # type: ignore[call-arg]
         b = s.exec(_sel(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
         if b is None:
             raise HTTPException(status_code=404, detail="bid not found")
-        if b.expiry and int(b.expiry.timestamp()) <= now_s:
-            raise HTTPException(status_code=400, detail="bid expired")
+        expiry_s = expiry_epoch(b.expiry) if b.expiry else now_s
+        if expiry_s <= now_s:
+            b.status = "expired"
+            b.updated_at = datetime.utcnow()
+            s.add(b)
+            s.commit()
+            raise HTTPException(status_code=409, detail="bid expired")
 
         pay_asset = (asset or b.asset or "USDC").upper()
-        if pay_asset not in {"ETH", "USDC"}:
+        if not payment_asset_supported(pay_asset):
             raise HTTPException(
                 status_code=400, detail="unsupported asset for settlement"
             )
         if str(pay_asset) != str(b.asset or "").upper():
             raise HTTPException(status_code=400, detail="asset must match bid asset")
 
+        can_classify = (
+            _classify_bid_status is not None
+            and _price_usdc_per_unit_from_asset is not None
+        )
+        if can_classify:
+            max_usdc = _price_usdc_per_unit_from_asset(int(b.max_price), str(b.asset))
+            status, ctx = _classify_bid_status(max_usdc, now_s, expiry_s)
+            if status == "expired":
+                b.status = "expired"
+                b.updated_at = datetime.utcnow()
+                s.add(b)
+                s.commit()
+                raise HTTPException(status_code=409, detail="bid expired")
+            if status == "out_of_band":
+                b.status = "out_of_band"
+                b.updated_at = datetime.utcnow()
+                try:
+                    import json as _json
+
+                    b.context = _json.dumps(ctx)
+                except Exception:
+                    pass
+                s.add(b)
+                s.commit()
+                raise HTTPException(status_code=409, detail="bid out of band")
+
+        if b.quote_id:
+            existing = _load_persisted_quote(s, str(b.quote_id))
+            if existing is not None:
+                return existing
+
         q = _settle_pricing.get_quote(units=float(b.units), asset=pay_asset)
         if int(q.get("unitPrice") or 0) > int(b.max_price):
             raise HTTPException(status_code=409, detail="price exceeds bid max")
+
+        _settle_pricing.persist_quote(q)
+        b.quote_id = str(q["quoteId"])
+        b.status = "accepted_window"
+        b.updated_at = datetime.utcnow()
+        s.add(b)
+        s.commit()
 
         try:
             from libs.telemetry.events import emit as _emit

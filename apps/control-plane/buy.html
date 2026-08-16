@@ -65,6 +65,18 @@
                   <select id="quote-asset" required aria-describedby="asset-error" aria-label="Select cryptocurrency for payment"></select>
                   <span id="asset-error" class="error-message hidden" aria-live="polite"></span>
                 </div>
+                <div class="form-field" id="quote-mode-wrap" hidden>
+                  <label for="quote-mode">Order type</label>
+                  <select id="quote-mode" aria-label="Spot quote or limit bid">
+                    <option value="spot">Spot quote</option>
+                    <option value="limit">Limit bid</option>
+                  </select>
+                </div>
+                <div class="form-field" id="quote-limit-fields" hidden>
+                  <label for="quote-max-price">Max unit price</label>
+                  <input id="quote-max-price" type="number" min="0" step="any" aria-describedby="max-price-error" aria-label="Maximum unit price for a limit bid" />
+                  <span id="max-price-error" class="error-message hidden" aria-live="polite"></span>
+                </div>
               </fieldset>
               <div class="step-actions">
                 <button id="quote-btn" type="button">Get Quote</button>

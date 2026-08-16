@@ -814,7 +814,10 @@ def get_bridge_trade_path_with_metadata(config: EnvConfig) -> dict[str, Any] | N
             {
                 "token_in": vvv,
                 "token_out": quote,
-                "provider": "uniswap_v3",  # Default to V3, can fallback to V2
+                "provider": (
+                    os.getenv("VVV_USDC_BRIDGE_PROVIDER") or "aerodrome_cl"
+                ).strip().lower()
+                or "aerodrome_cl",
                 "pool_address": _normalize(vvv_usdc_pool),
                 "fee": vvv_usdc_fee,  # Use configured fee tier (3000 for V3)
             }

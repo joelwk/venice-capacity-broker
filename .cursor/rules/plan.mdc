@@ -3,6 +3,8 @@
 **Objective**  
 Design and justify a minimal-yet-complete set of fixes for every verified issue surfaced in the staging guide [ Staging   ], avoiding code bloat, redundancy, or ungrounded assumptions. All proposals must align with the agent's autonomous strategy (e.g., signal tracking, operations), ensuring persistent state management and safe execution.
 
+Choose the simplest implementation that fully meets the current requirement. Prefer deleting obsolete paths over compatibility layers, fallbacks, or migrations. Do not propose a stopgap meant to be replaced later. Lean on libraries and services already in this repo before adding packages or new helpers.
+
 **Prerequisites**  
 * All items in the staging guide have been vetted as genuine defects (not environment- or test-induced). Cite evidence for each (e.g., log timestamps).  
 * Balance-related errors are intentionally **out of scope**—do not address them.  
@@ -24,7 +26,7 @@ Design and justify a minimal-yet-complete set of fixes for every verified issue 
      b. Config tweak (e.g., update configuration thresholds).  
      c. Dependency update (e.g., rate limiting in APIs).  
      d. Agent-specific (e.g., add validation for operation safety).  
-   - Ensure ideas are minimal: Favor declarative changes that leverage existing tools (e.g., nodes for strategy refinement).
+   - Ensure ideas are minimal: Favor declarative changes that leverage existing tools and libraries already in the repo. Check docs and types before assuming a library lacks a capability. Do not invent a second implementation beside an existing one.
 
 3. **Critique & Scoring**  
    - For each candidate, evaluate quantitatively (score 1-10) on:  
@@ -32,19 +34,20 @@ Design and justify a minimal-yet-complete set of fixes for every verified issue 
      b. **Impact** – Scope of codebase change, regression risk (e.g., to autonomous loops).  
      c. **Alignment** – Consistency with design goals (e.g., maximization, autonomous decision-making from configuration).  
      d. **Risk** – Likelihood of new defects/performance hits (e.g., added latency in execution).  
-   - Agent-Specific Critique: Assess fit with agent behaviors (e.g., "Does this preserve signal correlation in priority elements?").
+     e. **Durability** – Long-term architecture, not a stopgap. Penalize compatibility shims, dual paths, and speculative config.  
+   - Agent-Specific Critique: Assess fit with agent behaviors (e.g., "Does this preserve signal correlation in priority elements?"). Prefer modular, concern-separated changes that layer onto the working single-loop product.
 
 4. **Refinement & Pruning**  
-   - Discard options that add unnecessary bulk, duplicate logic (e.g., avoid reimplementing existing observation recording), or miss root causes (cite evidence).  
-   - Consolidate overlapping ideas into a lean proposal (e.g., merge config tweaks into one update).  
-   - Balance Review: Note any non-issues or successes from the staging document (e.g., "Successful worker loop as per transcript— no fix needed").
+   - Discard options that add unnecessary bulk, duplicate logic (e.g., avoid reimplementing existing observation recording), compatibility layers, fallbacks, migrations, or miss root causes (cite evidence).  
+   - Consolidate overlapping ideas into a lean proposal (e.g., merge config tweaks into one update). Remove the obsolete path instead of supporting both.  
+   - Balance Review: Note any non-issues or successes from the staging document (e.g., "Successful worker loop as per transcript— no fix needed"). Never trade a working product for unfinished complexity.
 
 5. **Final Proposal**  
    - Order by priority/dependency chain (e.g., High first, with graph: Fix A → Fix B).  
    - For each retained solution, provide:  
      a. **Issue ID / Symptom:** Verbatim from the staging document (e.g., "ID-001: Failed analysis in function").  
-     b. **Proposed Fix:** Concise description (e.g., "Add try-except for errors with fallback to cached data").  
-     c. **Implementation Steps:** File paths/functions from artifacts (e.g., "Update document: Modify function; add rollback in state function"). Include migration notes (e.g., "Test in REPL before broadcast").  
+     b. **Proposed Fix:** Concise description (e.g., "Delete the obsolete path and handle the error at the existing call site").  
+     c. **Implementation Steps:** File paths/functions from artifacts (e.g., "Update document: Modify function; keep one code path"). Do not add migration or compatibility notes; remove the old path.  
      d. **Expected Outcome:** Behavioral change, performance delta, side-effects (e.g., "Reduces failures by 50%; no impact on trades; measurable via log alignment score >8/10").
 
 6. **Anti-Hallucination QA Checkpoint** (Mandatory Final Step)  
@@ -57,8 +60,9 @@ Design and justify a minimal-yet-complete set of fixes for every verified issue 
 ### Key Considerations
 * Ignore balance-related errors entirely—explicitly state if an issue borders this (e.g., "Out of scope per prerequisites").  
 * Verify each fix in a simulated clean environment (e.g., code_execution on isolated snippets) to rule out artifacts.  
-* Favor changes preserving intended behavior (e.g., autonomous patterns); avoid hacks—prioritize safety (e.g., validate operations).  
-* Minimize retries/loops unless specified in configuration prompts; ensure replayability from state checkpoints.
+* Favor changes preserving intended behavior (e.g., autonomous patterns); avoid hacks and stopgaps—prioritize safety (e.g., validate operations).  
+* Minimize retries/loops unless specified in configuration prompts; ensure replayability from state checkpoints.  
+* Keep components modular. Reuse `libs/` and `services/` before writing new helpers. Venice proxy fidelity is an external contract; internal dual-support is not.
 
 ---
 

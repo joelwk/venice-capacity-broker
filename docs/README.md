@@ -67,7 +67,8 @@ See **[Deployment](DEPLOYMENT.md)** for detailed instructions.
 ✅ **Multi-Agent Quorum** - Risk-gated decisions with weighted voting  
 ✅ **DIEM Fair Value Model** - Finite-horizon PV with adoption scaling  
 ✅ **DEX Integration** - Uniswap V2, Aerodrome multi-hop routing  
-✅ **Broker API** - Multi-tenant API reselling with dynamic pricing  
+✅ **Broker API** - Multi-tenant API reselling with utilization markup and failsafe pause  
+✅ **Public storefront** - Spot quotes plus optional limit bids (`BIDS_ENABLED`) that settle into the same verify path  
 ✅ **Reflex Guardian** - Emergency halt on volatility spikes or drawdowns  
 ✅ **Progressive-Live Mode** - Safe on-ramp from dry-run to live trading  
 

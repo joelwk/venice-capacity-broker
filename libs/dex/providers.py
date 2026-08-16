@@ -10960,6 +10960,32 @@ class DexAggregator:
         _metrics_inc("dex_agg_no_quotes_total", labels={"mode": "exact_out"})
         return None
 
+    def _record_composite_partial_failure(
+        self,
+        *,
+        mode: str,
+        leg_results: list[dict[str, Any]],
+        exc: Exception,
+        correlation_id: str | None,
+    ) -> None:
+        if not leg_results:
+            return
+        last = leg_results[-1]
+        _metrics_inc(
+            "dex_composite_stranded_inventory_total", labels={"mode": str(mode)}
+        )
+        _logger.error(
+            "Composite partial failure: prior legs landed; intermediate inventory may be stranded",
+            extra={
+                "mode": mode,
+                "completed_legs": len(leg_results),
+                "last_provider": last.get("provider"),
+                "last_tx": last.get("tx_hash") or last.get("hash"),
+                "correlation_id": correlation_id,
+                "error": str(exc),
+            },
+        )
+
     def _execute_composite_exact_in(
         self, quote: Quote, min_out_bps: int, *, correlation_id: str | None = None
     ) -> dict[str, str]:
@@ -11149,6 +11175,12 @@ class DexAggregator:
                 self._circ_on_failure(provider.name)
                 _metrics_inc(
                     "dex_composite_exec_fail_total", labels={"mode": "exact_in"}
+                )
+                self._record_composite_partial_failure(
+                    mode="exact_in",
+                    leg_results=leg_results,
+                    exc=exc,
+                    correlation_id=correlation_id,
                 )
                 raise exc
 
@@ -11340,6 +11372,12 @@ class DexAggregator:
                     self._circ_on_failure(provider.name)
                     _metrics_inc(
                         "dex_composite_exec_fail_total", labels={"mode": "exact_out"}
+                    )
+                    self._record_composite_partial_failure(
+                        mode="exact_out",
+                        leg_results=leg_results,
+                        exc=exc_in,
+                        correlation_id=correlation_id,
                     )
                     raise exc_in from exc_out
 

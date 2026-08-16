@@ -22,7 +22,7 @@ Self service: scoped keys can call `/v1/me`, `/v1/me/usage`, and `/v1/me/broker-
 
 Venice: the card surfaces readiness, recent signals, and includes an inline OpenAPI probe.
 
-Buyer flow: `/admin/buy.html` walks through quote retrieval, payment details, verification, and key delivery with SSE updates.
+Buyer flow: `/` and `/admin/buy.html` are the same page. Spot calls `GET /v1/quotes`. Limit (`BIDS_ENABLED=1`) asks the wallet to sign EIP-712 `PurchaseIntent`, then settle into that same quote shape. Payment, challenge, and verify are unchanged. The wallet prompt on Place Bid is a signature, not a transfer.
 
 Telemetry: cards display recent `signal.market.*` events and price sanity notes mirrored from the orchestrator.
 

@@ -24,6 +24,37 @@ See also: `docs/CONFIGURATION.md`, `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md
 
 * Use **plain, direct English** and keep sections short.
 
+## Engineering principles
+
+These govern every code change. They sit beside v1 scope in `implementation-plan.md` and do not expand it.
+
+
+**Remove, do not shim.** Do not preserve backward compatibility in our code.
+
+Delete obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+
+External Venice payloads and error semantics remain a hard contract for the Broker proxy. That is API fidelity, not a reason to keep two internal implementations.
+
+If a deployment uses different Venice paths, set the existing `*_PATH` env override. Do not add a second code path.
+
+
+**Simplest thing that fully works.** Choose the simplest implementation that meets current requirements.
+
+Avoid speculative abstractions, configuration, and indirection.
+
+Lean on libraries already in this repo before writing a new helper or adding a package. Prefer established, well-maintained libraries when they reduce complexity or improve reliability. Check docs and types before assuming a library cannot do the job.
+
+
+**Layered growth, durable architecture.** Grow the system in layers.
+
+Start from the smallest version that works end to end (today: the single-loop orchestrator), and add each new capability on top of a product that already works.
+
+Never trade a working product for unfinished complexity.
+
+Keep components modular and concerns clearly separated: StakeMaster, ArbiDiem, CapacityBroker, quorum, Treasurer.
+
+Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later. Staged work (Treasurer automation, DIEM rentals) stays out of the live path until it is the real design, not a throwaway adapter.
+
 ## Shared prerequisites
 
 ### Environment
@@ -132,6 +163,8 @@ Environment variables load in order; later sources override earlier ones.
 
 ### Libraries and services
 
+Lean on these before writing a new helper or adding a package. Check their docs and types first.
+
 * Venice SDK client - `libs/venice_sdk/client.py`.
 
 * Key manager - `services/venice_keys/manager.py`.
@@ -169,8 +202,8 @@ We run a **single-loop orchestrator** in v1 for simplicity.
 StakeMaster, ArbiDiem, and CapacityBroker execute sequentially with shared state while the quorum coordinator gates ArbiDiem and the AI Treasurer logs guidance for operators.
 
 > **Design note**
-> The manager-and-tools pattern (single agent with tools) is the simplest start.
-> Handoffs and multi-agent graphs are introduced later when specialization or tool-overload requires splitting. ([OpenAI Platform][2])
+> The manager-and-tools pattern (single agent with tools) is the simplest implementation that meets v1.
+> Split into handoffs or multi-agent graphs only when specialization or tool-overload requires it, and only as a durable next layer on the working loop — not as a parallel runtime we intend to throw away. ([OpenAI Platform][2])
 
 ### 1) StakeMaster
 
@@ -227,9 +260,11 @@ Exact-out previews now report the hop venues so `trade path verification empty` 
 
 ### 3) CapacityBroker
 
-**Purpose** - Issue scoped Venice sub-keys, meter usage, and resell unused Diem capacity via a multi-tenant HTTP API.
+**Purpose** - Issue scoped Venice sub-keys, meter usage, and resell unused Diem capacity via a multi-tenant HTTP API and the public buy page.
 
 All sub-keys **must** include `consumptionLimit` and `expiresAt`.
+
+The storefront is spot (`GET /v1/quotes`) or, with `BIDS_ENABLED`, a limit bid that settles into that same quote and verify path.
 
 Abuse triggers immediate revocation and rotation.
 
@@ -268,7 +303,7 @@ Hold VVV/DIEM to guarantee compute for apps, keep ~1.5× average daily Diem as b
 
 Single-loop orchestrator logs each cycle's acquire/hold/release guidance without auto-executing trades so operators can review before action.
 
-Future phases attach swap and mint hooks once treasury risk sign-off lands.
+Do not wire a fake executor we intend to replace. Attach swap and mint hooks only when the real Treasurer design lands after risk sign-off.
 
 ## Orchestrator loop (v1)
 
@@ -287,7 +322,7 @@ Run modes:
 * `--enable-live` – live from the first cycle. Can be combined with `--progressive-live` when you need an explicit override after the warm-up.
 
 > Reference patterns: OpenAI Agents SDK treats agents as models with instructions, tools, guardrails, and **handoffs**.
-> Start simple with one agent and tools, then introduce handoffs or multi-agent graphs only when specialization is required. ([OpenAI GitHub][3])
+> Keep the single-loop product working. Add handoffs or graphs only as a durable next layer when specialization is required. ([OpenAI GitHub][3])
 
 > If you later split into multiple agents, follow graph handoffs as described in LangGraph, using controlled routing and explicit exit conditions. ([LangChain AI][4])
 
@@ -306,7 +341,7 @@ Run modes:
   
   Override `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_PRICE_DRAWDOWN`, `REFLECTION_VOL_BPS_THRESHOLD`, or `REFLECTION_HOLD_STREAK` to widen or tighten the window.
 
-* Flip `RISK_VOL_PERSIST=1` after the SQL backend is ready so the orchestrator writes price ticks into `db.models.PriceTick` for post-trade reviews.
+* `RISK_VOL_PERSIST` defaults on when `SQL_DATABASE_URL` is set. The orchestrator writes `PriceTick` rows and seeds vol history from the last 16 ticks. Set `RISK_VOL_PERSIST=0` to disable.
 
 ## Operational policy and risk
 
@@ -358,6 +393,8 @@ Run modes:
 
 * Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`.
 
+* Storefront bids and failsafe: `tests/test_bid_settle_verify.py`, `tests/test_capacity_broker_failsafe.py`.
+
 * Market-data normalization: `tests/test_marketdata_prices.py`.
 
 **Orchestrator**
@@ -394,7 +431,7 @@ uv run python apps/cli/main.py market:best-price:scan --start 1.0 --min 1e-12 --
 
 These contracts guide code-gen and tool wiring.
 
-We begin with **prompted, simple agents** and expand later.
+We begin with **prompted, simple agents**. New capabilities layer onto the working loop. Do not introduce a parallel agent runtime meant to be replaced later.
 
 **Agent skeleton**
 
@@ -404,7 +441,7 @@ We begin with **prompted, simple agents** and expand later.
 
 * **Exit** - Success criteria or `max_turns`.
 
-* **Handoffs (later)** - Only when specialization forces it. ([OpenAI GitHub][6])
+* **Handoffs** - Only when specialization forces a durable next layer, not a throwaway split. ([OpenAI GitHub][6])
 
 **Example tool stubs**
 
@@ -426,13 +463,30 @@ We begin with **prompted, simple agents** and expand later.
 
   Quorum gating now runs by default; disable it only for debugging with `QUORUM_ENABLE=0`.
 
-* Capacity-aware **dynamic pricing and DIEM rentals** remain post-v1.
+* Capacity-aware **dynamic pricing** is on the live storefront (`PRICE_UTIL_ALPHA` plus CapacityBroker inventory utilization). **DIEM rentals** remain post-v1.
 
-  We only issue and meter sub-keys in v1.
+  Failsafe `hot` pauses new quotes and bids. Do not add a throwaway pricing adapter.
+
+* Limit bids share the spot quote and verify path.
+
+
+  `BIDS_ENABLED` turns bids and settlement on together. There is no `SETTLEMENT_ENABLED` flag.
+
+
+  The buy page max unit price is the pay asset per 1 DIEM, not a dollar total.
+
+
+  Place Bid is EIP-712 `PurchaseIntent` (no transfer). Settle persists a quote when live `unitPrice` is at or under that cap; verify fills the bid and mints the key.
+
+
+  A filled limit looks like a spot quote on the payment card. A cap below market returns 409 (`price exceeds bid max` or `bid out of band`).
+
+
+  `CLEARING_ENABLED` is classification and optional SSE only.
 
 * AI Treasurer automation is still staged.
 
-  The Treasurer records guidance each cycle but does not submit swaps or mints automatically until risk sign-off.
+  The Treasurer records guidance each cycle. Do not add a stopgap auto-executor. Submit swaps or mints only when the durable Treasurer design lands after risk sign-off.
 
 * Exact-out swaps on Aerodrome remain disabled; revisit once ABI/routers support reliable previews.
 
@@ -456,13 +510,13 @@ When the Broker front-ends Venice endpoints, keep payloads and error semantics c
 
 ### Why this version
 
-* Aligns the **most simple agents first** directive while leaving hooks for handoffs/quorum.
+* Aligns the **simplest thing that fully works** with layered growth: a working single loop first, durable next layers later, no throwaway shims.
 
 * Encodes **high-signal tokenomics** into defaults and tests so Codex-style code-gen won't drift.
 
-* Keeps **broker guardrails** enforceable in one place, with Venice compatibility called out explicitly.
+* Keeps **broker guardrails** enforceable in one place. Venice request/response fidelity is an external contract; obsolete internal paths get deleted, not dual-supported.
 
-* Uses **primary sources** for SDK patterns and Venice semantics, with internal files for exact requirements. ([OpenAI Platform][2])
+* Uses **primary sources** and libraries already in this repo for SDK patterns and Venice semantics, with internal files for exact requirements. ([OpenAI Platform][2])
 
 ---
 

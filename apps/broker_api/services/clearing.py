@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -66,6 +67,7 @@ def compute_clearing_price(
             "bandMin": band_min,
             "bandMax": band_max,
             "bandBps": clearing_band_bps,
+            "ts": int(time.time()),
         }
     except RuntimeError:
         raise

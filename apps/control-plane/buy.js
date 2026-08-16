@@ -47,6 +47,8 @@ const assetDecimals = {
 };
 
 const QUOTE_ENDPOINT = "/v1/quotes";
+const BIDS_ENDPOINT = "/v1/bids";
+const SETTLE_ENDPOINT = "/v1/settlement";
 const VERIFY_ENDPOINT = "/v1/purchases/verify";
 const PURCHASE_ENDPOINT = "/v1/purchases";
 const CHALLENGE_ENDPOINT = "/v1/purchases/challenge";
@@ -112,6 +114,35 @@ function $(id) {
 function quotesEnabled() {
   const features = (state.env && state.env.features) || {};
   return features.quotes !== false;
+}
+
+function bidsEnabled() {
+  const features = (state.env && state.env.features) || {};
+  return features.bids === true;
+}
+
+function isLimitBidMode() {
+  const mode = $("quote-mode");
+  return bidsEnabled() && !!mode && mode.value === "limit";
+}
+
+function quoteActionLabel() {
+  return isLimitBidMode() ? "Place Bid" : "Get Quote";
+}
+
+function syncQuoteModeUi() {
+  const wrap = $("quote-mode-wrap");
+  const limitFields = $("quote-limit-fields");
+  const mode = $("quote-mode");
+  const enabled = bidsEnabled();
+  if (wrap) wrap.hidden = !enabled;
+  if (limitFields) {
+    limitFields.hidden = !enabled || !mode || mode.value !== "limit";
+  }
+  const btn = $("quote-btn");
+  if (btn && !state.quote) {
+    btn.textContent = quoteActionLabel();
+  }
 }
 
 function getDiemPriceUsd() {
@@ -1018,6 +1049,155 @@ function applyQuote(result) {
   saveSessionToStorage();
 }
 
+function signingConfig() {
+  const signing = (state.env && state.env.signing) || {};
+  return {
+    domain: signing.domain || "Venice Broker",
+    version: signing.version || "1",
+    chainId: Number(signing.chainId) || 8453,
+  };
+}
+
+function toAssetMinorUnits(human, asset) {
+  const decimals = assetDecimals[String(asset || "").toUpperCase()] || 6;
+  const value = Number(human);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value * Math.pow(10, decimals));
+}
+
+async function ensureBuyerAddress() {
+  const field = $("wallet-address");
+  if (field && field.value) return String(field.value).trim();
+  if (!window.ethereum) {
+    throw new Error("Connect a wallet to place a limit bid.");
+  }
+  const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+  const account = Array.isArray(accounts) ? accounts[0] : null;
+  if (!account) {
+    throw new Error("Wallet did not return an address.");
+  }
+  if (field) field.value = account;
+  return account;
+}
+
+async function signPurchaseIntent(message) {
+  if (!window.ethereum) {
+    throw new Error("Connect a wallet to place a limit bid.");
+  }
+  const cfg = signingConfig();
+  const typed = {
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+      ],
+      PurchaseIntent: [
+        { name: "buyer", type: "address" },
+        { name: "units", type: "uint256" },
+        { name: "maxPrice", type: "uint256" },
+        { name: "asset", type: "string" },
+        { name: "expiry", type: "uint256" },
+        { name: "slippageBps", type: "uint16" },
+        { name: "nonce", type: "uint256" },
+        { name: "chainId", type: "uint256" },
+      ],
+    },
+    primaryType: "PurchaseIntent",
+    domain: {
+      name: cfg.domain,
+      version: cfg.version,
+      chainId: cfg.chainId,
+    },
+    message,
+  };
+  return window.ethereum.request({
+    method: "eth_signTypedData_v4",
+    params: [message.buyer, JSON.stringify(typed)],
+  });
+}
+
+async function readErrorDetail(res, fallback) {
+  try {
+    const body = await res.json();
+    return body.detail || body.message || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+async function settleBidUntilQuoted(bidId, signal) {
+  const deadline = Date.now() + 30000;
+  let lastDetail = "Bid is waiting for a quote.";
+  while (Date.now() < deadline) {
+    const settle = await fetchWithRetry(
+      `${SETTLE_ENDPOINT}/${encodeURIComponent(bidId)}/settle`,
+      { method: "POST", headers: JSON_POST_HEADERS, signal },
+      { timeoutMs: 20000 }
+    );
+    if (settle.ok) {
+      return settle.json();
+    }
+    lastDetail = await readErrorDetail(settle, lastDetail);
+    if (settle.status !== 409 || /expired|out of band/i.test(String(lastDetail))) {
+      const err = new Error(lastDetail);
+      err.status = settle.status;
+      throw err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  throw new Error(lastDetail);
+}
+
+async function requestLimitBid({ unitsRaw, asset, signal }) {
+  const maxInput = $("quote-max-price");
+  const maxError = $("max-price-error");
+  if (maxError) maxError.classList.add("hidden");
+  const maxPrice = toAssetMinorUnits(maxInput && maxInput.value, asset);
+  if (!maxPrice) {
+    if (maxError) {
+      maxError.textContent = "Enter a maximum unit price in the payment asset.";
+      maxError.classList.remove("hidden");
+    }
+    if (maxInput) maxInput.setAttribute("aria-invalid", "true");
+    throw new Error("Enter a maximum unit price for the limit bid.");
+  }
+  if (maxInput) maxInput.setAttribute("aria-invalid", "false");
+
+  const buyer = await ensureBuyerAddress();
+  const cfg = signingConfig();
+  const ttl = Number(state.env && state.env.buyer && state.env.buyer.quote_ttl) || 3600;
+  const message = {
+    buyer,
+    units: Math.round(Number(unitsRaw) * 1_000_000),
+    maxPrice,
+    asset,
+    expiry: Math.floor(Date.now() / 1000) + Math.max(60, ttl),
+    slippageBps: 50,
+    nonce: Date.now(),
+    chainId: cfg.chainId,
+  };
+  const signature = await signPurchaseIntent(message);
+  const created = await fetchWithRetry(
+    BIDS_ENDPOINT,
+    {
+      method: "POST",
+      headers: JSON_POST_HEADERS,
+      signal,
+      body: JSON.stringify({ ...message, signature }),
+    },
+    { timeoutMs: 20000 }
+  );
+  if (!created.ok) {
+    throw new Error(await readErrorDetail(created, "Bid request failed"));
+  }
+  const bid = await created.json();
+  if (!bid || !bid.bidId) {
+    throw new Error("Bid response missing bidId");
+  }
+  return settleBidUntilQuoted(bid.bidId, signal);
+}
+
 async function requestQuote(options = {}) {
   const { warmupRetry = false } = options;
   console.log("[requestQuote] Quote request initiated", { warmupRetry });
@@ -1042,7 +1222,7 @@ async function requestQuote(options = {}) {
   });
   
   if (!warmupRetry) {
-    setQuoteButtonState(true, "Get Quote");
+    setQuoteButtonState(true, quoteActionLabel());
     if (refreshBtn) refreshBtn.hidden = true;
     if (details) details.classList.add("hidden");
     stopQuoteTimer();
@@ -1093,7 +1273,7 @@ async function requestQuote(options = {}) {
       unitsError.classList.remove("hidden");
     }
       if (unitsInput) unitsInput.setAttribute("aria-invalid", "true");
-      setQuoteButtonState(true, "Get Quote");
+      setQuoteButtonState(true, quoteActionLabel());
       return;
   }
 
@@ -1107,7 +1287,7 @@ async function requestQuote(options = {}) {
       assetError.classList.remove("hidden");
     }
       if (assetSelect) assetSelect.setAttribute("aria-invalid", "true");
-      setQuoteButtonState(true, "Get Quote");
+      setQuoteButtonState(true, quoteActionLabel());
       return;
   }
 
@@ -1139,13 +1319,22 @@ async function requestQuote(options = {}) {
       setQuoteButtonState(false, warmupRetry ? "Initializing..." : "Getting quote...");
       if (refreshBtn) refreshBtn.disabled = true;
 
+    const startedAt = nowMs();
+    let body;
+    if (isLimitBidMode()) {
+      setQuoteButtonState(false, warmupRetry ? "Initializing..." : "Placing bid...");
+      body = await requestLimitBid({
+        unitsRaw,
+        asset,
+        signal: state.quoteAbort.signal,
+      });
+    } else {
     const params = new URLSearchParams();
     params.set("units", String(unitsRaw));
     params.set("asset", asset);
     // Multi-layer cache-bust: timestamp + random to avoid intermediary/browser/CDN caches serving stale quotes
     params.set("_t", String(Date.now()));
     params.set("_r", String(Math.random()).substring(2, 10));
-    const startedAt = nowMs();
     const quoteUrl = `${QUOTE_ENDPOINT}?${params.toString()}`;
     console.log("[requestQuote] Fetching quote from:", quoteUrl);
     const res = await fetchWithRetry(
@@ -1209,7 +1398,8 @@ async function requestQuote(options = {}) {
 
       throw createError(normalizedDetail);
     }
-    const body = await res.json();
+    body = await res.json();
+    }
     const latencyMs = Math.round(nowMs() - startedAt);
     state.lastQuoteLatencyMs = latencyMs;
     console.debug(`[quote] fetched in ${latencyMs} ms`, body);
@@ -1340,7 +1530,7 @@ async function requestQuote(options = {}) {
       } else if (btn && btn.disabled && btn.textContent === "Quote Active") {
         // Quote was successfully applied, keep it disabled
       } else {
-        setQuoteButtonState(true, "Get Quote");
+        setQuoteButtonState(true, quoteActionLabel());
       }
       if (refreshBtn) refreshBtn.disabled = false;
     }
@@ -1810,6 +2000,7 @@ function applyEnvPayload(payload) {
     showAlert($("quote-status"), "error", "Treasury address missing in server config.");
   }
   const feats = (body && body.features) || {};
+  syncQuoteModeUi();
   if (feats && feats.quotes === false) {
     setQuoteButtonState(false, "Get Quote");
     showAlert($("quote-status"), "error", "Quotes are disabled by the server.");
@@ -2371,9 +2562,13 @@ function setupEventHandlers() {
   if (quoteBtn) {
     console.log("[setupEventHandlers] Quote button found, attaching click handler");
     quoteBtn.addEventListener("click", debouncedRequestQuote);
-    setQuoteButtonState(true, "Get Quote");
+    setQuoteButtonState(true, quoteActionLabel());
   } else {
     console.error("[setupEventHandlers] Quote button NOT found!");
+  }
+  const quoteMode = $("quote-mode");
+  if (quoteMode) {
+    quoteMode.addEventListener("change", syncQuoteModeUi);
   }
   const refreshBtn = $("quote-refresh");
   if (refreshBtn) refreshBtn.addEventListener("click", debouncedRequestQuote);

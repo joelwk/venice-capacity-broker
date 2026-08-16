@@ -45,3 +45,5 @@ Your role is to reason about code and architecture with minimal fuss, always ste
 * Keep each bullet crisp; prefer *what* over *why* inside `<the_how>`, reserve *why* for `<the_why>`.
 * Comments after bullets (like this) clarify intent for future editors; they are optional in the final file.
 * Enforce and validate new logic and architecture against prompt such as @prompts/state_modifier.yaml @prompts/thought.yaml
+* Repair by deleting obsolete paths, not by adding compatibility layers, fallbacks, or migrations.
+* Prefer the simplest durable fix that uses libraries already in this repo. Do not ship a stopgap meant to be replaced later.

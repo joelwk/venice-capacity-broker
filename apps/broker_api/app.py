@@ -552,6 +552,13 @@ def _build_env_status() -> dict[str, Any]:
     )
 
     quote_ttl = int((os.getenv("PRICE_QUOTE_TTL_SECONDS") or "120").strip() or 120)
+    try:
+        signing_chain_id = int(
+            (os.getenv("CHAIN_ID") or os.getenv("BASE_CHAIN_ID") or "8453").strip()
+            or 8453
+        )
+    except ValueError:
+        signing_chain_id = 8453
 
     # Populate discount map from configured environment variables
     try:
@@ -584,6 +591,11 @@ def _build_env_status() -> dict[str, Any]:
         },
         "network": {
             "rpc_configured": rpc_configured,
+        },
+        "signing": {
+            "domain": (os.getenv("SIGN_DOMAIN_NAME") or "Venice Broker").strip(),
+            "version": (os.getenv("SIGN_DOMAIN_VERSION") or "1").strip(),
+            "chainId": signing_chain_id,
         },
     }
 
@@ -790,14 +802,8 @@ def _build_dependencies(*, fast_startup: bool = False) -> dict[str, Any]:
             )
         )
 
-    # Settlement configuration
-    settlement_enabled = (
-        os.getenv("SETTLEMENT_ENABLED") or "false"
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    deps["settlement_enabled"] = settlement_enabled
-
-    # verify_purchase is actually a route handler in purchases router, not a helper
-    deps["verify_purchase"] = None
+    # Bids own settlement. CLEARING_ENABLED stays classification/SSE only.
+    deps["settlement_enabled"] = bids_enabled
 
     return deps
 
@@ -1079,9 +1085,12 @@ def _wire_routers(app: FastAPI, deps: dict[str, Any]) -> None:
                 select_func=deps.get("select_func"),
                 bid_model=deps.get("bid_model"),
                 settle_pricing=deps.get("settle_pricing"),
-                verify_purchase=deps["verify_purchase"],
                 get_marketdata_provider=deps["get_marketdata_provider"],
                 logger=deps["logger"],
+                classify_bid_status=deps.get("classify_bid_status"),
+                price_usdc_per_unit_from_asset=deps.get(
+                    "price_usdc_per_unit_from_asset"
+                ),
             )
             app.include_router(settlement_router)
             logger.info("Wired settlement router")

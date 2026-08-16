@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from libs.telemetry.logger import get_logger
+from services.broker.inventory import (
+    broker_inventory_utilization,
+    failsafe_actions,
+    failsafe_status,
+    save_inventory_policy,
+)
 from services.venice_keys.manager import KeyManager
 
 logger = get_logger("agent.capacity_broker")
@@ -202,12 +208,7 @@ class CapacityBroker:
                         }
                     )
 
-        usage_total = self._extract_usage_diem(usage)
-        limit_total = self._extract_limit_total(limits)
-        if limit_total and limit_total > 0 and usage_total is not None:
-            utilization_ratio = max(
-                0.0, min(1.0, float(usage_total) / float(limit_total))
-            )
+        utilization_ratio = broker_inventory_utilization(usage, limits)
 
         if utilization_ratio is not None:
             pricing, failsafe = self._derive_inventory_policy(utilization_ratio)
@@ -235,6 +236,17 @@ class CapacityBroker:
                 pricing["lastApplied"] = self._last_price_ts
                 pricing["historyLength"] = len(self._price_history)
 
+            status = (
+                str(failsafe.get("status"))
+                if failsafe
+                else failsafe_status(utilization_ratio)
+            )
+            save_inventory_policy(
+                utilization=utilization_ratio,
+                status=status,
+                pricing=pricing,
+            )
+
         summary: dict[str, Any] = {
             "status": "ok" if not errors else "degraded",
             "enforce_limits": bool(enforce_limits),
@@ -257,83 +269,6 @@ class CapacityBroker:
         if violations:
             logger.warning(f"CapacityBroker policy violations detected: {violations}")
         return summary
-
-    # ------------------------------------------------------------------
-    def _extract_usage_diem(self, usage: Any) -> float | None:
-        if not isinstance(usage, dict):
-            return None
-        for key in ("dailyAverageDiem", "daily_average_diem", "avgDailyDiem"):
-            if key in usage:
-                try:
-                    return float(usage[key])
-                except Exception:
-                    continue
-        data = usage.get("data")
-        if isinstance(data, list) and data:
-            totals: list[float] = []
-            for entry in data:
-                if not isinstance(entry, dict):
-                    continue
-                for field in (
-                    "dailyAverageDiem",
-                    "daily_average_diem",
-                    "consumptionDaily",
-                    "consumption",
-                ):
-                    if field in entry:
-                        try:
-                            totals.append(float(entry[field]))
-                        except Exception:
-                            continue
-                        break
-            if totals:
-                return sum(totals) / len(totals)
-        aggregate = usage.get("aggregate")
-        if isinstance(aggregate, dict):
-            for key in ("daily", "diemDaily"):
-                if key in aggregate:
-                    try:
-                        return float(aggregate[key])
-                    except Exception:
-                        continue
-        return None
-
-    def _extract_limit_total(self, limits: Any) -> float | None:
-        if limits is None:
-            return None
-        entries: list[Any]
-        if isinstance(limits, list):
-            entries = limits
-        elif isinstance(limits, dict):
-            entries = []
-            for key in ("data", "items", "keys"):
-                value = limits.get(key)
-                if isinstance(value, list):
-                    entries = value
-                    break
-            if not entries:
-                entries = [
-                    value for value in limits.values() if isinstance(value, dict)
-                ]
-        else:
-            return None
-        total = 0.0
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            limit = entry.get("consumptionLimit") or entry.get("consumption_limit")
-            amount = None
-            if isinstance(limit, dict):
-                amount = limit.get("diem") or limit.get("daily")
-            elif isinstance(limit, (int, float)):
-                amount = limit
-            if amount is None:
-                continue
-            try:
-                total += float(amount)
-            except Exception:
-                continue
-        return total if total > 0 else None
 
     def _derive_inventory_policy(
         self, utilization: float
@@ -385,7 +320,7 @@ class CapacityBroker:
             failsafe = {
                 "status": "hot",
                 "utilization": utilization,
-                "actions": ["pause_low_tier", "raise_price", "offer_rental"],
+                "actions": failsafe_actions("hot"),
             }
         elif utilization <= relax_threshold:
             discount_factor = max(0.0, min(0.25, (relax_threshold - utilization) * 0.5))
@@ -414,7 +349,7 @@ class CapacityBroker:
             failsafe = {
                 "status": "calm",
                 "utilization": utilization,
-                "actions": ["open_intake"],
+                "actions": failsafe_actions("calm"),
             }
         else:
             if abs(utilization - util_target) < hysteresis_window:

@@ -56,7 +56,7 @@ Perform a thorough, evidence-based review of logs produced during the most recen
    - For every issue:  
      a. **Exact Error / Message:** Copy verbatim from logs (e.g., "Error: Specific message at line 123").  
      b. **Likely Cause:** Succinct, evidence-based hypothesis (e.g., "Caused by repeated calls without caching, per code in provided documents").  
-     c. **Recommended Next Step:** Targeted, prioritized follow-up (e.g., High Impact: Add limiting mechanism; inspect environment variables").  
+     c. **Recommended Next Step:** Targeted, prioritized follow-up (e.g., High Impact: Add limiting mechanism; inspect environment variables"). Prefer deleting obsolete paths over fallbacks or dual implementations.  
    - Prioritize insights: High (blocks execution), Medium (performance impact), Low (minor anomaly).
 
 9. **Anti-Hallucination QA Checkpoint** (Mandatory Final Step)  

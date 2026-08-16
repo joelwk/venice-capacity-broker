@@ -231,24 +231,15 @@ route = ["DIEM", "WETH", "USDC"]
 
 **Context:** Broker should adjust prices based on capacity utilization.
 
-**Implementation:**
-```python
-if utilization >= 0.85:
-    pricing_mode = "surge"      # 2× markup
-elif utilization <= 0.20:
-    pricing_mode = "discount"   # 0.5× markup (attract tenants)
-else:
-    pricing_mode = "normal"     # 1× markup
-```
+**Implementation:** Live quotes use one formula: `unit_price = market * (1 + utilization * PRICE_UTIL_ALPHA)`, then the per-asset discount. Utilization is tenant Diem used / issued limits from CapacityBroker's inventory snapshot (`BROKER_INVENTORY_POLICY_PATH`). It is not Venice `/vvv/utilization` and not request Counters / `CAPACITY_UNITS_PER_MIN`.
 
-**Status:** Implemented but not yet activated (requires tenant utilization > 0%).
+CapacityBroker still writes surge / relax guidance into that snapshot. Failsafe `hot` pauses new quotes and bids (HTTP 503). There is no `BROKER_PRICING_MODE` and no rental offer path.
 
 **Configuration:**
 ```bash
-BROKER_PRICING_MODE=dynamic           # Enable dynamic pricing
-BROKER_BASE_MARKUP=1.25               # 25% base markup
-BROKER_SURGE_THRESHOLD=0.85           # Surge pricing at 85%+ util
-BROKER_DISCOUNT_THRESHOLD=0.20        # Discount pricing at <20% util
+PRICE_UTIL_ALPHA=0.5
+BROKER_UTIL_SURGE_THRESHOLD=0.85
+BROKER_INVENTORY_POLICY_PATH=db/broker_inventory_policy.json
 ```
 
 ---
@@ -512,21 +503,29 @@ assert os.getenv("VENICE_API_BASE_URL", "").endswith("/api/v1"), \
 
 ---
 
+## Public storefront completion
+
+Four layers landed on the working storefront.
+
+**Utilization on quotes.** Markup is `1 + inventory_utilization * PRICE_UTIL_ALPHA`. Failsafe `hot` returns 503 on `GET /v1/quotes` and `POST /v1/bids`.
+
+**PriceTick.** One writer in `run_cycle`. When SQL is set, the last 16 ticks seed vol history. `RISK_VOL_PERSIST=0` turns that off.
+
+**Composite exec only.** Bridge-exec and two-tx flags are gone. ArbiDiem live trades use aggregator `_execute_composite_*`. A failed second leg is stranded inventory, not an auto-unwind.
+
+**Limit bids.** `BIDS_ENABLED` turns bids and settlement on together. The buy page Order type switch is a cap: EIP-712 `PurchaseIntent`, then settle persists a quote when `unitPrice ≤ maxPrice`, then the existing pay → challenge → verify path mints the key and marks the bid `filled`. Spot and a filled limit look the same on the payment card. `CLEARING_ENABLED` stays classification / SSE only. There is no `SETTLEMENT_ENABLED` product flag.
+
+Treasurer auto-exec and DIEM rentals stay staged.
+
 ## Future Enhancements
 
-### Planned (Next Month)
+### Later layers
 
 1. **OTC Order Book** - Off-chain DIEM trading before DEX liquidity
-2. **Sentiment Integration** - Twitter/Discord sentiment into fair value
-3. **Multi-Agent Handoffs** - Split ArbiDiem into Watcher/Analyst/Decider/Executor
-4. **Dynamic Parameter Tuning** - AI Treasurer suggests threshold adjustments
-
-### Under Consideration
-
-1. **Flash Loan Arbitrage** - Use flash loans to amplify capital efficiency
-2. **Cross-Chain DIEM** - Bridge DIEM to other chains for liquidity
-3. **Capacity Futures** - Sell future Diem allocation as tradeable contract
-4. **Staking Derivatives** - Tokenize sVVV position for liquidity
+2. **Dynamic Parameter Tuning** - AI Treasurer suggests threshold adjustments after risk sign-off
+3. **Cross-Chain DIEM** - Bridge DIEM to other chains for liquidity
+4. **Capacity Futures** - Sell future Diem allocation as tradeable contract
+5. **Staking Derivatives** - Tokenize sVVV position for liquidity
 
 ---
 
