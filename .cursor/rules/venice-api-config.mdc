@@ -50,14 +50,13 @@ VENICE_API_KEY=your_api_key_here
 
 ### Signal Endpoints (VVV Metrics)
 ```bash
-# Legacy aggregate VVV signals (if exposed)
-VENICE_VVV_PATH=/vvv
-
-# Preferred explicit VVV metrics
+# Canonical VVV metrics
 VENICE_VVV_CIRC_PATH=/vvv/circulatingsupply
 VENICE_VVV_UTIL_PATH=/vvv/utilization
 VENICE_VVV_YIELD_PATH=/vvv/staking_yield
 ```
+
+Use one canonical path per metric. If a deployment differs, override the env. Do not add a second code path or a legacy aggregate `/vvv` fallback.
 
 ### Model and Chat Endpoints
 ```bash
@@ -83,15 +82,13 @@ VENICE_CHALLENGE_PATH=/api_keys/generate_web3_key
 VENICE_REVOKE_KEY_PATH=/api_keys/{key_id}
 ```
 
-### Legacy Key Management Paths
-For older Venice deployments:
-```bash
-# Alternative subkey creation paths
-VENICE_CREATE_SUBKEY_PATH=/v1/keys/sub      # or /v1/keys/subkey
+### Path overrides (deployments that differ)
 
-# Alternative web3 key generation
-VENICE_CREATE_ROOT_PATH=/v1/keys/generate_web3_key
-```
+Venice path env vars exist so a deployment can point at a different URL without a second code path.
+
+Do not preserve obsolete routes in client logic. Do not add compatibility layers, fallbacks, or dual `/api_keys` plus `/v1/keys` implementations.
+
+If an older host uses `/v1/keys/*` instead of `/api_keys/*`, set `VENICE_CREATE_SUBKEY_PATH` (and related `*_PATH` vars) to that host's canonical paths. Keep one construction in `libs/venice_sdk/client.py`.
 
 ### Rate Limits and Usage (DIEM balances)
 ```bash
@@ -101,7 +98,7 @@ VENICE_RATE_LIMITS_PATH=/api_keys/rate_limits
 # Usage logs (default: /api_keys/rate_limits/log)
 VENICE_USAGE_PATH=/api_keys/rate_limits/log
 
-# Quota fallback (default: /api_keys/rate_limits)
+# Quota (same family as rate limits; one path, not a fallback)
 VENICE_QUOTA_PATH=/api_keys/rate_limits
 ```
 
@@ -127,15 +124,15 @@ python apps/cli/main.py venice:probe-openapi --base-url https://api.venice.ai
 
 2. **Wrong signal endpoint paths**
    - Check Postman for `/vvv/circulatingsupply`, `/vvv/utilization`, `/vvv/staking_yield`
-   - Override with `VENICE_VVV_PATH` (legacy) or `VENICE_VVV_*_PATH` metrics variables
+   - Override the matching `VENICE_VVV_*_PATH` variable. Do not keep a legacy `/vvv` code path.
 
 3. **Missing or invalid authentication**
    - Ensure `VENICE_API_KEY` is set and valid
    - Some endpoints return 404 instead of 401 for auth failures
 
-4. **Legacy endpoint paths**
-   - Older deployments may use `/v1/keys/*` instead of `/api_keys/*`
-   - Override the relevant `*_PATH` environment variables
+4. **Deployment-specific paths**
+   - If a host uses `/v1/keys/*` instead of `/api_keys/*`, override the relevant `*_PATH` env vars
+   - Do not add a second client implementation for the old routes
 
 ## Code References
 
@@ -151,6 +148,8 @@ self.config = VeniceConfig(
     # ... other paths
 )
 ```
+
+Do not treat `VENICE_VVV_PATH` as a fallback for the explicit metric paths. One path per call.
 
 ### Signal Fetching
 Signals are fetched in `services/marketdata/provider.py`:
@@ -169,7 +168,7 @@ Test endpoints using `apps/cli/main.py`:
 2. **Test configuration** with CLI commands before running the full application
 3. **Check Postman documentation** for your specific Venice deployment
 4. **Use environment-specific configs** for different deployments (dev/staging/prod)
-5. **Handle 404s gracefully** in your code with proper error messages
+5. **Fail clearly on 404s** with the constructed URL in the error. Do not add silent fallbacks to alternate paths.
 
 ## Related Documentation
 
