@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from agents.capacity_broker.agent import CapacityBroker
+from services.broker.inventory import (
+    clear_inventory_policy_cache,
+    load_inventory_policy,
+)
 from services.venice_keys.manager import KeyManager
 
 
@@ -23,8 +27,6 @@ def test_capacity_broker_triggers_failsafe(monkeypatch, tmp_path):
     monkeypatch.setenv("BROKER_BASE_PRICE_USD", "1.00")
     monkeypatch.setenv("BROKER_SURGE_MULTIPLIER", "1.5")
     monkeypatch.setenv("BROKER_INVENTORY_POLICY_PATH", str(tmp_path / "policy.json"))
-    from services.broker.inventory import clear_inventory_policy_cache, load_inventory_policy
-
     clear_inventory_policy_cache()
 
     usage = {"dailyAverageDiem": 90.0}

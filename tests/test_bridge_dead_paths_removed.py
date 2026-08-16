@@ -3,8 +3,6 @@ from __future__ import annotations
 import inspect
 from types import SimpleNamespace
 
-import pytest
-
 
 def test_diem_service_has_no_bridge_execution_shim() -> None:
     from services.diem.client import DIEMService

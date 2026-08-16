@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from services.broker.inventory import (
-    IntakePaused,
+    IntakePausedError,
     assert_intake_open,
     broker_inventory_utilization,
     clear_inventory_policy_cache,
@@ -44,7 +44,7 @@ def test_hot_failsafe_pauses_intake(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("BROKER_INVENTORY_POLICY_PATH", str(tmp_path / "policy.json"))
     clear_inventory_policy_cache()
     save_inventory_policy(utilization=0.92, status="hot")
-    with pytest.raises(IntakePaused):
+    with pytest.raises(IntakePausedError):
         assert_intake_open()
 
     clear_inventory_policy_cache()

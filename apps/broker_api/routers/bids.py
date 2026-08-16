@@ -83,11 +83,11 @@ def bids_create(req: BidRequest) -> dict:
     if not _bids_enabled:
         raise HTTPException(status_code=404, detail="bids disabled")
 
-    from services.broker.inventory import IntakePaused, assert_intake_open
+    from services.broker.inventory import IntakePausedError, assert_intake_open
 
     try:
         assert_intake_open()
-    except IntakePaused as exc:
+    except IntakePausedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Verify signature and fields

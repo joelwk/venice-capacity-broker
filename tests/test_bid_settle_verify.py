@@ -28,8 +28,8 @@ for _mod in list(sys.modules):
 pytest.importorskip("sqlmodel")
 pytest.importorskip("eth_account")
 
-from eth_account import Account
-from eth_account.messages import encode_typed_data
+from eth_account import Account  # noqa: E402
+from eth_account.messages import encode_typed_data  # noqa: E402
 
 TREASURY = "0xabc0000000000000000000000000000000000001"
 ATTACKER = "0xbad0000000000000000000000000000000000003"

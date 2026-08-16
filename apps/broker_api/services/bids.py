@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("broker.api.services.bids")
 
 
-def expiry_as_utc(value: datetime | int | float | None) -> datetime | None:
+def expiry_as_utc(value: datetime | float | None) -> datetime | None:
     """Interpret stored bid expiry as UTC, including naive datetimes."""
     if value is None:
         return None
@@ -30,7 +30,7 @@ def expiry_as_utc(value: datetime | int | float | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def expiry_epoch(value: datetime | int | float | None) -> int:
+def expiry_epoch(value: datetime | float | None) -> int:
     aware = expiry_as_utc(value)
     if aware is None:
         return 0

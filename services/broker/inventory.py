@@ -12,7 +12,7 @@ _lock = Lock()
 _cached: dict[str, Any] | None = None
 
 
-class IntakePaused(Exception):
+class IntakePausedError(Exception):
     """New quotes and bids are refused while inventory failsafe is hot."""
 
     def __init__(self, utilization: float | None = None) -> None:
@@ -199,4 +199,4 @@ def assert_intake_open() -> None:
             util_f = float(util) if util is not None else None
         except (TypeError, ValueError):
             util_f = None
-        raise IntakePaused(utilization=util_f)
+        raise IntakePausedError(utilization=util_f)
