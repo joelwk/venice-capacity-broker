@@ -210,8 +210,8 @@ Use these settings to tune bridge leg fallback and timeouts.
   - `DIEM_BRIDGE_LIVE_FALLBACK_ENABLE` (default: `0`) - Enable bridge_vvv price as execution preview for live mode when DEX quotes fail. Set to `1` to enable.
   - `DIEM_BRIDGE_LIVE_FALLBACK_MAX_USD` (default: `5.0`) - Maximum USD value per fallback trade. Only small trades use fallback.
   - `DIEM_BRIDGE_LIVE_FALLBACK_SLIPPAGE_BPS` (default: `50.0`) - Conservative slippage assumption for bridge-anchored execution.
-- Bridge execution (experimental, guarded):
-  - Bridge execution is aggregator composite (`trade_best` / `trade_best_exact_out`). There is no `DIEM_ENABLE_BRIDGE_EXECUTION` flag. Partial-leg failure is logged as stranded inventory; it does not auto-unwind.
+- Bridge execution:
+  - Live DIEM trades use aggregator composite only (`trade_best` / `trade_best_exact_out`). There is no bridge-exec or two-tx flag. Partial-leg failure is logged as stranded inventory; it does not auto-unwind.
 - Path engine timeout:
   - `MARKETDATA_PATH_ENGINE_TIMEOUT_SECONDS` (default: `10.0`, max: `30.0`) - Maximum seconds to wait for path engine quotes before falling back to bridge pricing. Default 10s accommodates Base RPC latency for V3 quoter calls. Can be lowered to 2.5-5.0s for constrained hosts (Docker/Replit).
 - Path engine provider management (new):
@@ -413,12 +413,14 @@ Metrics and visibility:
 
 - Core: `BROKER_ADMIN_TOKEN`, `BROKER_REQUIRE_ADMIN_TOKEN`, `BROKER_DEFAULT_MODEL`.
 - Features: `QUOTES_ENABLED`, `PURCHASES_ENABLED`, `BIDS_ENABLED`, `PRICE_ENGINE`, `ACCEPT_ASSETS`, `TREASURY_ADDRESS`.
-- Bids: `BIDS_ENABLED` turns `POST /v1/bids` and `POST /v1/settlement/{id}/settle` on together. `CLEARING_ENABLED` is in-band classification and optional SSE only. Confirm stays on `POST /v1/purchases/verify` (purchases also expose `/v1/settlement/confirm` as an alias).
-- Clearing SSE: `CLEARING_SSE_INTERVAL` (seconds).
+- Spot quotes: `GET /v1/quotes` prices `units` in `asset`. Live unit price is market × `(1 + inventory_utilization * PRICE_UTIL_ALPHA)`, then the per-asset discount. Utilization is tenant Diem used / issued limits from the inventory snapshot, not Venice `/vvv/utilization` and not `CAPACITY_UNITS_PER_MIN` (that env is unused).
+- Failsafe: CapacityBroker writes `hot` when utilization crosses `BROKER_UTIL_SURGE_THRESHOLD`. New quotes and bids then return 503 until the snapshot cools.
+- Bids: `BIDS_ENABLED` turns `POST /v1/bids` and `POST /v1/settlement/{id}/settle` on together. The buy page then shows Order type. Max unit price is human units of the pay asset per 1 DIEM (USDC 6 decimals, ETH 18, WBTC 8). Place Bid asks the wallet to sign EIP-712 `PurchaseIntent` (domain from `SIGN_DOMAIN_NAME` / `SIGN_DOMAIN_VERSION` / `CHAIN_ID`); that is not a payment. Settle persists a quote when live `unitPrice` ≤ `maxPrice`. 409 means expired, out of band, or price exceeds max. Confirm stays on `POST /v1/purchases/verify` (purchases also expose `/v1/settlement/confirm` as an alias). The paying wallet must match `Bid.buyer_address`.
+- Clearing: `CLEARING_ENABLED` is in-band classification and optional SSE only. It does not turn on settlement. `CLEARING_SSE_INTERVAL` is seconds.
 - Quote persistence: `QUOTES_PERSIST_ENABLED` (default true), `QUOTES_ASYNC_ENABLED` (default false; keep false so verify cannot race the quote row).
 - Payment checks: `PURCHASE_MIN_CONFIRMATIONS` (default 5), `PURCHASE_CHAIN_ID` / `BASE_CHAIN_ID` (default 8453), `PURCHASE_UNDERPAY_TOLERANCE_BPS` (default 0).
 - Public rate limits: `BUY_RATE_LIMITS_ENABLED` (default true), `BUY_RATE_LIMIT_WINDOW_SECONDS` (default 60), `BUY_RATE_LIMIT_MAX_REQUESTS` (default 30).
-- Pricing knobs: `PRICE_UTIL_ALPHA`, `BROKER_UTIL_TARGET`, `BROKER_PRICE_STEP_BPS`, `BROKER_DISCOUNT_MAX_BPS`, `BROKER_HYSTERESIS_WINDOW`, `BROKER_UTIL_SURGE_THRESHOLD`, `BROKER_UTIL_RELAX_THRESHOLD`, `BROKER_BASE_PRICE_USD`, `BROKER_SURGE_MULTIPLIER`.
+- CapacityBroker guidance knobs (policy snapshot / failsafe, not a second quote formula): `BROKER_UTIL_TARGET`, `BROKER_PRICE_STEP_BPS`, `BROKER_DISCOUNT_MAX_BPS`, `BROKER_HYSTERESIS_WINDOW`, `BROKER_UTIL_SURGE_THRESHOLD`, `BROKER_UTIL_RELAX_THRESHOLD`, `BROKER_BASE_PRICE_USD`, `BROKER_SURGE_MULTIPLIER`.
 - Inventory policy snapshot: `BROKER_INVENTORY_POLICY_PATH` (default `db/broker_inventory_policy.json`). CapacityBroker writes it; quotes and bids read it.
 - CORS: `CORS_ENABLED`, `CORS_ALLOW_ORIGINS`.
 

@@ -77,9 +77,10 @@ BASE_RPC_URL=https://mainnet.base.org
 BASE_CHAIN_ID=8453
 
 # Buyer pricing
-# - market: DIEM-aware pricing using live market data (recommended for buy.html)
+# - market: DIEM-aware pricing using live market data (recommended for / and /buy.html)
 # - static: requires PRICE_UNIT_ETH_WEI and/or PRICE_UNIT_USDC
 PRICE_ENGINE=market
+# BIDS_ENABLED=true  # optional; spot quotes work without this
 ```
 
 **Replit tuning for Base RPC**

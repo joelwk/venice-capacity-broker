@@ -24,7 +24,7 @@ A per-asset discount then cuts that marked-up price. Defaults in code are 5% for
 
 Accepted payment assets are `ACCEPT_ASSETS` (default `ETH,USDC,WBTC`). The buy page Market Snapshot shows each asset's USD price, DIEM ratio, and discount.
 
-When utilization is high, CapacityBroker can suggest surge pricing or pausing low-tier intake. When it is low, it can suggest a discount capped by `BROKER_DISCOUNT_MAX_BPS`.
+When utilization is high, CapacityBroker can mark failsafe `hot` and pause new quotes and bids (503). When it is low, it can suggest a discount capped by `BROKER_DISCOUNT_MAX_BPS`.
 
 ## Layout
 
@@ -62,12 +62,17 @@ Replit: [docs/REPLIT_DEPLOYMENT.md](docs/REPLIT_DEPLOYMENT.md). Store keys in Re
 
 ## Buy flow
 
-1. `GET /v1/quotes` returns a priced quote in the chosen asset (persisted synchronously).
-2. The buyer pays the treasury on Base.
-3. `GET /v1/purchases/challenge` plus a wallet signature prove ownership.
-4. `POST /v1/purchases/verify` checks chain id, confirmations, token, and amount, then mints a scoped key.
+The public page is `/` (same as `/admin/buy.html`). Spot and limit share one checkout after a quote exists.
 
-Unauthenticated status endpoints never return the API key.
+**Spot** is buy-now. `GET /v1/quotes?units=&asset=` returns a live `unitPrice` / `totalPrice` in the pay asset (minor units). The quote is persisted synchronously so verify can find it. Changing DIEM credits scales the total; it does not change the unit price.
+
+**Limit** (`BIDS_ENABLED=1`) is a cap, not a different price. The buyer sets **max unit price** in the pay asset per 1 DIEM (for example `1400` USDC), connects a wallet, and signs EIP-712 `PurchaseIntent`. That signature is not a transfer. `POST /v1/bids` then `POST /v1/settlement/{id}/settle`. If live `unitPrice` is at or under the cap, settle returns the same quote shape as spot. If the cap is below market, settle returns 409 (`price exceeds bid max` or `bid out of band`). The buy page retries a price-exceeds 409 for about 30 seconds, then surfaces the error.
+
+After either path the buyer sends the quoted amount to `payments.treasury_address` on Base, then `GET /v1/purchases/challenge` plus `personal_sign`, then `POST /v1/purchases/verify`. Verify checks chain, confirmations, token, and amount, mints a scoped key, and marks a linked bid `filled`. The paying wallet must match the bid buyer.
+
+Failsafe `hot` (CapacityBroker inventory) returns 503 on new quotes and bids. Unauthenticated status endpoints never return the API key.
+
+Order type and max unit price on the buy page are meant to appear only when `/v1/env` has `features.bids: true`. With bids off, those controls do nothing; use spot.
 
 ## License
 

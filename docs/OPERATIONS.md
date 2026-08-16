@@ -60,9 +60,11 @@ uv run python apps/cli/main.py diem:mint-rate --live
   - `DIEM_DISCOUNT_RATE_APY` (default 0.15): Lower to 0.10-0.12 for higher valuation
   - `DIEM_ILLIQUIDITY_DISCOUNT` (default 0.80): Set to 1.0 when DEX liquidity is added
 
-4) Review utilization and DIEM buffer (target ~1.5× daily)
+4) Review utilization, storefront intake, and DIEM buffer (target ~1.5× daily)
 
 - Check `/metrics` and latest `agent_memory.jsonl` entries.
+- Confirm `/v1/env` `features.bids` matches whether you want Order type on `/`.
+- If quotes or bids return 503 `inventory failsafe hot`, CapacityBroker paused intake. Check `BROKER_INVENTORY_POLICY_PATH` and utilization vs `BROKER_UTIL_SURGE_THRESHOLD`.
 
 ## Wallet Funding Requirements
 

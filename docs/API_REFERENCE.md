@@ -24,7 +24,7 @@ This document provides a complete, structured reference for building autonomous 
 
 The Venice Capacity Broker system consists of three main API surfaces:
 
-- **Broker API** (`apps/broker_api/`) - FastAPI application for capacity brokerage, tenant management, quotes, purchases
+- **Broker API** (`apps/broker_api/`) - FastAPI application for capacity brokerage, tenant management, spot quotes, limit bids, purchases
 - **Venice API** (`api.venice.ai/api/v1`) - Upstream Venice AI inference API with model endpoints and key management
 - **DEX Routes** (`libs/dex/routes.py`) - On-chain routing utilities for Uniswap V2/V3 path construction
 
@@ -96,16 +96,29 @@ Get environment configuration and feature flags.
     "quotes": true,
     "purchases": true,
     "bids": false,
-    "clearing": false
+    "clearing": false,
+    "diem_snapshot_mode": "always"
   },
   "pricing": {
     "discounts": {}
   },
   "payments": {
-    "acceptAssets": ["ETH", "USDC", "WBTC"]
+    "treasury_address": "0x...",
+    "accepted_assets": ["USDC", "ETH", "WBTC"],
+    "usdc_address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  },
+  "buyer": {
+    "quote_ttl": 120
+  },
+  "signing": {
+    "domain": "Venice Broker",
+    "version": "1",
+    "chainId": 8453
   }
 }
 ```
+
+`features.bids` is `BIDS_ENABLED`. The buy page shows Order type / Place Bid only when this is true. `signing` is the EIP-712 domain for `PurchaseIntent`.
 
 **Tool Pattern:**
 ```python
@@ -177,27 +190,37 @@ Combined environment status and market prices (optimized for frontend initializa
 
 ### Quotes (`/v1/quotes`)
 
+Spot checkout. Limit bids settle into this same quote shape.
+
+`unitPrice` and `totalPrice` are **minor units of `asset`** (USDC 6 decimals, ETH 18, WBTC 8). Treasury address comes from `GET /v1/env` (`payments.treasury_address`), not from the quote.
+
+Markup is `1 + inventory_utilization * PRICE_UTIL_ALPHA`, then the per-asset discount. Failsafe `hot` returns 503.
+
 #### `GET /v1/quotes`
 Generate a quote for purchasing Venice API capacity.
 
 **Query Parameters:**
 - `asset` (required): `ETH`, `USDC`, or `WBTC`
-- `units` (optional): Desired units (default: calculated from budget)
-- `budget` (optional): Budget in USD (default: calculated from units)
+- `units` (optional): DIEM credits to buy
+- `budget` (optional): Budget in USD (provide `units` or `budget`, not both)
 
 **Response:**
 ```json
 {
-  "quoteId": "quote_abc123",
-  "asset": "ETH",
-  "units": 1.5,
-  "priceUsd": 4868.25,
-  "expiresAt": 1704067260,
-  "paymentAddress": "0x...",
-  "paymentAmount": "1500000000000000000",
-  "paymentAmountFormatted": "1.5 ETH"
+  "quoteId": "qM-USDC-1786904894-0.1",
+  "units": 0.1,
+  "asset": "USDC",
+  "unitPrice": 1289058810,
+  "totalPrice": 128905881,
+  "acceptedMin": 0.01,
+  "acceptedMax": 100000.0,
+  "expiresAt": 1786905014,
+  "discountBps": 500,
+  "unitPriceBeforeDiscount": 1356904011
 }
 ```
+
+`unitPrice` 1289058810 USDC-minor is 1289.058810 USDC per DIEM. Changing `units` scales `totalPrice`; it does not change `unitPrice`.
 
 **Tool Pattern:**
 ```python
@@ -734,31 +757,35 @@ Probe Venice OpenAPI and detect paths (admin only).
 
 ### Bids (`/v1/bids`) *(Optional Feature)*
 
-Requires `BIDS_ENABLED=1` environment variable.
+Requires `BIDS_ENABLED=1`. Bids and settlement share this flag. Without it these routes 404.
+
+`maxPrice` is a **unit** cap in asset minor units (the buy page field is human units per 1 DIEM). `units` is micro-units (`1_000_000` = 1.0 DIEM). The signature is EIP-712 `PurchaseIntent` over the request fields; it is not a payment.
+
+Statuses include `received`, `in_band`, `accepted_window`, `out_of_band`, `expired`, `filled`.
 
 #### `POST /v1/bids`
-Create a new bid with signature verification.
+Create a bid. Recovers the signer and rejects a buyer/signature mismatch.
 
 **Request Body:**
 ```json
 {
   "buyer": "0x...",
-  "asset": "ETH",
-  "amount": "1000000000000000000",
-  "signature": "0x...",
-  "expiresAt": 1704153600
+  "units": 100000,
+  "maxPrice": 1400000000,
+  "asset": "USDC",
+  "expiry": 1786905400,
+  "slippageBps": 50,
+  "nonce": 1786905280000,
+  "chainId": 8453,
+  "signature": "0x..."
 }
 ```
 
 **Response:**
 ```json
 {
-  "bidId": "bid_abc123",
-  "status": "pending",
-  "buyer": "0x...",
-  "asset": "ETH",
-  "amount": "1000000000000000000",
-  "createdAt": 1704067200
+  "bidId": "a1b2c3d4e5f67890",
+  "status": "accepted_window"
 }
 ```
 
@@ -792,10 +819,11 @@ Get current clearing price snapshot.
 **Response:**
 ```json
 {
-  "clearingPrice": 1.02,
-  "timestamp": 1704067200,
-  "participants": 15,
-  "totalBids": 25000
+  "price": 1356.90,
+  "bandMin": 1329.76,
+  "bandMax": 1384.04,
+  "bandBps": 200,
+  "ts": 1786905400
 }
 ```
 
@@ -808,25 +836,20 @@ Stream clearing price updates via SSE.
 
 ### Settlement (`/v1/settlement`) *(Optional Feature)*
 
-Requires `BIDS_ENABLED=1` (bids and settlement share this flag).
+Requires `BIDS_ENABLED=1` (bids and settlement share this flag). There is no `SETTLEMENT_ENABLED` flag.
 
 #### `POST /v1/settlement/confirm`
 Alias for `/v1/purchases/verify` on the purchases router.
 
 #### `POST /v1/settlement/{bid_id}/settle`
-Persist a quote for the bid and set `Bid.quote_id`. Verify that quote with `/v1/purchases/verify` to mint the key.
+If live `unitPrice` ≤ bid `maxPrice`, persist a spot quote, set `Bid.quote_id`, and return that quote. Then pay and call `/v1/purchases/verify` to mint the key and mark the bid `filled`.
 
 **Query Parameters:**
-- `asset` (optional): Override asset
+- `asset` (optional): Must match the bid asset if sent
 
-**Response:**
-```json
-{
-  "success": true,
-  "quoteId": "quote_abc123",
-  "purchaseId": "purchase_xyz789"
-}
-```
+**Response:** same shape as `GET /v1/quotes` (`quoteId`, `units`, `asset`, `unitPrice`, `totalPrice`, `expiresAt`).
+
+**409:** `bid expired`, `bid out of band`, or `price exceeds bid max`. The buy page retries only the last of those for about 30 seconds.
 
 ---
 
@@ -1386,9 +1409,10 @@ def rate_limited_request(
 - `401 Unauthorized`: Missing or invalid authentication
 - `403 Forbidden`: Insufficient permissions
 - `404 Not Found`: Resource or endpoint not found
+- `409 Conflict`: Bid expired, out of band, or live unit price above `maxPrice`; quote already filled
 - `429 Too Many Requests`: Rate limit exceeded
 - `500 Internal Server Error`: Server error
-- `503 Service Unavailable`: Service temporarily unavailable
+- `503 Service Unavailable`: Inventory failsafe hot, or market data warming up
 
 ### Error Response Format
 
@@ -1418,6 +1442,20 @@ def rate_limited_request(
    ```json
    {
      "detail": "purchases disabled"
+   }
+   ```
+
+4. **Inventory failsafe**
+   ```json
+   {
+     "detail": "inventory failsafe hot: new intake paused"
+   }
+   ```
+
+5. **Limit bid below market**
+   ```json
+   {
+     "detail": "price exceeds bid max"
    }
    ```
 
@@ -1506,11 +1544,19 @@ def verify_purchase(
     tx_hash: str,
     buyer_address: str
 ) -> Dict[str, Any]:
-    """Verify a purchase transaction and receive Venice API subkey."""
+    """Verify a purchase with a wallet signature, then receive a Venice subkey."""
+    challenge = requests.get(
+        f"{BROKER_BASE_URL}/v1/purchases/challenge",
+        params={"txHash": tx_hash, "buyerAddress": buyer_address},
+    )
+    challenge.raise_for_status()
+    proof = challenge.json()
     payload = {
         "quoteId": quote_id,
         "txHash": tx_hash,
-        "buyerAddress": buyer_address
+        "buyerAddress": buyer_address,
+        "signature": wallet_personal_sign(proof["message"], buyer_address),
+        "nonce": proof["nonce"],
     }
     response = requests.post(
         f"{BROKER_BASE_URL}/v1/purchases/verify",

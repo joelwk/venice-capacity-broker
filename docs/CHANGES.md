@@ -231,29 +231,15 @@ route = ["DIEM", "WETH", "USDC"]
 
 **Context:** Broker should adjust prices based on capacity utilization.
 
-**Implementation:**
-```python
-if utilization >= 0.85:
-    pricing_mode = "surge"      # 2× markup
-elif utilization <= 0.20:
-    pricing_mode = "discount"   # 0.5× markup (attract tenants)
-else:
-    pricing_mode = "normal"     # 1× markup
-```
+**Implementation:** Live quotes use one formula: `unit_price = market * (1 + utilization * PRICE_UTIL_ALPHA)`, then the per-asset discount. Utilization is tenant Diem used / issued limits from CapacityBroker's inventory snapshot (`BROKER_INVENTORY_POLICY_PATH`). It is not Venice `/vvv/utilization` and not request Counters / `CAPACITY_UNITS_PER_MIN`.
 
-**Status:** Live on `GET /v1/quotes`. Markup is `1 + utilization * PRICE_UTIL_ALPHA`. Utilization is tenant Diem used / issued limits from CapacityBroker (not Venice `/vvv/utilization`, not request Counters). Failsafe `hot` pauses new quotes and bids.
+CapacityBroker still writes surge / relax guidance into that snapshot. Failsafe `hot` pauses new quotes and bids (HTTP 503). There is no `BROKER_PRICING_MODE` and no rental offer path.
 
 **Configuration:**
 ```bash
 PRICE_UTIL_ALPHA=0.5
 BROKER_UTIL_SURGE_THRESHOLD=0.85
-BROKER_UTIL_RELAX_THRESHOLD=0.40
-BROKER_UTIL_TARGET=0.65
-BROKER_PRICE_STEP_BPS=50
-BROKER_DISCOUNT_MAX_BPS=500
-BROKER_HYSTERESIS_WINDOW=0.05
-BROKER_BASE_PRICE_USD=1.0
-BROKER_SURGE_MULTIPLIER=2.0
+BROKER_INVENTORY_POLICY_PATH=db/broker_inventory_policy.json
 ```
 
 ---
@@ -519,7 +505,15 @@ assert os.getenv("VENICE_API_BASE_URL", "").endswith("/api/v1"), \
 
 ## Public storefront completion
 
-Inventory utilization now marks up live quotes (`PRICE_UTIL_ALPHA`). Failsafe `hot` pauses new quotes and bids. Price ticks persist from the orchestrator cycle and seed vol history. DIEM execution is aggregator `_execute_composite_*` only. Limit bids settle into a persisted quote and reuse purchase verify to mint the key (`BIDS_ENABLED`).
+Four layers landed on the working storefront.
+
+**Utilization on quotes.** Markup is `1 + inventory_utilization * PRICE_UTIL_ALPHA`. Failsafe `hot` returns 503 on `GET /v1/quotes` and `POST /v1/bids`.
+
+**PriceTick.** One writer in `run_cycle`. When SQL is set, the last 16 ticks seed vol history. `RISK_VOL_PERSIST=0` turns that off.
+
+**Composite exec only.** Bridge-exec and two-tx flags are gone. ArbiDiem live trades use aggregator `_execute_composite_*`. A failed second leg is stranded inventory, not an auto-unwind.
+
+**Limit bids.** `BIDS_ENABLED` turns bids and settlement on together. The buy page Order type switch is a cap: EIP-712 `PurchaseIntent`, then settle persists a quote when `unitPrice ≤ maxPrice`, then the existing pay → challenge → verify path mints the key and marks the bid `filled`. Spot and a filled limit look the same on the payment card. `CLEARING_ENABLED` stays classification / SSE only. There is no `SETTLEMENT_ENABLED` product flag.
 
 Treasurer auto-exec and DIEM rentals stay staged.
 

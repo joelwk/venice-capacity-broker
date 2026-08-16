@@ -260,9 +260,11 @@ Exact-out previews now report the hop venues so `trade path verification empty` 
 
 ### 3) CapacityBroker
 
-**Purpose** - Issue scoped Venice sub-keys, meter usage, and resell unused Diem capacity via a multi-tenant HTTP API.
+**Purpose** - Issue scoped Venice sub-keys, meter usage, and resell unused Diem capacity via a multi-tenant HTTP API and the public buy page.
 
 All sub-keys **must** include `consumptionLimit` and `expiresAt`.
+
+The storefront is spot (`GET /v1/quotes`) or, with `BIDS_ENABLED`, a limit bid that settles into that same quote and verify path.
 
 Abuse triggers immediate revocation and rotation.
 
@@ -391,6 +393,8 @@ Run modes:
 
 * Broker limits & idempotency: `tests/test_broker_limits.py`, `tests/test_cli_idempotency_purge.py`.
 
+* Storefront bids and failsafe: `tests/test_bid_settle_verify.py`, `tests/test_capacity_broker_failsafe.py`.
+
 * Market-data normalization: `tests/test_marketdata_prices.py`.
 
 **Orchestrator**
@@ -465,9 +469,18 @@ We begin with **prompted, simple agents**. New capabilities layer onto the worki
 
 * Limit bids share the spot quote and verify path.
 
-  `BIDS_ENABLED` turns bids and settlement on together.
 
-  Settle persists a quote; verify fills the bid and mints the key.
+  `BIDS_ENABLED` turns bids and settlement on together. There is no `SETTLEMENT_ENABLED` flag.
+
+
+  The buy page max unit price is the pay asset per 1 DIEM, not a dollar total.
+
+
+  Place Bid is EIP-712 `PurchaseIntent` (no transfer). Settle persists a quote when live `unitPrice` is at or under that cap; verify fills the bid and mints the key.
+
+
+  A filled limit looks like a spot quote on the payment card. A cap below market returns 409 (`price exceeds bid max` or `bid out of band`).
+
 
   `CLEARING_ENABLED` is classification and optional SSE only.
 

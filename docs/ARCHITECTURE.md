@@ -1,6 +1,6 @@
 # Venice Capacity Broker - Architecture Overview
 
-**Last Updated:** October 29, 2025
+**Last Updated:** August 16, 2026
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ The Venice Capacity Broker is a production-ready autonomous system that:
 - **Arbitrages DIEM** against market prices using risk-gated workflows
 - **Issues scoped API keys** to resell compute capacity
 - **Manages multi-tenant** quota, rate limits, and billing
-- **Provides self-service** buy flow for DIEM capacity purchase
+- **Sells unused Diem** on a public buy page: spot quotes now, or limit bids that settle into the same quote and verify path
 
 The system runs as a single-loop orchestrator with quorum voting, reflex guardrails, and AI Treasurer guidance.
 
@@ -164,11 +164,11 @@ Each router handles a specific domain:
 
 - **admin** - System monitoring, quotes/purchases listings
 - **tenants** - Tenant CRUD, rotation, limits
-- **quotes** - Quote generation for capacity purchase
-- **purchases** - Payment verification, key issuance
-- **bids** - Limit order management
-- **clearing** - Clearing price and SSE streams
-- **settlement** - DEX preview and settlement
+- **quotes** - Spot quote generation; persist for verify
+- **purchases** - Payment verification and key issuance (also fills a linked bid)
+- **bids** - EIP-712 limit bids (`BIDS_ENABLED`)
+- **clearing** - Clearing price classification and optional SSE (`CLEARING_ENABLED`)
+- **settlement** - Persist a quote onto a bid; DEX preview helpers. Confirm is an alias of purchase verify.
 - **venice** - Venice API proxy endpoints
 
 ## Agent Orchestration
@@ -251,7 +251,9 @@ sequenceDiagram
 
 - Market data provider (`services/marketdata/provider.py`) aggregates DEX quotes and Venice signals with price sanity clamps.  The path engine (`services/marketdata/pathing/`) discovers DIEM-specific routes and tags external fallbacks with `fallback_reason=no_onchain_liquidity`.  Tune with `MARKETDATA_PRICE_SANITY_MAX_DRIFT` and related envs.
 
-- Risk policy (`services/risk/policy.py`) sizes orders using utilization, volatility caps, and pool‑take limits.  Govern with `RISK_MAX_SLIPPAGE_BPS`, `RISK_MAX_POOL_TAKE_BPS`, and `RISK_MAX_VOLATILITY_BPS`.
+- Risk policy (`services/risk/policy.py`) sizes orders using utilization, volatility caps, and pool‑take limits.  Govern with `RISK_MAX_SLIPPAGE_BPS`, `RISK_MAX_POOL_TAKE_BPS`, and `RISK_MAX_VOLATILITY_BPS`.  When `SQL_DATABASE_URL` is set, the orchestrator writes `PriceTick` rows (`services/risk/pricetick.py`) and seeds the last 16 prices into vol history unless `RISK_VOL_PERSIST=0`.
+
+- Broker inventory (`services/broker/inventory.py`) is the quote markup source: tenant Diem used / issued limits from `BROKER_INVENTORY_POLICY_PATH`.  Markup is `1 + utilization * PRICE_UTIL_ALPHA`.  Failsafe `hot` pauses new quotes and bids.
 
 - DIEM pricing (`libs/pricing/diem.py`) computes multi-factor fair value using finite-horizon PV with adoption-based scaling, supply scarcity, demand pressure, and sentiment adjustments. Applies illiquidity discount when no on-chain DEX pools exist. Returns component breakdowns and confidence scores for transparent decision logging.
 
@@ -434,9 +436,15 @@ uv run python apps/cli/main.py run:loop --enable-live
 ### Risk Policy
 
 - Utilization-based sizing
-- Volatility caps
+- Volatility caps, seeded from persisted `PriceTick` history when SQL is on
 - Slippage and pool-take limits
 - Liquidity-aware adjustments
+
+### Broker inventory
+
+- CapacityBroker writes utilization and failsafe into `BROKER_INVENTORY_POLICY_PATH`
+- Quotes and bids read that snapshot; they do not use request Counters or `CAPACITY_UNITS_PER_MIN`
+- DIEM live execution is aggregator composite only (`trade_best` / `trade_best_exact_out`). There is no two-tx or bridge-exec flag.
 
 ## ArbiDiem: Arbitrage, Minting, and Fair Value (Source of Truth)
 
