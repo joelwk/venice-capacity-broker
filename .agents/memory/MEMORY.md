@@ -1,2 +1,3 @@
 - [uv GCE venv conflict](uv-gce-venv.md) — unset UV_PROJECT_ENVIRONMENT + VIRTUAL_ENV in both build AND run deployment commands or uv silently uses .pythonlibs and crashes
 - [GCE health check root redirect](gce-health-check-redirect.md) — GET / must return 200; a 307 redirect silently fails the promote-step probe causing 45-min timeout
+- [GCE KV check fatal exit](gce-kv-check-fatal-exit.md) — .venv/ is gitignored so GCE Repl layer excludes it → uv run fails silently → 44-min timeout; fix: use UV_PROJECT_ENVIRONMENT=.venv-deploy (not gitignored) in both build and run commands
