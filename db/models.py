@@ -298,9 +298,10 @@ class Bid(SQLModel, table=True):  # type: ignore[call-arg]
     expiry: datetime
     slippage_bps: int = 0
     nonce: int = 0
+    quote_id: str | None = Field(default=None, index=True)
     status: str = Field(
         default="received"
-    )  # received|out_of_band|in_band|accepted_window|expired
+    )  # received|out_of_band|in_band|accepted_window|expired|filled
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     context: str | None = None  # JSON blob with extra info (e.g., last clearing price)

@@ -221,6 +221,8 @@ class Orchestrator:
         if transition_to_live:
             self._px_hist = []
             logger.info("Cleared price history on dry-run to live transition")
+        elif not getattr(self, "_px_hist", None):
+            self._seed_px_hist()
 
         handler = getattr(self.arbi, "on_run_mode", None)
         if callable(handler):
@@ -228,6 +230,19 @@ class Orchestrator:
                 handler(dry_run=dry_run, transitioned_to_live=transition_to_live)
             except Exception as exc:
                 logger.debug("Failed to propagate run mode to ArbiDiem: %s", exc)
+
+    def _seed_px_hist(self) -> None:
+        hist = getattr(self, "_px_hist", None)
+        if hist:
+            return
+        try:
+            from services.risk.pricetick import load_recent_prices
+
+            seeded = load_recent_prices("DIEM")
+        except Exception:
+            logger.exception("PriceTick seed failed")
+            seeded = []
+        self._px_hist = list(seeded)
 
     def run_once(
         self, mint_rate: float | None = None, dry_run: bool = True
@@ -377,58 +392,6 @@ class Orchestrator:
                     if hasattr(self.arbi, "risk")
                     else None
                 )
-                # Optional: persist price ticks for analytics if DB configured
-                import os as _os
-
-                if (_os.getenv("RISK_VOL_PERSIST") or "false").strip().lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "on",
-                }:
-                    try:
-                        from datetime import datetime as _dt
-
-                        from sqlmodel import Session
-
-                        from db.models import PriceTick
-                        from db.session import create_db_and_tables, get_engine
-
-                        # Production-like environments require explicit SQL_CREATE_ALL_ON_START=true
-                        _prod_like = bool(
-                            _os.getenv("SQL_DATABASE_URL")
-                            or _os.getenv("DATABASE_URL")
-                            or _os.getenv("POSTGRES_HOST")
-                        )
-                        _create_all_env = _os.getenv("SQL_CREATE_ALL_ON_START")
-
-                        if _prod_like:
-                            # Production: only create if explicitly enabled
-                            _create_all = (
-                                _create_all_env is not None
-                                and _create_all_env.strip().lower()
-                                in {"1", "true", "yes", "on"}
-                            )
-                        else:
-                            # Non-production: default to True unless explicitly disabled
-                            _create_all = (
-                                _create_all_env is None
-                                or _create_all_env.strip().lower()
-                                in {"1", "true", "yes", "on"}
-                            )
-
-                        if _create_all:
-                            create_db_and_tables()
-                        eng = get_engine()
-                        with Session(eng) as _s:  # type: ignore[call-arg]
-                            _s.add(
-                                PriceTick(
-                                    symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()
-                                )
-                            )
-                            _s.commit()
-                    except Exception:
-                        pass
             except Exception:
                 vol_bps = None
         # Optional portfolio cap wiring (env-gated)
@@ -978,82 +941,14 @@ class SingleLoopOrchestrator:
         return summary
 
     def _extract_usage_daily(self, usage: Any) -> float | None:
-        if not isinstance(usage, dict):
-            return None
-        for key in ("dailyAverageDiem", "daily_average_diem", "avgDailyDiem"):
-            if key in usage:
-                try:
-                    return float(usage[key])
-                except Exception:
-                    continue
-        data = usage.get("data")
-        if isinstance(data, list) and data:
-            totals: list[float] = []
-            for entry in data:
-                if not isinstance(entry, dict):
-                    continue
-                for candidate in (
-                    "dailyAverageDiem",
-                    "daily_average_diem",
-                    "consumptionDaily",
-                    "consumption",
-                ):
-                    if candidate in entry:
-                        try:
-                            totals.append(float(entry[candidate]))
-                        except Exception:
-                            continue
-                        break
-            if totals:
-                return sum(totals) / len(totals)
-        aggregate = usage.get("aggregate")
-        if isinstance(aggregate, dict):
-            for key in ("daily", "daily_diem"):
-                value = aggregate.get(key)
-                if value is not None:
-                    try:
-                        return float(value)
-                    except Exception:
-                        continue
-        return None
+        from services.broker.inventory import extract_usage_diem
+
+        return extract_usage_diem(usage)
 
     def _extract_limit_total(self, limits: Any) -> float | None:
-        if limits is None:
-            return None
-        entries: list[Any]
-        if isinstance(limits, list):
-            entries = limits
-        elif isinstance(limits, dict):
-            entries = []
-            for key in ("data", "items", "keys"):
-                value = limits.get(key)
-                if isinstance(value, list):
-                    entries = value
-                    break
-            if not entries:
-                entries = (
-                    list(limits.values())
-                    if all(isinstance(v, dict) for v in limits.values())
-                    else []
-                )
-        else:
-            return None
-        total = 0.0
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            limit = entry.get("consumptionLimit") or entry.get("consumption_limit")
-            amount = None
-            if isinstance(limit, dict):
-                amount = limit.get("diem") or limit.get("daily")
-            elif isinstance(limit, (int, float)):
-                amount = limit
-            if amount is not None:
-                try:
-                    total += float(amount)
-                except Exception:
-                    continue
-        return total if total > 0 else None
+        from services.broker.inventory import extract_limit_total
+
+        return extract_limit_total(limits)
 
     def _compute_treasury_plan(
         self, cap_summary: dict[str, Any]
@@ -2049,52 +1944,12 @@ class SingleLoopOrchestrator:
                 util_vol_bps = _fetch_util_vol_bps()
                 if util_vol_bps is not None:
                     vol_bps = float(util_vol_bps)
-            elif hasattr(self.market, "utilization_volatility_bps"):
-                util_vol_bps = _fetch_util_vol_bps()
-                if _env_flag("RISK_VOL_PERSIST", False):
-                    try:
-                        from datetime import datetime as _dt
+            try:
+                from services.risk.pricetick import persist_price_tick
 
-                        from sqlmodel import Session
-
-                        from db.models import PriceTick
-                        from db.session import create_db_and_tables, get_engine
-
-                        # Production-like environments require explicit SQL_CREATE_ALL_ON_START=true
-                        _prod_like = bool(
-                            os.getenv("SQL_DATABASE_URL")
-                            or os.getenv("DATABASE_URL")
-                            or os.getenv("POSTGRES_HOST")
-                        )
-                        _create_all_env = os.getenv("SQL_CREATE_ALL_ON_START")
-
-                        if _prod_like:
-                            # Production: only create if explicitly enabled
-                            _create_all = (
-                                _create_all_env is not None
-                                and _create_all_env.strip().lower()
-                                in {"1", "true", "yes", "on"}
-                            )
-                        else:
-                            # Non-production: default to True unless explicitly disabled
-                            _create_all = (
-                                _create_all_env is None
-                                or _create_all_env.strip().lower()
-                                in {"1", "true", "yes", "on"}
-                            )
-
-                        if _create_all:
-                            create_db_and_tables()
-                        eng = get_engine()
-                        with Session(eng) as s:  # type: ignore[call-arg]
-                            s.add(
-                                PriceTick(
-                                    symbol="DIEM", price_usd=float(px), ts=_dt.utcnow()
-                                )
-                            )
-                            s.commit()
-                    except Exception:
-                        pass
+                persist_price_tick("DIEM", float(px))
+            except Exception:
+                logger.exception("PriceTick persist failed")
         except Exception:
             vol_bps = None
 

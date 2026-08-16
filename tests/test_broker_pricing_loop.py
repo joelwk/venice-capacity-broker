@@ -63,7 +63,7 @@ def test_broker_pricing_stepwise_adjustment(monkeypatch):
     assert pricing["proposed"] < broker._last_price
 
 
-def test_broker_tracks_price_history(monkeypatch):
+def test_broker_tracks_price_history(monkeypatch, tmp_path):
     """Test that broker tracks price history for rollback."""
     monkeypatch.setenv("BROKER_BASE_PRICE_USD", "1.0")
     monkeypatch.setenv("BROKER_PRICE_STEP_BPS", "50")
@@ -71,6 +71,10 @@ def test_broker_tracks_price_history(monkeypatch):
     monkeypatch.setenv("BROKER_UTIL_SURGE_THRESHOLD", "0.80")
     monkeypatch.setenv("BROKER_UTIL_RELAX_THRESHOLD", "0.40")
     monkeypatch.setenv("BROKER_HYSTERESIS_WINDOW", "0.05")
+    monkeypatch.setenv("BROKER_INVENTORY_POLICY_PATH", str(tmp_path / "policy.json"))
+    from services.broker.inventory import clear_inventory_policy_cache
+
+    clear_inventory_policy_cache()
 
     mock_keys = MagicMock(spec=KeyManager)
     client = MagicMock()

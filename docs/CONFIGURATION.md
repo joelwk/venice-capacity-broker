@@ -158,7 +158,7 @@ Buy execution reliability checklist:
   - `DIEM_ROUTE_HEALTH_PROBE_USD` (default: `3.0`) - USD value for route health probe amounts. Prevents dust-sized probes that round to zero on multi-hop routes. Increase to 5.0-10.0 for more reliable health checks on low-liquidity routes.
   - `DIEM_ROUTE_PROBE_AMOUNT_IN_WEI` (default: unset) - Override probe amount in base units (wei). If set, overrides `DIEM_ROUTE_HEALTH_PROBE_USD`. Use only for testing or when USD-based calculation is unavailable.
   - `DIEM_ENABLE_V2_MULTIHOP` (default: `1`) - Enable UniswapV2 for 2-hop DIEM routes (DIEM→VVV→USDC or DIEM→WETH→USDC). When enabled, V2 can handle exact-out quotes for 2-hop routes. Set to `0` to disable V2 multihop (V2 will only handle single-hop routes). **Recommended: enabled (1)** for better quote coverage.
-  - `DIEM_ENABLE_TWO_TX_FALLBACK` (default: `0`) - Enable two-transaction fallback as last resort when atomic swaps fail. When enabled, executes trades as two separate transactions: USDC↔VVV then VVV↔DIEM. **WARNING**: This breaks atomicity and should only be used when atomic swaps consistently fail. Set to `1` to enable (disabled by default).
+  - Two-transaction fallback was removed. Composite execution is `DexAggregator._execute_composite_*`.
 
 ### Buy Direct-Only and Sanity Guards
 
@@ -211,7 +211,7 @@ Use these settings to tune bridge leg fallback and timeouts.
   - `DIEM_BRIDGE_LIVE_FALLBACK_MAX_USD` (default: `5.0`) - Maximum USD value per fallback trade. Only small trades use fallback.
   - `DIEM_BRIDGE_LIVE_FALLBACK_SLIPPAGE_BPS` (default: `50.0`) - Conservative slippage assumption for bridge-anchored execution.
 - Bridge execution (experimental, guarded):
-  - `DIEM_ENABLE_BRIDGE_EXECUTION` (default: `0`) - Enable sequential bridge execution (DIEM→VVV then VVV→USDC) when direct V3 routes fail. **WARNING**: This feature is not yet fully implemented and will log attempts but not execute trades. Set to `1` to enable infrastructure (currently no-op). Atomicity concerns require careful implementation before production use.
+  - Bridge execution is aggregator composite (`trade_best` / `trade_best_exact_out`). There is no `DIEM_ENABLE_BRIDGE_EXECUTION` flag. Partial-leg failure is logged as stranded inventory; it does not auto-unwind.
 - Path engine timeout:
   - `MARKETDATA_PATH_ENGINE_TIMEOUT_SECONDS` (default: `10.0`, max: `30.0`) - Maximum seconds to wait for path engine quotes before falling back to bridge pricing. Default 10s accommodates Base RPC latency for V3 quoter calls. Can be lowered to 2.5-5.0s for constrained hosts (Docker/Replit).
 - Path engine provider management (new):
@@ -376,6 +376,7 @@ Metrics and visibility:
 - `DIEM_DISCOUNT_RATE_APY` (default 0.15) - Annual discount rate for PV calculation (0.10-0.30). Higher rates reduce fair value.
 - `DIEM_GROWTH_RATE_APY` (default 0.05) - Expected growth rate for Gordon Growth Model (0.00-0.10).
 - Sizing & guards: `RISK_MAX_SLIPPAGE_BPS`, `RISK_MAX_POOL_TAKE_BPS`, `RISK_MAX_VOLATILITY_BPS`, `RISK_UTIL_ALPHA`.
+- Price ticks: `RISK_VOL_PERSIST` (off switch). When unset, persistence is on if `SQL_DATABASE_URL` is set. Orchestrator writes `PriceTick` and seeds the last 16 prices into vol history.
 - DIEM staking helpers: `DIEM_STAKING_ADDRESS`, `DIEM_STAKING_ABI`, `DIEM_STAKE_FN`, `DIEM_LOCK_ON_MINT`, `DIEM_UNLOCK_AFTER_BURN`, `DIEM_UNLOCK_COOLDOWN_SECONDS`.
 - **Purchased DIEM handling (for DEX-purchased DIEM without locked sVVV):**
   - `DIEM_SKIP_BURN_IF_NO_LOCKED_SVVV` (default: `0`) - Set to `1` to gracefully skip burn attempts when the wallet holds purchased DIEM (no locked sVVV collateral). When enabled, burn attempts return `status: "skipped"` instead of `status: "error"`, preventing high-severity reflection halts. **Recommended: enabled (1)** when the wallet primarily holds DEX-purchased DIEM. The system will recommend selling on DEX instead of burning.
@@ -411,11 +412,14 @@ Metrics and visibility:
 ## Broker
 
 - Core: `BROKER_ADMIN_TOKEN`, `BROKER_REQUIRE_ADMIN_TOKEN`, `BROKER_DEFAULT_MODEL`.
-- Features: `QUOTES_ENABLED`, `PURCHASES_ENABLED`, `PRICE_ENGINE`, `ACCEPT_ASSETS`, `TREASURY_ADDRESS`.
+- Features: `QUOTES_ENABLED`, `PURCHASES_ENABLED`, `BIDS_ENABLED`, `PRICE_ENGINE`, `ACCEPT_ASSETS`, `TREASURY_ADDRESS`.
+- Bids: `BIDS_ENABLED` turns `POST /v1/bids` and `POST /v1/settlement/{id}/settle` on together. `CLEARING_ENABLED` is in-band classification and optional SSE only. Confirm stays on `POST /v1/purchases/verify` (purchases also expose `/v1/settlement/confirm` as an alias).
+- Clearing SSE: `CLEARING_SSE_INTERVAL` (seconds).
 - Quote persistence: `QUOTES_PERSIST_ENABLED` (default true), `QUOTES_ASYNC_ENABLED` (default false; keep false so verify cannot race the quote row).
 - Payment checks: `PURCHASE_MIN_CONFIRMATIONS` (default 5), `PURCHASE_CHAIN_ID` / `BASE_CHAIN_ID` (default 8453), `PURCHASE_UNDERPAY_TOLERANCE_BPS` (default 0).
 - Public rate limits: `BUY_RATE_LIMITS_ENABLED` (default true), `BUY_RATE_LIMIT_WINDOW_SECONDS` (default 60), `BUY_RATE_LIMIT_MAX_REQUESTS` (default 30).
-- Pricing knobs: `BROKER_UTIL_TARGET`, `BROKER_PRICE_STEP_BPS`, `BROKER_DISCOUNT_MAX_BPS`, `BROKER_HYSTERESIS_WINDOW`, `BROKER_UTIL_SURGE_THRESHOLD`, `BROKER_UTIL_RELAX_THRESHOLD`, `BROKER_BASE_PRICE_USD`, `BROKER_SURGE_MULTIPLIER`.
+- Pricing knobs: `PRICE_UTIL_ALPHA`, `BROKER_UTIL_TARGET`, `BROKER_PRICE_STEP_BPS`, `BROKER_DISCOUNT_MAX_BPS`, `BROKER_HYSTERESIS_WINDOW`, `BROKER_UTIL_SURGE_THRESHOLD`, `BROKER_UTIL_RELAX_THRESHOLD`, `BROKER_BASE_PRICE_USD`, `BROKER_SURGE_MULTIPLIER`.
+- Inventory policy snapshot: `BROKER_INVENTORY_POLICY_PATH` (default `db/broker_inventory_policy.json`). CapacityBroker writes it; quotes and bids read it.
 - CORS: `CORS_ENABLED`, `CORS_ALLOW_ORIGINS`.
 
 ### Buyer Discounts (DIEM Pricing)

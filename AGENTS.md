@@ -339,7 +339,7 @@ Run modes:
   
   Override `REFLEX_MAX_VOL_BPS`, `REFLEX_MAX_PRICE_DRAWDOWN`, `REFLECTION_VOL_BPS_THRESHOLD`, or `REFLECTION_HOLD_STREAK` to widen or tighten the window.
 
-* Flip `RISK_VOL_PERSIST=1` after the SQL backend is ready so the orchestrator writes price ticks into `db.models.PriceTick` for post-trade reviews.
+* `RISK_VOL_PERSIST` defaults on when `SQL_DATABASE_URL` is set. The orchestrator writes `PriceTick` rows and seeds vol history from the last 16 ticks. Set `RISK_VOL_PERSIST=0` to disable.
 
 ## Operational policy and risk
 
@@ -459,9 +459,17 @@ We begin with **prompted, simple agents**. New capabilities layer onto the worki
 
   Quorum gating now runs by default; disable it only for debugging with `QUORUM_ENABLE=0`.
 
-* Capacity-aware **dynamic pricing and DIEM rentals** remain post-v1.
+* Capacity-aware **dynamic pricing** is on the live storefront (`PRICE_UTIL_ALPHA` plus CapacityBroker inventory utilization). **DIEM rentals** remain post-v1.
 
-  Keep the working Broker (issue and meter sub-keys). Do not add a throwaway pricing adapter. Layer the real design when it lands.
+  Failsafe `hot` pauses new quotes and bids. Do not add a throwaway pricing adapter.
+
+* Limit bids share the spot quote and verify path.
+
+  `BIDS_ENABLED` turns bids and settlement on together.
+
+  Settle persists a quote; verify fills the bid and mints the key.
+
+  `CLEARING_ENABLED` is classification and optional SSE only.
 
 * AI Treasurer automation is still staged.
 

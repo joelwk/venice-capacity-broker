@@ -214,6 +214,13 @@ def get_quote(
             detail=f"asset {asset} not accepted: payment token address not configured",
         )
 
+    from services.broker.inventory import IntakePaused, assert_intake_open
+
+    try:
+        assert_intake_open()
+    except IntakePaused as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     with _otel_span(
         "broker.quote.generate",
         {"units": units or 0, "asset": asset, "budget": budget or 0},

@@ -256,6 +256,8 @@ def test_clearing_compute_price_with_mock():
     # 200 bps = 2% spread
     assert result["bandMin"] == pytest.approx(1.25 * 0.98)
     assert result["bandMax"] == pytest.approx(1.25 * 1.02)
+    assert isinstance(result["ts"], int)
+    assert result["ts"] > 0
 
 
 def test_clearing_compute_price_no_diem():
@@ -267,6 +269,19 @@ def test_clearing_compute_price_no_diem():
 
     with pytest.raises(RuntimeError, match="DIEM price unavailable"):
         clearing.compute_clearing_price(mock_provider)
+
+
+def test_bids_expiry_epoch_treats_naive_as_utc():
+    from datetime import datetime, timezone
+
+    from apps.broker_api.services import bids
+
+    ts = 1_700_000_000
+    aware = datetime.fromtimestamp(ts, tz=timezone.utc)
+    naive = aware.replace(tzinfo=None)
+    assert bids.expiry_epoch(naive) == ts
+    assert bids.expiry_epoch(aware) == ts
+    assert bids.expiry_epoch(ts) == ts
 
 
 def test_bids_recover_buyer_with_mock():
@@ -289,7 +304,7 @@ def test_bids_recover_buyer_with_mock():
 
     # Check if eth_account is available, otherwise expect 503
     try:
-        from eth_account.messages import encode_structured_data  # noqa: F401
+        from eth_account.messages import encode_typed_data  # noqa: F401
 
         eth_account_available = True
     except ImportError:

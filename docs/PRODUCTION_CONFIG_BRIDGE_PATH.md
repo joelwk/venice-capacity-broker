@@ -77,9 +77,7 @@ No additional configuration needed - composite routing is handled automatically 
    - Quotes Leg2 via Uniswap V3 (uses quoter, doesn't need factory)
    - Chains results: `amount_out[Leg1]` becomes `amount_in[Leg2]`
 
-4. **Execution**: Composite routing chains quotes but execution still requires:
-   - Router calls for actual swaps (may fail if pools not registered)
-   - Or: Direct pool calls (not yet implemented)
+4. **Execution**: `DexAggregator.trade_best` / `trade_best_exact_out` run `_execute_composite_*` (sequential txs, pre-approvals, wait-for-balance). Partial-leg failure is logged as stranded inventory; it does not auto-unwind.
 
 ## Current Limitations
 

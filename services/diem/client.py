@@ -8128,35 +8128,6 @@ class DIEMService:
             # If all routes are V3, never use V2 router (incompatible)
             if all_routes_v3:
                 if not fallback_enabled:
-                    # Check if bridge execution is enabled as a last resort
-                    bridge_execution_enabled = os.getenv(
-                        "DIEM_ENABLE_BRIDGE_EXECUTION", "0"
-                    ).strip().lower() in {"1", "true", "yes", "on"}
-
-                    if bridge_execution_enabled:
-                        # Attempt bridge execution (DIEM→VVV then VVV→USDC)
-                        try:
-                            bridge_result = self._trade_via_bridge_exact_out(
-                                amount_out=amount,
-                                slippage_bps=slippage,
-                                corr_id=corr_id,
-                            )
-                            if bridge_result is not None:
-                                return bridge_result
-                        except Exception as bridge_exc:
-                            _logger.warning(
-                                f"Bridge execution failed: {type(bridge_exc).__name__}: {bridge_exc}",
-                                extra={
-                                    "agent": "diem_service",
-                                    "action": "trade",
-                                    "side": "buy",
-                                    "mode": "bridge_execution",
-                                    "error": str(bridge_exc),
-                                    "correlation_id": corr_id,
-                                },
-                            )
-                            # Fall through to error
-
                     error_msg = "no executable DIEM buy routes via aggregator (all routes are V3, V2 fallback disabled)"
                     _logger.error(
                         error_msg,
@@ -8167,7 +8138,6 @@ class DIEMService:
                             "routes": route_list,
                             "all_routes_v3": True,
                             "fallback_enabled": False,
-                            "bridge_execution_enabled": bridge_execution_enabled,
                             "correlation_id": corr_id,
                         },
                     )
@@ -8331,110 +8301,6 @@ class DIEMService:
                 pass
             return out
         raise ValueError("side must be 'buy' or 'sell'")
-
-    def _trade_via_bridge_exact_out(
-        self,
-        amount_out: int,
-        slippage_bps: int,
-        corr_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Execute DIEM buy via bridge route (DIEM→VVV then VVV→USDC).
-
-        This is a guarded helper that executes the two legs sequentially when
-        direct V3 routes fail. It respects max_trade_usd limits and slippage caps.
-
-        Args:
-            amount_out: Desired DIEM output amount (base units)
-            slippage_bps: Slippage tolerance in basis points
-            corr_id: Optional correlation ID for telemetry
-
-        Returns:
-            Dict with trade result if successful, None if bridge execution should not proceed
-        """
-        # Check max trade USD limit
-        max_trade_usd = float(os.getenv("DIEM_EXACT_IN_FALLBACK_MAX_USD", "2.0") or 2.0)
-        try:
-            md = self._market_provider()
-            diem_price = md.price("DIEM")
-            diem_decimals = int(os.getenv("DIEM_DECIMALS", "18"))
-            trade_value_usd = (float(amount_out) / 10**diem_decimals) * diem_price
-            if trade_value_usd > max_trade_usd:
-                _logger.info(
-                    f"Bridge execution skipped: trade_usd={trade_value_usd:.2f} > max={max_trade_usd}",
-                    extra={
-                        "agent": "diem_service",
-                        "action": "bridge_execution",
-                        "trade_value_usd": trade_value_usd,
-                        "max_trade_usd": max_trade_usd,
-                        "correlation_id": corr_id,
-                    },
-                )
-                return None
-        except Exception as exc:
-            _logger.debug(f"Bridge execution price check failed: {exc}")
-            # Continue anyway - price check is best-effort
-
-        # Get bridge route
-        try:
-            routes = self._trade_routes()
-            bridge_route = None
-            for route in routes:
-                route_tokens = list(route.tokens) if hasattr(route, "tokens") else []
-                # Look for DIEM→VVV→USDC bridge route
-                diem_addr = (os.getenv("DIEM_TOKEN_ADDRESS") or "").strip().lower()
-                vvv_addr = (os.getenv("VVV_TOKEN_ADDRESS") or "").strip().lower()
-                usdc_addr = (os.getenv("QUOTE_TOKEN_ADDRESS") or "").strip().lower()
-                if (
-                    len(route_tokens) == 3
-                    and route_tokens[0].lower() == diem_addr
-                    and route_tokens[1].lower() == vvv_addr
-                    and route_tokens[2].lower() == usdc_addr
-                ):
-                    bridge_route = route
-                    break
-
-            if bridge_route is None:
-                _logger.warning(
-                    "Bridge execution skipped: no bridge route found",
-                    extra={
-                        "agent": "diem_service",
-                        "action": "bridge_execution",
-                        "correlation_id": corr_id,
-                    },
-                )
-                return None
-        except Exception as exc:
-            _logger.warning(
-                f"Bridge execution route lookup failed: {exc}",
-                extra={
-                    "agent": "diem_service",
-                    "action": "bridge_execution",
-                    "error": str(exc),
-                    "correlation_id": corr_id,
-                },
-            )
-            return None
-
-        # NOTE: Full implementation would:
-        # 1. Quote leg1: USDC→VVV (exact-out for intermediate VVV amount)
-        # 2. Quote leg2: VVV→DIEM (exact-out for final DIEM amount)
-        # 3. Execute leg1 via aggregator
-        # 4. Execute leg2 via aggregator
-        # 5. Return combined result
-
-        # For now, return None to indicate bridge execution is not yet implemented
-        # This allows the feature flag to be set without breaking behavior
-        _logger.info(
-            "Bridge execution attempted but not yet implemented (atomicity concerns)",
-            extra={
-                "agent": "diem_service",
-                "action": "bridge_execution",
-                "amount_out": amount_out,
-                "slippage_bps": slippage_bps,
-                "correlation_id": corr_id,
-            },
-        )
-        return None
 
     # --- state accessors ---
     def last_results(self) -> dict[str, Any]:

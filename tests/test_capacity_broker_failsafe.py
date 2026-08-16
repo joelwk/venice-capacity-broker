@@ -17,11 +17,15 @@ class DummyClient:
         return self._limits
 
 
-def test_capacity_broker_triggers_failsafe(monkeypatch):
+def test_capacity_broker_triggers_failsafe(monkeypatch, tmp_path):
     monkeypatch.setenv("BROKER_UTIL_SURGE_THRESHOLD", "0.80")
     monkeypatch.setenv("BROKER_UTIL_RELAX_THRESHOLD", "0.30")
     monkeypatch.setenv("BROKER_BASE_PRICE_USD", "1.00")
     monkeypatch.setenv("BROKER_SURGE_MULTIPLIER", "1.5")
+    monkeypatch.setenv("BROKER_INVENTORY_POLICY_PATH", str(tmp_path / "policy.json"))
+    from services.broker.inventory import clear_inventory_policy_cache, load_inventory_policy
+
+    clear_inventory_policy_cache()
 
     usage = {"dailyAverageDiem": 90.0}
     limits = {"data": [{"consumptionLimit": {"diem": 100.0}}]}
@@ -34,11 +38,19 @@ def test_capacity_broker_triggers_failsafe(monkeypatch):
     assert res["pricing"]["mode"] == "surge"
     assert res["inventoryFailsafe"]["status"] == "hot"
     assert "pause_low_tier" in res["inventoryFailsafe"]["actions"]
+    assert "offer_rental" not in res["inventoryFailsafe"]["actions"]
+    policy = load_inventory_policy()
+    assert policy is not None
+    assert policy["failsafe_status"] == "hot"
 
 
-def test_capacity_broker_relaxed_mode(monkeypatch):
+def test_capacity_broker_relaxed_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("BROKER_UTIL_SURGE_THRESHOLD", "0.80")
     monkeypatch.setenv("BROKER_UTIL_RELAX_THRESHOLD", "0.30")
+    monkeypatch.setenv("BROKER_INVENTORY_POLICY_PATH", str(tmp_path / "policy.json"))
+    from services.broker.inventory import clear_inventory_policy_cache
+
+    clear_inventory_policy_cache()
     usage = {"dailyAverageDiem": 10.0}
     limits = {"data": [{"consumptionLimit": {"diem": 100.0}}]}
 

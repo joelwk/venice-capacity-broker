@@ -404,7 +404,7 @@ def test_verify_fails_closed_for_unmapped_asset(monkeypatch, tmp_path):
     _clear_wbtc_token_env(monkeypatch)
     tx_hash = "0x" + "7" * 64
 
-    from datetime import UTC, datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     from db.models import Quote
     from db.session import get_session
@@ -418,7 +418,7 @@ def test_verify_fails_closed_for_unmapped_asset(monkeypatch, tmp_path):
                 asset="WBTC",
                 unit_price=10**5,
                 total_price=5 * 10**5,
-                expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
                 status="open",
             )
         )

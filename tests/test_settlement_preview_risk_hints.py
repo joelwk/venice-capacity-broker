@@ -51,7 +51,7 @@ def test_settlement_preview_with_slippage_and_pool_take(
 ):
     """Test that settlement preview returns slippageBps and poolTakeBps."""
     # Set env var before importing app
-    monkeypatch.setenv("SETTLEMENT_ENABLED", "true")
+    monkeypatch.setenv("BIDS_ENABLED", "true")
 
     with (
         patch(
@@ -102,7 +102,7 @@ def test_settlement_preview_fallback_with_risk_hints(
 ):
     """Test fallback path calculates slippage and pool take."""
     # Set env var before importing app
-    monkeypatch.setenv("SETTLEMENT_ENABLED", "true")
+    monkeypatch.setenv("BIDS_ENABLED", "true")
 
     # Mock aggregator to fail, triggering fallback
     mock_agg = Mock()
@@ -153,7 +153,7 @@ def test_settlement_preview_fallback_with_risk_hints(
 def test_settlement_preview_exceeds_slippage_cap(mock_market_data, monkeypatch):
     """Test that quotes exceeding slippage cap are rejected with detailed error."""
     # Set env var before importing app
-    monkeypatch.setenv("SETTLEMENT_ENABLED", "true")
+    monkeypatch.setenv("BIDS_ENABLED", "true")
 
     # Mock aggregator with high slippage quote
     mock_agg = Mock()
@@ -199,7 +199,7 @@ def test_settlement_preview_exceeds_pool_take_cap(
 ):
     """Test that quotes exceeding pool take cap are rejected with detailed error."""
     # Set env var before importing app
-    monkeypatch.setenv("SETTLEMENT_ENABLED", "true")
+    monkeypatch.setenv("BIDS_ENABLED", "true")
 
     # Set small reserves to trigger pool take cap
     mock_etherscan_data["reserves"] = [1000000, 1000000]  # Small pool

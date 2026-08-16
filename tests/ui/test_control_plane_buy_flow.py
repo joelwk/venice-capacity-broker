@@ -24,6 +24,12 @@ REL_TOL = 1e-6
 EXPECTED_USDC_AMOUNT = 22.66
 EXPECTED_CLIPBOARD_WRITES = 3
 QUOTE_ROWS = 3
+STUB_FEATURES = {
+    "quotes": True,
+    "purchases": True,
+    "clearing": False,
+    "bids": False,
+}
 
 
 class ControlPlaneHandler(SimpleHTTPRequestHandler):
@@ -68,12 +74,7 @@ class ControlPlaneHandler(SimpleHTTPRequestHandler):
                     "accepted_assets": ["USDC"],
                     "usdc_address": "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                 },
-                "features": {
-                    "quotes": True,
-                    "purchases": True,
-                    "clearing": False,
-                    "bids": False,
-                },
+                "features": dict(STUB_FEATURES),
                 "buyer": {"quote_ttl": 90, "last_updated": now},
             }
 
@@ -277,3 +278,31 @@ def test_quote_to_key_happy_path():  # noqa: PLR0915
             assert clipboard_writes[2] == "demo-subkey-123"
         finally:
             browser.close()
+
+
+@pytest.mark.e2e
+def test_limit_bid_mode_is_offered_when_enabled():
+    STUB_FEATURES["bids"] = True
+    try:
+        with serve_control_plane() as base_url, sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except PlaywrightError as exc:
+                pytest.skip(f"Playwright browser launch failed: {exc}")
+
+            try:
+                page = browser.new_page()
+                page.goto(f"{base_url}/buy.html")
+                page.wait_for_load_state("networkidle")
+                page.wait_for_function(
+                    "() => !document.getElementById('quote-mode-wrap').hidden"
+                )
+                expect(page.locator("#quote-mode-wrap")).to_be_visible()
+                expect(page.locator("#quote-limit-fields")).to_be_hidden()
+                page.select_option("#quote-mode", "limit")
+                expect(page.locator("#quote-limit-fields")).to_be_visible()
+                expect(page.get_by_role("button", name="Place Bid")).to_be_visible()
+            finally:
+                browser.close()
+    finally:
+        STUB_FEATURES["bids"] = False

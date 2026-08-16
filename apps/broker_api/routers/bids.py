@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from ..models import BidRequest, BidResponse
+from ..services.bids import expiry_as_utc, expiry_epoch
 
 router = APIRouter(prefix="/v1/bids", tags=["bids"])
 
@@ -53,11 +54,41 @@ def init_router(
     return router
 
 
+def _bid_public_dict(row: Any, *, include_context: bool = False) -> dict:
+    payload = {
+        "bidId": row.bid_id,
+        "status": row.status,
+        "units": float(row.units),
+        "maxPrice": int(row.max_price),
+        "asset": row.asset,
+        "expiry": expiry_epoch(row.expiry) if row.expiry else None,
+        "slippageBps": int(row.slippage_bps),
+        "nonce": int(row.nonce),
+        "quoteId": row.quote_id,
+        "createdAt": (
+            row.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if row.created_at else None
+        ),
+    }
+    if include_context:
+        payload["updatedAt"] = (
+            row.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") if row.updated_at else None
+        )
+        payload["context"] = row.context
+    return payload
+
+
 @router.post("", response_model=BidResponse)
 def bids_create(req: BidRequest) -> dict:
     """Create a new bid with signature verification and idempotency."""
     if not _bids_enabled:
         raise HTTPException(status_code=404, detail="bids disabled")
+
+    from services.broker.inventory import IntakePaused, assert_intake_open
+
+    try:
+        assert_intake_open()
+    except IntakePaused as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Verify signature and fields
     buyer_rx = _recover_buyer(req)
@@ -70,7 +101,6 @@ def bids_create(req: BidRequest) -> dict:
 
     import hashlib as _hh2
     import json as _json2
-    from datetime import datetime as _dt
 
     now_s = int(time.time())
     with next(_get_sess()) as s:  # type: ignore[call-arg]
@@ -91,7 +121,7 @@ def bids_create(req: BidRequest) -> dict:
                     exists.max_price == int(req.maxPrice)
                     and str(exists.asset).upper() == str(req.asset).upper()
                     and int(round(float(exists.units) * 1_000_000)) == int(req.units)
-                    and int(exists.expiry.timestamp()) == int(req.expiry)
+                    and expiry_epoch(exists.expiry) == int(req.expiry)
                 )
             except Exception:
                 same = False
@@ -99,7 +129,11 @@ def bids_create(req: BidRequest) -> dict:
                 raise HTTPException(
                     status_code=409, detail="nonce replay with different payload"
                 )
-            return {"bidId": exists.bid_id, "status": exists.status}
+            return {
+                "bidId": exists.bid_id,
+                "status": exists.status,
+                "quoteId": exists.quote_id,
+            }
 
         # Compute initial status
         max_usdc = _price_usdc_per_unit_from_asset(int(req.maxPrice), str(req.asset))
@@ -116,7 +150,7 @@ def bids_create(req: BidRequest) -> dict:
             units=float(int(req.units)) / 1_000_000.0,
             max_price=int(req.maxPrice),
             asset=str(req.asset).upper(),
-            expiry=_dt.utcfromtimestamp(int(req.expiry)),
+            expiry=expiry_as_utc(int(req.expiry)),
             slippage_bps=int(req.slippageBps),
             nonce=int(req.nonce),
             status=status,
@@ -144,26 +178,7 @@ def bids_list(
             .order_by(_DbBid.created_at.desc())
             .limit(50)
         ).all()  # type: ignore[misc]
-        out: list[dict] = []
-        for r in rows:
-            out.append(
-                {
-                    "bidId": r.bid_id,
-                    "status": r.status,
-                    "units": float(r.units),
-                    "maxPrice": int(r.max_price),
-                    "asset": r.asset,
-                    "expiry": int(r.expiry.timestamp()) if r.expiry else None,
-                    "slippageBps": int(r.slippage_bps),
-                    "nonce": int(r.nonce),
-                    "createdAt": (
-                        r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-                        if r.created_at
-                        else None
-                    ),
-                }
-            )
-        return out
+        return [_bid_public_dict(r) for r in rows]
 
 
 @router.get("/{bid_id}")
@@ -178,23 +193,7 @@ def bids_get(bid_id: str) -> dict:
         r = s.exec(_sel(_DbBid).where(_DbBid.bid_id == bid_id)).first()  # type: ignore[misc]
         if r is None:
             raise HTTPException(status_code=404, detail="bid not found")
-        return {
-            "bidId": r.bid_id,
-            "status": r.status,
-            "units": float(r.units),
-            "maxPrice": int(r.max_price),
-            "asset": r.asset,
-            "expiry": int(r.expiry.timestamp()) if r.expiry else None,
-            "slippageBps": int(r.slippage_bps),
-            "nonce": int(r.nonce),
-            "createdAt": (
-                r.created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.created_at else None
-            ),
-            "updatedAt": (
-                r.updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") if r.updated_at else None
-            ),
-            "context": r.context,
-        }
+        return _bid_public_dict(r, include_context=True)
 
 
 @router.get("/{bid_id}/stream")
@@ -244,7 +243,7 @@ def bids_stream(bid_id: str) -> StreamingResponse:
                     status, ctx = _classify_bid_status(
                         max_usdc,
                         now_s,
-                        int(r.expiry.timestamp()) if r.expiry else now_s,
+                        expiry_epoch(r.expiry) if r.expiry else now_s,
                     )
                     if status != r.status:
                         r.status = status
@@ -261,7 +260,7 @@ def bids_stream(bid_id: str) -> StreamingResponse:
                         import json as _json4
 
                         # Avoid backslashes inside f-string expression by using single-quoted keys
-                        yield f"data: {_json4.dumps({'bidId': r.bid_id, 'status': r.status, 'context': ctx})}\n\n"
+                        yield f"data: {_json4.dumps({'bidId': r.bid_id, 'status': r.status, 'quoteId': r.quote_id, 'context': ctx})}\n\n"
                         last_status = status
             except Exception as _e:
                 yield f"event: error\ndata: {_e!s}\n\n"

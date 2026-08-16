@@ -773,7 +773,7 @@ List bids for a buyer.
 ---
 
 #### `GET /v1/bids/{bid_id}`
-Get bid details.
+Get bid details, including `quoteId` after settle.
 
 ---
 
@@ -808,13 +808,13 @@ Stream clearing price updates via SSE.
 
 ### Settlement (`/v1/settlement`) *(Optional Feature)*
 
-Requires `SETTLEMENT_ENABLED=1` environment variable.
+Requires `BIDS_ENABLED=1` (bids and settlement share this flag).
 
 #### `POST /v1/settlement/confirm`
-Alias for `/v1/purchases/verify` (shape-compatible).
+Alias for `/v1/purchases/verify` on the purchases router.
 
 #### `POST /v1/settlement/{bid_id}/settle`
-Settle a bid and generate a quote.
+Persist a quote for the bid and set `Bid.quote_id`. Verify that quote with `/v1/purchases/verify` to mint the key.
 
 **Query Parameters:**
 - `asset` (optional): Override asset

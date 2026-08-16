@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
@@ -16,6 +17,24 @@ if TYPE_CHECKING:
     from services.marketdata.provider import MarketDataProvider
 
 logger = logging.getLogger("broker.api.services.bids")
+
+
+def expiry_as_utc(value: datetime | int | float | None) -> datetime | None:
+    """Interpret stored bid expiry as UTC, including naive datetimes."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def expiry_epoch(value: datetime | int | float | None) -> int:
+    aware = expiry_as_utc(value)
+    if aware is None:
+        return 0
+    return int(aware.timestamp())
 
 
 def recover_buyer(
@@ -44,7 +63,7 @@ def recover_buyer(
     """
     try:
         from eth_account import Account
-        from eth_account.messages import encode_structured_data
+        from eth_account.messages import encode_typed_data
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"eth-account unavailable: {e}")
 
@@ -92,7 +111,7 @@ def recover_buyer(
         )
 
     try:
-        msg = encode_structured_data(primitive=typed)
+        msg = encode_typed_data(full_message=typed)
         addr = Account.recover_message(msg, signature=req.signature)
         return "0x" + str(addr).lower().removeprefix("0x")
     except Exception as e:
@@ -139,6 +158,22 @@ def price_usdc_per_unit_from_asset(
                 raise RuntimeError("ETH price unavailable")
 
             return (float(max_price_minor) / 1e18) * float(eth_usd)
+
+        if a == "WBTC":
+            try:
+                mdp = get_marketdata_provider()
+            except HTTPException as http_exc:
+                raise RuntimeError(
+                    f"marketdata unavailable: {http_exc.detail}"
+                ) from http_exc
+
+            px = mdp.prices(["WBTC"]) or {}
+            wbtc_usd = float(px.get("WBTC") or 0.0)
+
+            if wbtc_usd <= 0:
+                raise RuntimeError("WBTC price unavailable")
+
+            return (float(max_price_minor) / 1e8) * float(wbtc_usd)
 
         # Default/unsupported asset: treat as USDC (conservative)
         return float(max_price_minor) / 1_000_000.0

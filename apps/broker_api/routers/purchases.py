@@ -21,7 +21,7 @@ try:
     from db.session import create_all_unconditional  # type: ignore
 except Exception:  # pragma: no cover - fallback when helper is absent
     create_all_unconditional = None  # type: ignore
-from db.models import Purchase, Quote
+from db.models import Bid, Purchase, Quote
 
 try:
     from sqlmodel import select as _select  # type: ignore
@@ -870,6 +870,16 @@ def _execute_verified_purchase(req: PurchaseVerifyRequest) -> dict:
                 status_code=409, detail=f"quote not open (status={quote.status})"
             )
 
+        linked_bid = session.exec(
+            _select(Bid).where(Bid.quote_id == quote.quote_id)
+        ).first()  # type: ignore[misc]
+        if linked_bid is not None:
+            bid_buyer = _normalize_hex(linked_bid.buyer_address or "")
+            if bid_buyer and bid_buyer != buyer_norm:
+                raise HTTPException(
+                    status_code=400, detail="buyer does not match bid"
+                )
+
         # Fail closed: without a token contract binding, any ERC-20 transfer
         # to the treasury would satisfy verification.
         expected_token_addr = _asset_to_token_address(quote.asset)
@@ -1064,6 +1074,10 @@ def _execute_verified_purchase(req: PurchaseVerifyRequest) -> dict:
             purchase.expires_at = expires_at
             purchase.fulfilled_at = datetime.utcnow()
             quote.status = "filled"
+            if linked_bid is not None:
+                linked_bid.status = "filled"
+                linked_bid.updated_at = datetime.utcnow()
+                session.add(linked_bid)
         except HTTPException:
             raise
         except Exception as exc:

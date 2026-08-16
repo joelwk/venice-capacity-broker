@@ -241,14 +241,19 @@ else:
     pricing_mode = "normal"     # 1× markup
 ```
 
-**Status:** Implemented but not yet activated (requires tenant utilization > 0%).
+**Status:** Live on `GET /v1/quotes`. Markup is `1 + utilization * PRICE_UTIL_ALPHA`. Utilization is tenant Diem used / issued limits from CapacityBroker (not Venice `/vvv/utilization`, not request Counters). Failsafe `hot` pauses new quotes and bids.
 
 **Configuration:**
 ```bash
-BROKER_PRICING_MODE=dynamic           # Enable dynamic pricing
-BROKER_BASE_MARKUP=1.25               # 25% base markup
-BROKER_SURGE_THRESHOLD=0.85           # Surge pricing at 85%+ util
-BROKER_DISCOUNT_THRESHOLD=0.20        # Discount pricing at <20% util
+PRICE_UTIL_ALPHA=0.5
+BROKER_UTIL_SURGE_THRESHOLD=0.85
+BROKER_UTIL_RELAX_THRESHOLD=0.40
+BROKER_UTIL_TARGET=0.65
+BROKER_PRICE_STEP_BPS=50
+BROKER_DISCOUNT_MAX_BPS=500
+BROKER_HYSTERESIS_WINDOW=0.05
+BROKER_BASE_PRICE_USD=1.0
+BROKER_SURGE_MULTIPLIER=2.0
 ```
 
 ---
@@ -512,21 +517,21 @@ assert os.getenv("VENICE_API_BASE_URL", "").endswith("/api/v1"), \
 
 ---
 
+## Public storefront completion
+
+Inventory utilization now marks up live quotes (`PRICE_UTIL_ALPHA`). Failsafe `hot` pauses new quotes and bids. Price ticks persist from the orchestrator cycle and seed vol history. DIEM execution is aggregator `_execute_composite_*` only. Limit bids settle into a persisted quote and reuse purchase verify to mint the key (`BIDS_ENABLED`).
+
+Treasurer auto-exec and DIEM rentals stay staged.
+
 ## Future Enhancements
 
-### Planned (Next Month)
+### Later layers
 
 1. **OTC Order Book** - Off-chain DIEM trading before DEX liquidity
-2. **Sentiment Integration** - Twitter/Discord sentiment into fair value
-3. **Multi-Agent Handoffs** - Split ArbiDiem into Watcher/Analyst/Decider/Executor
-4. **Dynamic Parameter Tuning** - AI Treasurer suggests threshold adjustments
-
-### Under Consideration
-
-1. **Flash Loan Arbitrage** - Use flash loans to amplify capital efficiency
-2. **Cross-Chain DIEM** - Bridge DIEM to other chains for liquidity
-3. **Capacity Futures** - Sell future Diem allocation as tradeable contract
-4. **Staking Derivatives** - Tokenize sVVV position for liquidity
+2. **Dynamic Parameter Tuning** - AI Treasurer suggests threshold adjustments after risk sign-off
+3. **Cross-Chain DIEM** - Bridge DIEM to other chains for liquidity
+4. **Capacity Futures** - Sell future Diem allocation as tradeable contract
+5. **Staking Derivatives** - Tokenize sVVV position for liquidity
 
 ---
 

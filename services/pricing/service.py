@@ -796,32 +796,12 @@ class PricingService:
             session.commit()
 
     def _utilization_ratio(self) -> float:
-        """Compute recent utilization ratio as used/capacity in lookback window.
+        """Return broker inventory utilization for quote markup.
 
-        Env:
-        - PRICE_UTIL_LOOKBACK_MIN (default 60)
-        - CAPACITY_UNITS_PER_MIN (default 100)
+        Source of truth is CapacityBroker's last inventory policy snapshot
+        (tenant Diem used / issued limits). Counter/CAPACITY_UNITS_PER_MIN
+        is not used on the quote path.
         """
-        lookback = int(os.getenv("PRICE_UTIL_LOOKBACK_MIN", "60") or 60)
-        per_min = int(os.getenv("CAPACITY_UNITS_PER_MIN", "100") or 100)
-        if per_min <= 0 or lookback <= 0:
-            return 0.0
-        try:
-            from datetime import datetime, timedelta, timezone
+        from services.broker.inventory import inventory_utilization_ratio
 
-            from sqlmodel import select
-
-            from db.models import Counter
-
-            now = datetime.now(timezone.utc)
-            start = now - timedelta(minutes=lookback)
-            used = 0
-            with next(get_session()) as s:  # type: ignore[call-arg]
-                rows = s.exec(
-                    select(Counter).where(Counter.bucket_start >= start)
-                ).all()
-                used = sum(int(r.count or 0) for r in rows)
-            cap = per_min * lookback
-            return max(0.0, min(1.0, (used / cap) if cap > 0 else 0.0))
-        except Exception:
-            return 0.0
+        return inventory_utilization_ratio()
