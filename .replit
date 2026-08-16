@@ -71,17 +71,21 @@ command = "bash -lc 'bash scripts/replit_run.sh live'"
 # 1. SPAWN_AGENT_STACK=1 spawns orchestrator/token-watcher in background
 # 2. Broker API starts in foreground (waitForPort=8000)
 #
-# UV_PROJECT_ENVIRONMENT is set to .pythonlibs by Replit's Nix environment.
-# .pythonlibs is not a valid venv in GCE (no Python executable), so we unset
-# both UV_PROJECT_ENVIRONMENT and VIRTUAL_ENV before any uv invocation.
+# Root cause of past health-check timeouts (44-min): .venv/ is gitignored so
+# the GCE build container's Repl layer snapshot excluded it, leaving the runtime
+# container without Python packages.  uv run uvicorn then failed silently (no
+# output, no binding) and the health check timed out.
 #
-# NOTE: do NOT add `uv sync` to the run command — the package-firewall used
-# during builds may not be accessible at runtime, causing uv sync to hang and
-# prevent uvicorn from binding (→ health-check timeout).  The build command
-# installs all packages; the runtime just uses the resulting .venv.
-run = ["sh", "-c", "unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && bash scripts/replit_run.sh live"]
+# Fix: install to .venv-deploy/ (NOT gitignored) so the Repl layer always
+# includes it.  The run command sets UV_PROJECT_ENVIRONMENT to the same path
+# so every `uv run` call inside the scripts uses the correct venv.
+#
+# Do NOT unset UV_PROJECT_ENVIRONMENT completely — that relied on uv auto-
+# discovering .venv/ which fails when .venv/ is absent from the container.
+# Instead explicitly override it with the known good path.
+run = ["sh", "-c", "unset VIRTUAL_ENV && export UV_PROJECT_ENVIRONMENT=.venv-deploy && bash scripts/replit_run.sh live"]
 deploymentTarget = "gce"
-build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && unset UV_PROJECT_ENVIRONMENT && unset VIRTUAL_ENV && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
+build = ["sh", "-c", "export BROKER_SKIP_TESTS=1 && unset VIRTUAL_ENV && export UV_PROJECT_ENVIRONMENT=.venv-deploy && uv sync --extra broker --extra web3 --extra agentkit --extra db"]
 
 [nix]
 packages = ["curl", "gnumake", "libxcrypt"]
