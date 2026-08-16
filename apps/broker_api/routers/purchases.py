@@ -508,13 +508,9 @@ def _asset_to_token_address(asset: str) -> str | None:
     """Map asset symbol (ETH, USDC, WBTC) to token address."""
     asset_upper = asset.upper().strip()
     if asset_upper == "ETH":
-        return (
-            _env_address("WETH_ADDRESS", "WETH_TOKEN_ADDRESS") or _BASE_WETH_ADDRESS
-        )
+        return _env_address("WETH_ADDRESS", "WETH_TOKEN_ADDRESS") or _BASE_WETH_ADDRESS
     if asset_upper == "USDC":
-        return (
-            _env_address("USDC_ADDRESS", "QUOTE_TOKEN_ADDRESS") or _BASE_USDC_ADDRESS
-        )
+        return _env_address("USDC_ADDRESS", "QUOTE_TOKEN_ADDRESS") or _BASE_USDC_ADDRESS
     if asset_upper == "WBTC":
         # Market data, .env.example, and Replit templates use WBTC_TOKEN_ADDRESS.
         # Keep WBTC_ADDRESS as a legacy alias so older secrets still verify.
